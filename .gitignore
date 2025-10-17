@@ -1,0 +1,6 @@
+*.Trash
+*.xcassets
+*.json
+*.plist
+*.entitlements
+
