@@ -6,12 +6,13 @@ import Darwin
 import Combine
 
 // ===================================
-//  WebServerManager.swift (最終修正・安定版)
+//  WebServerManager.swift (アルバムタイプ配信対応)
 // ===================================
-@MainActor
+
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private let server = HttpServer()
     private var netService: NetService?
+    
     private weak var dataManager: VideoDataManager?
     
     @Published var statusMessage: String = "停止中"
@@ -43,15 +44,24 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
     // MARK: - API Routes
     private func setupRoutes() {
-        guard let dataManager = dataManager else {
-            print("❌ [FATAL] DataManager is nil during setupRoutes. This should not happen.")
-            return
-        }
         
-        server["/albums"] = { _ in
-            let albumInfos = dataManager.albums.map {
-                RemoteAlbumInfo(id: $0.id.uuidString, name: $0.name, videoCount: $0.videoIDs.count)
+        // --- 1. アルバム一覧 ---
+        server["/albums"] = { [weak self] _ -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else {
+                return .internalServerError
             }
+            
+            var albumInfos: [RemoteAlbumInfo] = []
+            DispatchQueue.main.sync {
+                albumInfos = dataManager.albums.map {
+                    // ★ 修正: アルバムタイプを含める
+                    RemoteAlbumInfo(id: $0.id.uuidString,
+                                    name: $0.name,
+                                    videoCount: $0.videoIDs.count,
+                                    type: $0.type.rawValue)
+                }
+            }
+            
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             do {
@@ -62,21 +72,32 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             }
         }
         
-        server["/albums/:id/videos"] = { request in
+        // --- 2. アルバム内のビデオ一覧 ---
+        server["/albums/:id/videos"] = { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             guard let albumIDString = request.params[":id"], let albumID = UUID(uuidString: albumIDString) else {
                 return .badRequest(.text("Invalid album ID"))
             }
-            guard let album = dataManager.albums.first(where: { $0.id == albumID }) else {
-                return .notFound
+            
+            var videoInfos: [RemoteVideoInfo] = []
+            var found = false
+            
+            DispatchQueue.main.sync {
+                if let album = dataManager.albums.first(where: { $0.id == albumID }) {
+                    found = true
+                    let videoItems = dataManager.videos.filter { album.videoIDs.contains($0.id) }
+                    videoInfos = videoItems.map {
+                        RemoteVideoInfo(id: $0.id.uuidString,
+                                        filename: $0.originalFilename,
+                                        duration: $0.duration,
+                                        importDate: $0.importDate,
+                                        creationDate: $0.creationDate,
+                                        mediaType: $0.mediaType.rawValue)
+                    }
+                }
             }
-            let videoItems = dataManager.videos.filter { album.videoIDs.contains($0.id) }
-            let videoInfos = videoItems.map {
-                RemoteVideoInfo(id: $0.id.uuidString,
-                                filename: $0.originalFilename,
-                                duration: $0.duration,
-                                importDate: $0.importDate,
-                                creationDate: $0.creationDate)
-            }
+            
+            guard found else { return .notFound }
             
             do {
                 let encoder = JSONEncoder()
@@ -84,12 +105,14 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 let jsonData = try encoder.encode(videoInfos)
                 return .ok(.data(jsonData, contentType: "application/json"))
             } catch {
-                print("❌ Failed to encode video list: \(error)")
                 return .internalServerError
             }
         }
         
-        server.post["/move"] = { request in
+        // --- 3. ビデオの移動 ---
+        server.post["/move"] = { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
+            
             struct MoveRequest: Codable {
                 let videoIds: [String]
                 let targetAlbumId: String
@@ -112,60 +135,28 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             }
         }
 
-        server["/video/:id"] = { [weak self] request in
+        // --- 4. ビデオ/画像のストリーミング・ダウンロード ---
+        server["/video/:id"] = { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else {
                 return .notFound
             }
             
-            guard let videoItem = dataManager.videos.first(where: { $0.id == videoID }) else {
-                return .notFound
+            var videoURL: URL?
+            DispatchQueue.main.sync {
+                if let videoItem = dataManager.videos.first(where: { $0.id == videoID }) {
+                    videoURL = dataManager.videoStorageURL.appendingPathComponent(videoItem.internalFilename)
+                }
             }
             
-            let videoURL = dataManager.videoStorageURL.appendingPathComponent(videoItem.internalFilename)
+            guard let url = videoURL else { return .notFound }
             
-            do {
-                let fileAttributes = try FileManager.default.attributesOfItem(atPath: videoURL.path)
-                guard let totalFileSize = fileAttributes[.size] as? UInt64 else {
-                    return .internalServerError
-                }
-                
-                let contentType = MimeType.forPath(videoURL.path)
-                
-                if let rangeHeader = request.headers["range"], let range = self.parseRangeHeader(rangeHeader, totalSize: totalFileSize) {
-                    let (start, end) = range
-                    let length = end - start + 1
-                    
-                    let fileHandle = try FileHandle(forReadingFrom: videoURL)
-                    defer { fileHandle.closeFile() }
-                    
-                    try fileHandle.seek(toOffset: start)
-                    let dataChunk = fileHandle.readData(ofLength: Int(length))
-                    
-                    let headers: [String: String] = [
-                        "Content-Type": contentType, "Content-Length": String(length),
-                        "Content-Range": "bytes \(start)-\(end)/\(totalFileSize)", "Accept-Ranges": "bytes"
-                    ]
-                    
-                    return .raw(206, "Partial Content", headers, { writer in try? writer.write(dataChunk) })
-                } else {
-                    let headers: [String: String] = [
-                        "Content-Type": contentType, "Content-Length": String(totalFileSize), "Accept-Ranges": "bytes"
-                    ]
-                    return .raw(200, "OK", headers, { writer in
-                        if let file = try? videoURL.path.openForReading() {
-                            try? writer.write(file)
-                            file.close()
-                        }
-                    })
-                }
-            } catch {
-                return .internalServerError
-            }
+            return self.serveFile(at: url, request: request)
         }
         
-        server["/thumbnail/:id"] = { [weak self] request in
+        // --- 5. サムネイル取得 ---
+        server["/thumbnail/:id"] = { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
@@ -176,50 +167,27 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 return .ok(.data(cachedData, contentType: "image/jpeg"))
             }
             
-            guard let videoItem = dataManager.videos.first(where: { $0.id == videoID }) else { return .notFound }
-            let videoURL = dataManager.videoStorageURL.appendingPathComponent(videoItem.internalFilename)
+            var targetItem: VideoItem?
+            var videoFileUrl: URL?
+            
+            DispatchQueue.main.sync {
+                if let item = dataManager.videos.first(where: { $0.id == videoID }) {
+                    targetItem = item
+                    videoFileUrl = dataManager.videoStorageURL.appendingPathComponent(item.internalFilename)
+                }
+            }
+            
+            guard let item = targetItem, let fileUrl = videoFileUrl else { return .notFound }
             
             Task {
-                if let thumbnailData = await self.generateThumbnailData(for: videoURL, quality: .high) {
+                if let thumbnailData = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high) {
                     try? thumbnailData.write(to: thumbnailURL)
                 }
             }
             
-            let placeholderImage = NSImage(systemSymbolName: "photo.fill", accessibilityDescription: nil)!
-            if let tiff = placeholderImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) {
-                let data = bitmap.representation(using: .jpeg, properties: [:])!
-                return .ok(.data(data, contentType: "image/jpeg"))
-            }
-            return .internalServerError
+            return .ok(.data(self.placeholderData, contentType: "image/jpeg"))
         }
         
-        server["/placeholder/:id"] = { [weak self] request in
-            guard let self = self, let dataManager = self.dataManager,
-                  let videoIDString = request.params[":id"],
-                  let videoID = UUID(uuidString: videoIDString) else { return .notFound }
-
-            let placeholderURL = dataManager.thumbnailStorageURL.appendingPathComponent("\(videoIDString)_lq").appendingPathExtension("jpg")
-
-            if let cachedData = try? Data(contentsOf: placeholderURL) {
-                return .ok(.data(cachedData, contentType: "image/jpeg"))
-            }
-
-            guard let videoItem = dataManager.videos.first(where: { $0.id == videoID }) else { return .notFound }
-            let videoURL = dataManager.videoStorageURL.appendingPathComponent(videoItem.internalFilename)
-
-            Task {
-                if let placeholderData = await self.generateThumbnailData(for: videoURL, quality: .low) {
-                    try? placeholderData.write(to: placeholderURL)
-                }
-            }
-            
-            let placeholderImage = NSImage(systemSymbolName: "photo.fill", accessibilityDescription: nil)!
-            if let tiff = placeholderImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) {
-                let data = bitmap.representation(using: .jpeg, properties: [:])!
-                return .ok(.data(data, contentType: "image/jpeg"))
-            }
-            return .internalServerError
-        }
         print("✅ [SETUP] API routes configured.")
     }
     
@@ -230,7 +198,8 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return
         }
         
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
             do {
                 print("📝 [START] 1/3: Attempting to start HTTP server on a random port.")
                 try self.server.start(0, forceIPv4: true)
@@ -256,7 +225,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     self.netService?.delegate = self
                     
                     print("📝 [START] 3/3: Publishing Bonjour service: \(uniqueServiceName)")
-                    // ★ 修正: .listenForConnections オプションを削除
                     self.netService?.publish()
                 }
                 
@@ -270,7 +238,11 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         }
     }
 
-    func stopServer() {
+    @objc func stopServer() {
+        stopServerInternal()
+    }
+    
+    private func stopServerInternal() {
         print("🛑 [STOP] 1/2: Stopping Bonjour service...")
         netService?.stop()
         netService = nil
@@ -278,33 +250,71 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         print("🛑 [STOP] 2/2: Stopping HTTP server...")
         server.stop()
         
-        statusMessage = "🛑 サーバー停止"
+        if Thread.isMainThread {
+            statusMessage = "🛑 サーバー停止"
+        } else {
+            DispatchQueue.main.async {
+                self.statusMessage = "🛑 サーバー停止"
+            }
+        }
         print("✅ [STOP] Server shutdown complete.")
     }
     
     @objc private func handleSessionOrAppTermination() {
         print("👋 [LIFECYCLE] Session/App is ending. Stopping server.")
-        stopServer()
+        stopServerInternal()
     }
     
     // MARK: - NetServiceDelegate
     func netServiceDidPublish(_ sender: NetService) {
         let ipAddress = getIPAddress() ?? "N/A"
-        let successMessage = "✅ サーバー実行中 at http://\(ipAddress):\(sender.port)"
+        let successMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
         print("✅ [SUCCESS] \(successMessage)")
         self.statusMessage = successMessage
     }
 
     func netService(_ sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
         let errorCode = errorDict[NetService.errorCode] ?? -1
-        let errorDomain = errorDict[NetService.errorDomain] ?? -1
-        let errorMessage = "❌ [FATAL] Bonjour publish failed. Code: \(errorCode), Domain: \(errorDomain). Check Multicast entitlement and Info.plist."
+        let errorMessage = "❌ Bonjour publish failed. Code: \(errorCode)"
         print(errorMessage)
         self.statusMessage = errorMessage
         self.server.stop()
     }
     
-    // (他のヘルパー関数やデータモデルは変更なし)
+    // MARK: - Helpers
+    
+    private func serveFile(at url: URL, request: HttpRequest) -> HttpResponse {
+        do {
+            let attr = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard let size = attr[.size] as? UInt64 else { return .internalServerError }
+            let mime = MimeType.forPath(url.path)
+            
+            if let rangeHeader = request.headers["range"], let range = parseRangeHeader(rangeHeader, totalSize: size) {
+                let (start, end) = range
+                let length = end - start + 1
+                let file = try FileHandle(forReadingFrom: url)
+                defer { file.closeFile() }
+                
+                try file.seek(toOffset: start)
+                let data = file.readData(ofLength: Int(length))
+                
+                return .raw(206, "Partial Content", [
+                    "Content-Type": mime, "Content-Length": String(length),
+                    "Content-Range": "bytes \(start)-\(end)/\(size)", "Accept-Ranges": "bytes"
+                ], { writer in
+                    try? writer.write(data)
+                })
+            } else {
+                // 画像などの一括ダウンロード
+                let data = try Data(contentsOf: url)
+                return .ok(.data(data, contentType: mime))
+            }
+        } catch {
+            print("Server Error during file serve: \(error)")
+            return .internalServerError
+        }
+    }
+
     private func getIPAddress() -> String? {
         var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
@@ -332,86 +342,107 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return address
     }
     
-    private enum ThumbnailQuality { case high, low }
     private func parseRangeHeader(_ header: String, totalSize: UInt64) -> (UInt64, UInt64)? {
         guard header.hasPrefix("bytes="), totalSize > 0 else { return nil }
         let components = header.dropFirst(6).split(separator: "-")
-        guard let startString = components.first, let start = UInt64(startString) else { return nil }
+        guard let startStr = components.first, let start = UInt64(startStr) else { return nil }
         let end = (components.count > 1 && !components[1].isEmpty) ? min(UInt64(components[1]) ?? 0, totalSize - 1) : totalSize - 1
-        if start > end { return nil }
-        return (start, end)
+        return start <= end ? (start, end) : nil
     }
-    private func generateThumbnailData(for videoURL: URL, quality: ThumbnailQuality) async -> Data? {
-        let asset = AVURLAsset(url: videoURL)
-        let (targetSize, compression): (CGSize, CGFloat) = quality == .high ? (CGSize(width: 400, height: 400), 0.8) : (CGSize(width: 50, height: 50), 0.1)
-        guard let cgImage = await generateBestCGImage(for: asset) else { return nil }
-        let originalWidth = CGFloat(cgImage.width)
-        let originalHeight = CGFloat(cgImage.height)
-        let squareSize = min(originalWidth, originalHeight)
-        let cropRect = CGRect(x: (originalWidth - squareSize) / 2.0, y: (originalHeight - squareSize) / 2.0, width: squareSize, height: squareSize)
-        guard let croppedCgImage = cgImage.cropping(to: cropRect) else { return nil }
-        guard let context = CGContext(data: nil, width: Int(targetSize.width), height: Int(targetSize.height), bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.interpolationQuality = .high
-        context.draw(croppedCgImage, in: CGRect(origin: .zero, size: targetSize))
-        guard let resizedCgImage = context.makeImage() else { return nil }
-        let nsImage = NSImage(cgImage: resizedCgImage, size: targetSize)
-        guard let tiffRepresentation = nsImage.tiffRepresentation,
-              let bitmapImage = NSBitmapImageRep(data: tiffRepresentation) else { return nil }
-        return bitmapImage.representation(using: .jpeg, properties: [.compressionFactor: compression])
+
+    private enum ThumbQuality { case high, low }
+    
+    private func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality) async -> Data? {
+        let size: CGSize = quality == .high ? CGSize(width: 400, height: 400) : CGSize(width: 50, height: 50)
+        let compression = quality == .high ? 0.8 : 0.1
+        
+        if type == .photo {
+            return generateImageThumbnail(url: url, targetSize: size, compression: compression)
+        } else {
+            return await generateVideoThumbnail(url: url, targetSize: size, compression: compression)
+        }
     }
-    private func generateBestCGImage(for asset: AVAsset) async -> CGImage? {
+    
+    private func generateImageThumbnail(url: URL, targetSize: CGSize, compression: Double) -> Data? {
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: max(targetSize.width, targetSize.height),
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+        
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return nil }
+        let nsImage = NSImage(cgImage: cgImage, size: .zero)
+        return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
+    }
+
+    private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double) async -> Data? {
+        let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.requestedTimeToleranceBefore = .zero
-        generator.requestedTimeToleranceAfter = .zero
-        let maxAttempts = 5
-        let retryTimeOffset: Double = 2.0
-        let initialTime = CMTime(seconds: 1.0, preferredTimescale: 600)
-        for attempt in 0..<maxAttempts {
-            let attemptTime = CMTimeAdd(initialTime, CMTime(seconds: Double(attempt) * retryTimeOffset, preferredTimescale: 600))
-            do {
-                let cgImage = try await generator.image(at: attemptTime).image
-                if !isImagePredominantlyBlack(image: cgImage) { return cgImage }
-            } catch { print("Thumbnail generation failed at \(attemptTime.seconds)s: \(error.localizedDescription)") }
+        let time = CMTime(seconds: 1, preferredTimescale: 600)
+        
+        if let cgImage = try? await generator.image(at: time).image {
+            let nsImage = NSImage(cgImage: cgImage, size: .zero)
+            return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
         }
-        return try? await generator.image(at: initialTime).image
+        return nil
     }
-    private func isImagePredominantlyBlack(image: CGImage, darknessThreshold: UInt8 = 30, percentageThreshold: Double = 0.95) -> Bool {
-        guard let pixelData = image.dataProvider?.data,
-              let data = CFDataGetBytePtr(pixelData) else { return false }
-        let width = image.width
-        let height = image.height
-        let bytesPerPixel = image.bitsPerPixel / 8
-        guard bytesPerPixel >= 3 else { return false }
-        var darkPixelCount = 0
-        let totalPixels = width * height
-        let step = max(1, totalPixels / 10000)
-        let sampleTotal = totalPixels / step
-        for i in stride(from: 0, to: totalPixels, by: step) {
-            let offset = (i / width * image.bytesPerRow) + (i % width * bytesPerPixel)
-            if data[offset] < darknessThreshold && data[offset + 1] < darknessThreshold && data[offset + 2] < darknessThreshold {
-                darkPixelCount += 1
-            }
-        }
-        return Double(darkPixelCount) / Double(sampleTotal) >= percentageThreshold
+    
+    private func cropAndResize(nsImage: NSImage, targetSize: CGSize, compression: Double) -> Data? {
+        let originalSize = nsImage.size
+        let dim = min(originalSize.width, originalSize.height)
+        let x = (originalSize.width - dim) / 2
+        let y = (originalSize.height - dim) / 2
+        let cropRect = CGRect(x: x, y: y, width: dim, height: dim)
+        
+        let newImage = NSImage(size: targetSize)
+        newImage.lockFocus()
+        nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: cropRect, operation: .copy, fraction: 1.0)
+        newImage.unlockFocus()
+        
+        guard let tiff = newImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: compression])
+    }
+    
+    private var placeholderData: Data {
+        let img = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)!
+        return img.tiffRepresentation!
     }
 }
 
 // MARK: - Shared Data Models & MimeType
-struct RemoteAlbumInfo: Codable { let id: String; let name: String; let videoCount: Int }
+
+// ★ 修正: アルバムタイプを受け渡しするための構造体更新
+struct RemoteAlbumInfo: Codable {
+    let id: String
+    let name: String
+    let videoCount: Int
+    // ★ 追加
+    let type: String?
+}
+
 struct RemoteVideoInfo: Codable {
     let id: String
     let filename: String
     let duration: TimeInterval
     let importDate: Date
     let creationDate: Date?
-}
-private struct MimeType {
-    static func forPath(_ path: String) -> String {
-        if path.hasSuffix(".mp4") { return "video/mp4" }
-        if path.hasSuffix(".mov") { return "video/quicktime" }
-        if path.hasSuffix(".m4v") { return "video/x-m4v" }
-        return "application/octet-stream"
-    }
+    let mediaType: String?
 }
 
+private struct MimeType {
+    static func forPath(_ path: String) -> String {
+        let ext = (path as NSString).pathExtension.lowercased()
+        switch ext {
+        case "mp4": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "m4v": return "video/x-m4v"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "heic": return "image/heic"
+        case "webp": return "image/webp"
+        default: return "application/octet-stream"
+        }
+    }
+}

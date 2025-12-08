@@ -1,8 +1,9 @@
 import SwiftUI
 import CoreServices
+import UniformTypeIdentifiers
 
 // ===================================
-//  ContentView.swift (UI改善・ALL VIDEOS対応版)
+//  ContentView.swift (フォルダインポート・混在対応版)
 // ===================================
 
 struct ContentView: View {
@@ -16,13 +17,23 @@ struct ContentView: View {
     @State private var selectedAlbumID: UUID?
     @State private var isShowingAddAlbumSheet = false
     @State private var newAlbumName = ""
+    @State private var newAlbumType: AlbumType = .video
+    
     @State private var albumToDelete: Album?
     @State private var viewMode: ViewMode = .grid
     @State private var searchText = ""
     @State private var selectedVideoIDs = Set<VideoItem.ID>()
     @State private var lastSelectedVideoID: VideoItem.ID?
+    
+    // ドロップターゲットの強調表示用
+    @State private var isDetailTargeted = false
+    @State private var isSidebarTargeted = false
+    
+    // ★ 追加: 混在コンテンツアラート用
+    @State private var showMixedContentAlert = false
+    @State private var pendingFolderURL: URL?
+    @State private var mixedContentInfo = ""
 
-    // ★ 追加: 特別なアルバムの名前を定義
     private let allVideosAlbumName = "ALL VIDEOS"
     private let columns = [GridItem(.adaptive(minimum: 160))]
 
@@ -34,10 +45,50 @@ struct ContentView: View {
     
     var body: some View {
         NavigationSplitView {
-            albumList
-                .navigationSplitViewColumnWidth(min: 200, ideal: 250)
+            ZStack {
+                albumList
+                
+                if isSidebarTargeted {
+                    Color.accentColor.opacity(0.1)
+                        .edgesIgnoringSafeArea(.all)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.accentColor, lineWidth: 4)
+                                .padding(4)
+                        )
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 250)
+            .onDrop(of: [.fileURL], isTargeted: $isSidebarTargeted) { providers in
+                handleSidebarDrop(providers: providers)
+            }
+            
         } detail: {
-            detailView
+            ZStack {
+                detailView
+                
+                if isDetailTargeted {
+                    Color.accentColor.opacity(0.1)
+                        .edgesIgnoringSafeArea(.all)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20)
+                                .stroke(Color.accentColor, lineWidth: 4)
+                                .padding()
+                        )
+                    VStack {
+                        Image(systemName: "arrow.down.doc.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.accentColor)
+                        Text("ここにドロップして追加")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.accentColor)
+                    }
+                }
+            }
+            .onDrop(of: [.fileURL], isTargeted: $isDetailTargeted) { providers in
+                handleDetailDrop(providers: providers)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             statusBar
@@ -59,22 +110,44 @@ struct ContentView: View {
         } message: { (album: Album) in
             Text("このアルバムを削除しますか？\nアルバム内のビデオは「ALL VIDEOS」に残ります。")
         }
+        // ★ 追加: 混在コンテンツ確認アラート
+        .alert("フォルダ内に動画と画像が混在しています", isPresented: $showMixedContentAlert) {
+            Button("動画アルバムとして作成") {
+                if let url = pendingFolderURL {
+                    Task { await dataManager.importFolder(folderURL: url, as: .video) }
+                }
+                pendingFolderURL = nil
+            }
+            Button("画像アルバムとして作成") {
+                if let url = pendingFolderURL {
+                    Task { await dataManager.importFolder(folderURL: url, as: .photo) }
+                }
+                pendingFolderURL = nil
+            }
+            Button("キャンセル", role: .cancel) {
+                pendingFolderURL = nil
+            }
+        } message: {
+            Text(mixedContentInfo + "\n\nどちらのアルバムとしてインポートしますか？\n選ばなかった種類のファイルは除外されます。")
+        }
     }
     
     // MARK: - Subviews
     private var albumList: some View {
-        // ★ 修正: ALL VIDEOSを常に先頭に表示する
         let sortedAlbums = dataManager.albums.sorted { a, b in
             if a.name == allVideosAlbumName { return true }
             if b.name == allVideosAlbumName { return false }
             return a.name < b.name
         }
         
-        // ★ 修正: 複数の文があるため、明示的にreturnを追加
         return List(selection: $selectedAlbumID) {
             ForEach(sortedAlbums) { album in
-                Label(album.name, systemImage: "folder")
-                    .tag(album.id)
+                HStack {
+                    Image(systemName: album.type == .photo ? "photo.on.rectangle" : "folder")
+                        .foregroundColor(album.type == .photo ? .orange : .blue)
+                    Text(album.name)
+                }
+                .tag(album.id)
             }
         }
         .navigationTitle("アルバム")
@@ -91,7 +164,6 @@ struct ContentView: View {
                 }) {
                     Label("選択中のアルバムを削除", systemImage: "trash")
                 }
-                // ★ 修正: 削除ボタンの無効化ロジックを呼び出す
                 .disabled(isDeleteAlbumDisabled())
             }
         }
@@ -106,17 +178,21 @@ struct ContentView: View {
             }
             
             if videosInAlbum.isEmpty && album.name != allVideosAlbumName {
-                placeholderView(message: "ツールバーのインポートボタンからビデオを追加してください。")
-                    .navigationTitle(album.name)
-                    .toolbar {
-                        ToolbarItem {
-                           importButton
-                        }
+                VStack(spacing: 20) {
+                    placeholderView(message: "ツールバーのボタン、またはドラッグ＆ドロップで\nメディアを追加してください。")
+                    
+                    Button(action: openFileImporter) {
+                        Label("ファイルを選択", systemImage: "square.and.arrow.down")
+                            .font(.headline)
+                            .padding()
                     }
+                    .buttonStyle(.borderedProminent)
+                }
+                .navigationTitle(album.name)
             } else {
                 VStack {
                     if filteredVideos.isEmpty {
-                        Text(searchText.isEmpty ? "ビデオがありません" : "「\(searchText)」に一致するビデオはありません。")
+                        Text(searchText.isEmpty ? "メディアがありません" : "「\(searchText)」に一致するメディアはありません。")
                             .foregroundColor(.secondary)
                             .padding()
                         Spacer()
@@ -127,7 +203,7 @@ struct ContentView: View {
                     }
                 }
                 .navigationTitle(album.name)
-                .searchable(text: $searchText, prompt: "ビデオを名前で検索")
+                .searchable(text: $searchText, prompt: "名前で検索")
                 .toolbar {
                     ToolbarItem {
                         Button(role: .destructive, action: deleteSelectedVideos) {
@@ -144,7 +220,7 @@ struct ContentView: View {
                             Label("リスト", systemImage: "list.bullet").tag(ViewMode.list)
                         }
                         .pickerStyle(.segmented)
-                        .animation(.default, value: viewMode)  // ★ 修正: アニメーションをここに移動
+                        .animation(.default, value: viewMode)
                     }
                 }
             }
@@ -155,7 +231,7 @@ struct ContentView: View {
     
     private var importButton: some View {
         Button(action: openFileImporter) {
-            Label("ビデオをインポート", systemImage: "square.and.arrow.down")
+            Label("インポート", systemImage: "square.and.arrow.down")
         }
         .disabled(selectedAlbumID == nil)
     }
@@ -192,9 +268,15 @@ struct ContentView: View {
                     Text(video.originalFilename)
                         .fontWeight(.semibold)
                         .lineLimit(2)
-                    Text("長さ: \(formatDuration(video.duration))")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    if video.mediaType == .video {
+                        Text("長さ: \(formatDuration(video.duration))")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("画像")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                     Text("追加日: \(video.importDate, formatter: itemFormatter)")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -208,10 +290,11 @@ struct ContentView: View {
 
     private func placeholderView(message: String) -> some View {
         VStack {
-            Text("ビデオがありません").font(.headline)
+            Text("項目がありません").font(.headline)
             Text(message)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
         }
     }
     
@@ -244,47 +327,136 @@ struct ContentView: View {
     }
 
     private var addAlbumSheet: some View {
-        VStack {
-            Text("新しいアルバム").font(.headline).padding()
-            TextField("アルバム名", text: $newAlbumName)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal)
+        VStack(spacing: 20) {
+            Text("新しいアルバム").font(.headline)
+            
+            VStack(alignment: .leading) {
+                Text("名前:")
+                TextField("アルバム名", text: $newAlbumName)
+                    .textFieldStyle(.roundedBorder)
+                
+                Text("種類:")
+                Picker("種類", selection: $newAlbumType) {
+                    Text("動画アルバム").tag(AlbumType.video)
+                    Text("画像アルバム").tag(AlbumType.photo)
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(.horizontal)
+            
             HStack {
                 Button("キャンセル") {
                     isShowingAddAlbumSheet = false
                     newAlbumName = ""
                 }
+                .keyboardShortcut(.cancelAction)
+                
                 Button("作成") {
                     if !newAlbumName.isEmpty {
-                        dataManager.createAlbum(name: newAlbumName)
+                        dataManager.createAlbum(name: newAlbumName, type: newAlbumType)
                         isShowingAddAlbumSheet = false
                         newAlbumName = ""
+                        newAlbumType = .video
                     }
-                }.disabled(newAlbumName.isEmpty)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(newAlbumName.isEmpty)
+                .keyboardShortcut(.defaultAction)
             }
             .padding()
         }
-        .frame(minWidth: 300, minHeight: 150)
+        .frame(minWidth: 300)
+        .padding()
     }
 
     // MARK: - Functions
     
-    // ★ 新規: アルバム削除ボタンの無効化ロジック
+    // ★ 修正: サイドバーへのフォルダドロップ（スキャンして分岐）
+    private func handleSidebarDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url = url else { return }
+                    
+                    var isDir: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                        // フォルダの中身をスキャン
+                        Task {
+                            let counts = await dataManager.scanFolder(folderURL: url)
+                            
+                            await MainActor.run {
+                                if counts.videoCount > 0 && counts.photoCount > 0 {
+                                    // 混在 -> アラートを表示して選択させる
+                                    self.pendingFolderURL = url
+                                    self.mixedContentInfo = "動画: \(counts.videoCount)本\n画像: \(counts.photoCount)枚"
+                                    self.showMixedContentAlert = true
+                                } else if counts.photoCount > 0 {
+                                    // 画像のみ
+                                    Task { await dataManager.importFolder(folderURL: url, as: .photo) }
+                                } else if counts.videoCount > 0 {
+                                    // 動画のみ
+                                    Task { await dataManager.importFolder(folderURL: url, as: .video) }
+                                } else {
+                                    // 空フォルダ等は動画アルバムとして作成（または何もしない）
+                                    Task { await dataManager.importFolder(folderURL: url, as: .video) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+    
+    // 詳細ビューへのファイルドロップ（既存アルバムへの追加）
+    private func handleDetailDrop(providers: [NSItemProvider]) -> Bool {
+        var targetAlbumID = selectedAlbumID
+        
+        if let selectedID = selectedAlbumID,
+           let selectedAlbum = dataManager.albums.first(where: { $0.id == selectedID }),
+           (selectedAlbum.name == allVideosAlbumName || selectedAlbum.name == "ALL PHOTOS") {
+            targetAlbumID = dataManager.albums.first(where: { $0.name != allVideosAlbumName && $0.name != "ALL PHOTOS" })?.id
+        }
+        
+        guard let finalTargetID = targetAlbumID else { return false }
+        
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let url = url {
+                        Task {
+                            var isDir: ObjCBool = false
+                            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                                // 既存アルバムへのフォルダ追加の場合は、そのアルバムのタイプに従ってインポート
+                                if let album = dataManager.albums.first(where: { $0.id == finalTargetID }) {
+                                    // importFolderだと新規アルバムになるので、中身を走査して個別インポート
+                                    let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+                                    for fileURL in contents ?? [] {
+                                        await dataManager.importMedia(from: fileURL, to: finalTargetID)
+                                    }
+                                }
+                            } else {
+                                // 単一ファイルインポート（ここでVideoDataManager側で選別される）
+                                await dataManager.importMedia(from: url, to: finalTargetID)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+    
     private func isDeleteAlbumDisabled() -> Bool {
         guard let selectedID = selectedAlbumID,
               let selected = dataManager.albums.first(where: { $0.id == selectedID }) else {
             return true
         }
         
-        if selected.name == allVideosAlbumName {
+        if selected.name == allVideosAlbumName || selected.name == "ALL PHOTOS" {
             return true
         }
-        
-        let userAlbumsCount = dataManager.albums.filter { $0.name != allVideosAlbumName }.count
-        if userAlbumsCount <= 1 {
-            return true
-        }
-        
         return false
     }
     
@@ -322,11 +494,10 @@ struct ContentView: View {
     private func openFileImporter() {
         var targetAlbumID = selectedAlbumID
         
-        // ★ 追加: もし "ALL VIDEOS" が選択されていたら、最初のユーザーアルバムをインポート先にする
         if let selectedID = selectedAlbumID,
            let selectedAlbum = dataManager.albums.first(where: { $0.id == selectedID }),
-           selectedAlbum.name == allVideosAlbumName {
-            targetAlbumID = dataManager.albums.first(where: { $0.name != allVideosAlbumName })?.id
+           (selectedAlbum.name == allVideosAlbumName || selectedAlbum.name == "ALL PHOTOS") {
+            targetAlbumID = dataManager.albums.first(where: { $0.name != allVideosAlbumName && $0.name != "ALL PHOTOS" })?.id
         }
         
         guard let finalTargetAlbumID = targetAlbumID else { return }
@@ -334,12 +505,12 @@ struct ContentView: View {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
-        panel.allowedFileTypes = ["mp4", "mov", "m4v"]
+        panel.allowedContentTypes = [.movie, .image]
         
         if panel.runModal() == .OK {
             for url in panel.urls {
                 Task {
-                    await dataManager.importVideo(from: url, to: finalTargetAlbumID)
+                    await dataManager.importMedia(from: url, to: finalTargetAlbumID)
                 }
             }
         }
