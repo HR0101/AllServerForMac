@@ -1,5 +1,10 @@
 import SwiftUI
 import AVFoundation
+import AppKit
+
+// ===================================
+//  MacVideoThumbnailView.swift (黒サムネイル回避・順次探索版)
+// ===================================
 
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
@@ -15,30 +20,32 @@ struct MacVideoThumbnailView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                Rectangle()
+                    .fill(Color.black.opacity(0.2))
+                    .overlay(ProgressView())
             }
             
-            // ★ 追加: 画像の場合はファイル名のみ表示（時間を隠す）
             if videoItem.mediaType == .video {
-                Text(formatDuration(videoItem.duration))
+                Text(videoItem.originalFilename)
                     .font(.caption)
                     .foregroundColor(.white)
-                    .padding(4)
-                    .background(.black.opacity(0.6))
-                    .cornerRadius(4)
-                    .padding(4)
-                    .frame(maxWidth: .infinity, alignment: .bottomTrailing)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        LinearGradient(gradient: Gradient(colors: [.black.opacity(0.6), .clear]), startPoint: .bottom, endPoint: .top)
+                    )
             }
         }
+        .clipped()
         .aspectRatio(1, contentMode: .fit)
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
         .task { await generateThumbnail() }
     }
 
     private func generateThumbnail() async {
         let fileURL = storageURL.appendingPathComponent(videoItem.internalFilename)
         
-        // ★ 画像の場合の処理
         if videoItem.mediaType == .photo {
             if let image = NSImage(contentsOf: fileURL) {
                 self.thumbnail = image
@@ -46,20 +53,60 @@ struct MacVideoThumbnailView: View {
             return
         }
 
-        // 動画の場合の処理
         let asset = AVURLAsset(url: fileURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        do {
-            let cgImage = try await generator.image(at: CMTime(seconds: 1, preferredTimescale: 60)).image
-            await MainActor.run { self.thumbnail = NSImage(cgImage: cgImage, size: .zero) }
-        } catch {
-            print("Thumbnail failed")
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        
+        let duration = (try? await asset.load(.duration).seconds) ?? 0
+        
+        // 探索候補 (WebServerManagerと同じロジック)
+        var attempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0]
+        if duration < 5 { attempts.insert(0.0, at: 0) }
+        let validAttempts = attempts.filter { $0 < duration }
+        
+        var bestImage: CGImage?
+        var fallbackImage: CGImage?
+        
+        for seconds in validAttempts {
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            if let cgImage = try? await generator.image(at: time).image {
+                if fallbackImage == nil { fallbackImage = cgImage }
+                if !isImagePredominantlyBlack(image: cgImage) {
+                    bestImage = cgImage
+                    break
+                }
+            }
+        }
+        
+        if let cgImage = bestImage ?? fallbackImage {
+            await MainActor.run {
+                self.thumbnail = NSImage(cgImage: cgImage, size: .zero)
+            }
         }
     }
     
-    private func formatDuration(_ totalSeconds: TimeInterval) -> String {
-        let seconds = Int(totalSeconds)
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    private func isImagePredominantlyBlack(image: CGImage, threshold: CGFloat = 0.1) -> Bool {
+        let size = 20
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var rawData = [UInt8](repeating: 0, count: size * size * 4)
+        
+        guard let context = CGContext(data: &rawData, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        
+        context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(size), height: CGFloat(size)))
+        
+        var darkPixelCount = 0
+        let totalPixels = size * size
+        
+        for i in 0..<totalPixels {
+            let offset = i * 4
+            let r = CGFloat(rawData[offset]) / 255.0
+            let g = CGFloat(rawData[offset+1]) / 255.0
+            let b = CGFloat(rawData[offset+2]) / 255.0
+            let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            if luminance < threshold { darkPixelCount += 1 }
+        }
+        return Double(darkPixelCount) / Double(totalPixels) > 0.8
     }
 }

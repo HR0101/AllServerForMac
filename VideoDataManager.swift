@@ -6,7 +6,7 @@ import Combine
 import UniformTypeIdentifiers
 
 // ===================================
-//  VideoDataManager.swift (厳密な選別・フォルダスキャン対応版)
+//  VideoDataManager.swift (型エラー修正版)
 // ===================================
 
 // MARK: - データモデル
@@ -95,7 +95,43 @@ class VideoDataManager: ObservableObject {
         loadData()
     }
     
-    // MARK: - ★追加: フォルダスキャン（事前の種類判定用）
+    // MARK: - データ集計機能
+    
+    /// 最近追加されたアイテム（最大10件）
+    var recentItems: [VideoItem] {
+        Array(videos.sorted { $0.importDate > $1.importDate }.prefix(10))
+    }
+    
+    /// ストレージ使用量の計算
+    func calculateTotalStorageSize() -> String {
+        // ★ 修正: reduceの初期値を Int64(0) にすることで、Int64型での計算を強制します
+        let totalSize = videos.reduce(Int64(0)) { result, item in
+            let url = videoStorageURL.appendingPathComponent(item.internalFilename)
+            let resources = try? url.resourceValues(forKeys: [.fileSizeKey])
+            // fileSizeはInt?なので、0でアンラップしてInt64に変換
+            return result + Int64(resources?.fileSize ?? 0)
+        }
+        
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB, .useMB, .useKB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: totalSize)
+    }
+    
+    // MARK: - キャッシュ削除
+    func clearThumbnailCache() {
+        do {
+            let fileURLs = try FileManager.default.contentsOfDirectory(at: thumbnailStorageURL, includingPropertiesForKeys: nil)
+            for url in fileURLs {
+                try FileManager.default.removeItem(at: url)
+            }
+            print("✅ Thumbnail cache cleared.")
+        } catch {
+            print("❌ Error clearing thumbnail cache: \(error)")
+        }
+    }
+    
+    // MARK: - フォルダ操作
     func scanFolder(folderURL: URL) -> (videoCount: Int, photoCount: Int) {
         let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
         defer { if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() } }
@@ -118,27 +154,22 @@ class VideoDataManager: ObservableObject {
         return (videoCount, photoCount)
     }
     
-    // MARK: - ★修正: フォルダインポート (アルバムタイプを指定してインポート)
     func importFolder(folderURL: URL, as albumType: AlbumType) async {
         let folderName = folderURL.lastPathComponent
         let fileManager = FileManager.default
         
-        // 1. アルバム作成（既存があれば取得）
         var targetAlbumID: UUID
         if let existingAlbum = albums.first(where: { $0.name == folderName && $0.type == albumType }) {
             targetAlbumID = existingAlbum.id
         } else {
-            // 同名のアルバムがあってもタイプが違う場合は、別アルバムとして新規作成する
             targetAlbumID = UUID()
             let newAlbum = Album(id: targetAlbumID, name: folderName, videoIDs: [], type: albumType)
             albums.append(newAlbum)
             saveData()
         }
         
-        // 2. 中身をスキャン
         guard let contents = try? fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return }
         
-        // 3. 各ファイルをインポート（importMedia内でタイプの選別が行われる）
         for url in contents {
             if !url.hasDirectoryPath {
                 await importMedia(from: url, to: targetAlbumID)
@@ -146,35 +177,24 @@ class VideoDataManager: ObservableObject {
         }
     }
 
-    // MARK: - インポート処理 (厳密な選別付き)
+    // MARK: - インポート処理
     func importMedia(from sourceURL: URL, to albumID: UUID) async {
-        // アルバム情報の取得
         guard let targetAlbum = albums.first(where: { $0.id == albumID }) else { return }
         
-        // ファイルタイプの事前判定（効率化のためコピー前に判定）
         let fileExtension = sourceURL.pathExtension
         let type = UTType(filenameExtension: fileExtension)
         let isImage = type?.conforms(to: .image) ?? ["jpg", "jpeg", "png", "heic", "webp", "gif", "tiff"].contains(fileExtension.lowercased())
         let isMovie = type?.conforms(to: .movie) ?? ["mp4", "mov", "m4v", "avi"].contains(fileExtension.lowercased())
         
-        // ★ 選別ロジック: アルバムタイプとファイルの種類が一致しない場合はスキップ
-        if targetAlbum.type == .video && isImage {
-            print("⚠️ Skipped photo import to video album: \(sourceURL.lastPathComponent)")
-            return
-        }
-        if targetAlbum.type == .photo && isMovie {
-            print("⚠️ Skipped video import to photo album: \(sourceURL.lastPathComponent)")
-            return
-        }
+        if targetAlbum.type == .video && isImage { return }
+        if targetAlbum.type == .photo && isMovie { return }
         
-        // ここから通常のインポート処理
         let shouldStopAccessing = sourceURL.startAccessingSecurityScopedResource()
         defer { if shouldStopAccessing { sourceURL.stopAccessingSecurityScopedResource() } }
 
         do {
             let fileHash = try computeFileHash(for: sourceURL)
             
-            // 重複チェック
             if let existingItem = videos.first(where: { $0.fileHash == fileHash }) {
                 print("ℹ️ Media already exists. Adding to album.")
                 if let albumIndex = albums.firstIndex(where: { $0.id == albumID }),
@@ -230,12 +250,10 @@ class VideoDataManager: ObservableObject {
             
             videos.append(newItem)
             
-            // 1. 指定されたアルバムに追加
             if let index = albums.firstIndex(where: { $0.id == albumID }) {
                 albums[index].videoIDs.append(newID)
             }
             
-            // 2. システムアルバムへの自動追加
             if mediaType == .photo {
                 if let allPhotosIndex = albums.firstIndex(where: { $0.name == allPhotosAlbumName }) {
                     albums[allPhotosIndex].videoIDs.append(newID)
