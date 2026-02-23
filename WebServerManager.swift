@@ -6,7 +6,7 @@ import Darwin
 import Combine
 
 // ===================================
-//  WebServerManager.swift (順次探索サムネイル生成版)
+//  WebServerManager.swift (画質リクエスト対応版)
 // ===================================
 
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
@@ -91,26 +91,114 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .internalServerError }
         }
         
+        server.post["/albums/create"] = { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
+            struct CreateReq: Codable { let name: String; let type: String }
+            do {
+                let req = try JSONDecoder().decode(CreateReq.self, from: Data(request.body))
+                let albumType = AlbumType(rawValue: req.type) ?? .video
+                DispatchQueue.main.async { dataManager.createAlbum(name: req.name, type: albumType) }
+                return .ok(.text("Created"))
+            } catch { return .badRequest(.text("Invalid request")) }
+        }
+
+        server.delete["/albums/:id"] = { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager,
+                  let idStr = request.params[":id"], let id = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
+            DispatchQueue.main.async { dataManager.deleteAlbum(albumID: id) }
+            return .ok(.text("Deleted"))
+        }
+
         server.post["/move"] = { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
-            struct MoveRequest: Codable { let videoIds: [String]; let targetAlbumId: String }
+            struct MoveRequest: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
             do {
                 let moveRequest = try JSONDecoder().decode(MoveRequest.self, from: Data(request.body))
                 let videoUUIDs = moveRequest.videoIds.compactMap { UUID(uuidString: $0) }
-                guard let targetAlbumUUID = UUID(uuidString: moveRequest.targetAlbumId) else { return .badRequest(.text("Invalid target album ID")) }
-                DispatchQueue.main.async { dataManager.moveVideos(videoIDs: videoUUIDs, to: targetAlbumUUID) }
-                return .ok(.text("Move successful"))
+                guard let sourceUUID = UUID(uuidString: moveRequest.sourceAlbumId),
+                      let targetUUID = UUID(uuidString: moveRequest.targetAlbumId) else { return .badRequest(.text("Invalid IDs")) }
+                DispatchQueue.main.async { dataManager.moveVideos(videoIDs: videoUUIDs, from: sourceUUID, to: targetUUID) }
+                return .ok(.text("Moved successfully"))
             } catch { return .badRequest(.text("Invalid request body")) }
         }
 
+        server.post["/deleteVideos"] = { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
+            struct DelRequest: Codable { let videoIds: [String]; let albumId: String }
+            do {
+                let req = try JSONDecoder().decode(DelRequest.self, from: Data(request.body))
+                let videoUUIDs = req.videoIds.compactMap { UUID(uuidString: $0) }
+                guard let albumUUID = UUID(uuidString: req.albumId) else { return .badRequest(.text("Invalid Album ID")) }
+                DispatchQueue.main.async { dataManager.removeVideosFromAlbum(videoIDs: videoUUIDs, albumID: albumUUID) }
+                return .ok(.text("Deleted successfully"))
+            } catch { return .badRequest(.text("Invalid request body")) }
+        }
+
+        server.post["/upload"] = { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
+            
+            let encodedFilename = request.headers["x-filename"] ?? "uploaded_media"
+            let filename = encodedFilename.removingPercentEncoding ?? encodedFilename
+            let albumIdStr = request.headers["x-album-id"] ?? ""
+            
+            let tempDir = FileManager.default.temporaryDirectory
+            let tempURL = tempDir.appendingPathComponent(UUID().uuidString + "_" + filename)
+            
+            let data = Data(request.body)
+            do {
+                try data.write(to: tempURL)
+                
+                let targetAlbumID: UUID
+                if let aid = UUID(uuidString: albumIdStr) {
+                    targetAlbumID = aid
+                } else {
+                    guard let allVideos = dataManager.albums.first(where: { $0.name == "ALL VIDEOS" }) else {
+                        return .internalServerError
+                    }
+                    targetAlbumID = allVideos.id
+                }
+                
+                DispatchQueue.main.async {
+                    Task {
+                        await dataManager.importMedia(from: tempURL, to: targetAlbumID, customFilename: filename)
+                        try? FileManager.default.removeItem(at: tempURL)
+                    }
+                }
+                return .ok(.text("Upload successful"))
+            } catch {
+                return .internalServerError
+            }
+        }
+
+        // ★ 動画再生ルート (iOSから指定された画質の動画を返す)
         server["/video/:id"] = { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
+            
+            // iOSから送られてくるクエリパラメータ "q" (画質) を取得。無ければ original
+            let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "original"
+            
             var videoURL: URL?
             DispatchQueue.main.sync {
                 if let videoItem = dataManager.videos.first(where: { $0.id == videoID }) {
-                    videoURL = dataManager.videoStorageURL.appendingPathComponent(videoItem.internalFilename)
+                    // 要求された画質に応じてプロキシを探す
+                    if quality == "1080p" {
+                        let proxyURL = dataManager.proxyStorageURL.appendingPathComponent("\(videoIDString)_1080p.mp4")
+                        if FileManager.default.fileExists(atPath: proxyURL.path) {
+                            videoURL = proxyURL
+                        }
+                    } else if quality == "540p" {
+                        let proxyURL = dataManager.proxyStorageURL.appendingPathComponent("\(videoIDString)_540p.mp4")
+                        if FileManager.default.fileExists(atPath: proxyURL.path) {
+                            videoURL = proxyURL
+                        }
+                    }
+                    
+                    // 指定の画質が存在しない、または original の場合は元ファイルを返す
+                    if videoURL == nil {
+                        videoURL = dataManager.fileURL(for: videoItem)
+                    }
                 }
             }
             guard let url = videoURL else { return .notFound }
@@ -133,7 +221,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             DispatchQueue.main.sync {
                 if let item = dataManager.videos.first(where: { $0.id == videoID }) {
                     targetItem = item
-                    videoFileUrl = dataManager.videoStorageURL.appendingPathComponent(item.internalFilename)
+                    videoFileUrl = dataManager.fileURL(for: item)
                 }
             }
             guard let item = targetItem, let fileUrl = videoFileUrl else { return .notFound }
@@ -288,7 +376,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
     }
 
-    // ★ 修正: 動画サムネイル生成（順次探索ロジック）
     private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double) async -> Data? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
@@ -298,16 +385,12 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         
         let duration = (try? await asset.load(.duration).seconds) ?? 0
         
-        // 探索候補: 1秒, 3秒, 5秒, 10秒, 30秒, 60秒... と順に見ていく
-        // 動画の中間地点などをいきなり見に行くとネタバレになる可能性があるため、冒頭から順に「使える画」を探す
         var attempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0]
         
-        // 動画が短い場合は、0秒地点も候補に入れる
         if duration < 5 {
             attempts.insert(0.0, at: 0)
         }
         
-        // 動画の長さを超える候補は除外
         let validAttempts = attempts.filter { $0 < duration }
         
         var bestCGImage: CGImage? = nil
@@ -316,10 +399,8 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         for seconds in validAttempts {
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
             if let cgImage = try? await generator.image(at: time).image {
-                // とりあえず最初の生成画像を確保（全部黒だった場合の最終手段）
                 if fallbackImage == nil { fallbackImage = cgImage }
                 
-                // 黒くない画像が見つかったら、それを採用して探索終了
                 if !isImagePredominantlyBlack(image: cgImage) {
                     bestCGImage = cgImage
                     break
@@ -327,7 +408,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             }
         }
         
-        // 見つかったベスト画像、なければ最初の画像を使用
         if let cgImage = bestCGImage ?? fallbackImage {
             let nsImage = NSImage(cgImage: cgImage, size: .zero)
             return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
@@ -335,7 +415,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return nil
     }
     
-    // 黒判定ロジック
     private func isImagePredominantlyBlack(image: CGImage, threshold: CGFloat = 0.1) -> Bool {
         let size = 20
         let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -356,7 +435,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             let luminance = 0.299 * r + 0.587 * g + 0.114 * b
             if luminance < threshold { darkPixelCount += 1 }
         }
-        // 80%以上が暗ければ黒とみなす
         return Double(darkPixelCount) / Double(totalPixels) > 0.8
     }
     
