@@ -3,7 +3,7 @@ import CoreServices
 import UniformTypeIdentifiers
 
 // ===================================
-//  ContentView.swift (最近の項目削除版)
+//  ContentView.swift (ポート番号設定UI追加版)
 // ===================================
 
 enum NavigationSelection: Hashable {
@@ -27,6 +27,8 @@ struct ContentView: View {
     @State private var pendingSidebarFolderURL: URL?
     @State private var sidebarMixedContentInfo = ""
 
+    @State private var isShowingStorageManager = false
+
     private let allVideosAlbumName = "ALL VIDEOS"
 
     init() {
@@ -42,133 +44,164 @@ struct ContentView: View {
                 if isSidebarTargeted {
                     Color.accentColor.opacity(0.1)
                         .edgesIgnoringSafeArea(.all)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 4).padding(4))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 3))
                 }
             }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 250)
-            .onDrop(of: [.fileURL], isTargeted: $isSidebarTargeted) { providers in
-                handleSidebarDrop(providers: providers)
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button(action: { isShowingStorageManager = true }) {
+                        Label("ストレージ管理", systemImage: "internaldrive")
+                    }
+                }
             }
-            
+            .sheet(isPresented: $isShowingStorageManager) {
+                StorageManagerView(dataManager: dataManager)
+            }
         } detail: {
-            switch selection {
-            case .home:
-                HomeView(dataManager: dataManager, webServerManager: webServerManager)
-            case .album(let albumID):
-                AlbumDetailView(albumID: albumID, dataManager: dataManager)
-            case nil:
-                Text("項目を選択してください").foregroundColor(.secondary)
+            NavigationStack {
+                switch selection {
+                case .home:
+                    HomeView(dataManager: dataManager, webServerManager: webServerManager)
+                        .navigationTitle("ホーム")
+                case .album(let albumID):
+                    if let album = dataManager.albums.first(where: { $0.id == albumID }) {
+                        AlbumDetailView(album: album, dataManager: dataManager)
+                            .navigationTitle(album.name)
+                    } else {
+                        Text("アルバムが見つかりません").foregroundColor(.secondary)
+                    }
+                case .none:
+                    Text("サイドバーから項目を選択してください").foregroundColor(.secondary)
+                }
             }
         }
-        .safeAreaInset(edge: .bottom) { statusBar }
-        .onAppear { webServerManager.startServer() }
-        .onDisappear { webServerManager.stopServer() }
-        .sheet(isPresented: $isShowingAddAlbumSheet) { addAlbumSheet }
-        .alert("アルバムを削除", isPresented: .constant(albumToDelete != nil), presenting: albumToDelete) { (album: Album) in
-            Button("削除", role: .destructive) {
-                dataManager.deleteAlbum(albumID: album.id)
-                if case .album(let id) = selection, id == album.id { selection = .home }
-                albumToDelete = nil
+        .onDrop(of: [.fileURL], isTargeted: $isSidebarTargeted) { providers in
+            return handleDropOnSidebar(providers: providers)
+        }
+        .alert("異なるメディアタイプの混在", isPresented: $showSidebarMixedContentAlert) {
+            Button("動画アルバムとして作成") {
+                if let url = pendingSidebarFolderURL {
+                    Task { await dataManager.importFolder(folderURL: url, as: .video); pendingSidebarFolderURL = nil }
+                }
             }
-            Button("キャンセル", role: .cancel) { albumToDelete = nil }
-        } message: { (album: Album) in Text("このアルバムを削除しますか？\nアルバム内のビデオは「ALL VIDEOS」に残ります。") }
-        .alert("フォルダ内に動画と画像が混在しています", isPresented: $showSidebarMixedContentAlert) {
-            Button("動画アルバムとして作成") { if let url = pendingSidebarFolderURL { Task { await dataManager.importFolder(folderURL: url, as: .video) } }; pendingSidebarFolderURL = nil }
-            Button("画像アルバムとして作成") { if let url = pendingSidebarFolderURL { Task { await dataManager.importFolder(folderURL: url, as: .photo) } }; pendingSidebarFolderURL = nil }
+            Button("画像アルバムとして作成") {
+                if let url = pendingSidebarFolderURL {
+                    Task { await dataManager.importFolder(folderURL: url, as: .photo); pendingSidebarFolderURL = nil }
+                }
+            }
             Button("キャンセル", role: .cancel) { pendingSidebarFolderURL = nil }
-        } message: { Text(sidebarMixedContentInfo + "\n\nどちらのアルバムとしてインポートしますか？\n選ばなかった種類のファイルは除外されます。") }
+        } message: {
+            Text("\(sidebarMixedContentInfo)\nどちらのタイプのアルバムとして作成しますか？指定したタイプ以外のファイルは無視されます。")
+        }
     }
     
     private var sidebarList: some View {
         List(selection: $selection) {
             Section {
-                NavigationLink(value: NavigationSelection.home) { Label("ホーム", systemImage: "house.fill") }
-            }
-            Section("ライブラリ") {
-                let sortedAlbums = dataManager.albums.sorted { a, b in
-                    if a.name == allVideosAlbumName { return true }
-                    if b.name == allVideosAlbumName { return false }
-                    return a.name < b.name
+                NavigationLink(value: NavigationSelection.home) {
+                    Label("ホーム", systemImage: "house")
                 }
-                ForEach(sortedAlbums) { album in
+            }
+            
+            Section(header: Text("ライブラリ")) {
+                if let allVideos = dataManager.albums.first(where: { $0.name == "ALL VIDEOS" }) {
+                    NavigationLink(value: NavigationSelection.album(allVideos.id)) {
+                        Label("すべての動画", systemImage: "film")
+                    }
+                }
+                if let allPhotos = dataManager.albums.first(where: { $0.name == "ALL PHOTOS" }) {
+                    NavigationLink(value: NavigationSelection.album(allPhotos.id)) {
+                        Label("すべての画像", systemImage: "photo.on.rectangle")
+                    }
+                }
+            }
+            
+            Section(header:
+                HStack {
+                    Text("アルバム")
+                    Spacer()
+                    Button(action: { isShowingAddAlbumSheet = true }) {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            ) {
+                ForEach(dataManager.albums.filter { $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }) { album in
                     NavigationLink(value: NavigationSelection.album(album.id)) {
-                        HStack {
-                            Image(systemName: album.type == .photo ? "photo.on.rectangle" : "folder")
-                                .foregroundColor(album.type == .photo ? .orange : .blue)
-                            Text(album.name)
+                        Label(album.name, systemImage: album.type == .photo ? "photo.on.rectangle" : "folder")
+                    }
+                    .contextMenu {
+                        Button("削除") {
+                            albumToDelete = album
                         }
                     }
                 }
             }
         }
-        .navigationTitle("ライブラリ")
-        .toolbar {
-            ToolbarItemGroup {
-                Button(action: { isShowingAddAlbumSheet = true }) { Label("アルバムを追加", systemImage: "plus") }
-                Button(role: .destructive, action: {
-                    if case .album(let id) = selection, let album = dataManager.albums.first(where: { $0.id == id }) {
-                        if !isDeleteAlbumDisabled(album: album) { albumToDelete = album }
-                    }
-                }) { Label("アルバムを削除", systemImage: "trash") }.disabled(isDeleteButtonDisabled)
-            }
-        }
-    }
-    
-    private var isDeleteButtonDisabled: Bool {
-        guard case .album(let id) = selection, let album = dataManager.albums.first(where: { $0.id == id }) else { return true }
-        return isDeleteAlbumDisabled(album: album)
-    }
-    
-    private func isDeleteAlbumDisabled(album: Album) -> Bool {
-        if album.name == allVideosAlbumName || album.name == "ALL PHOTOS" { return true }
-        return false
-    }
-    
-    private var statusBar: some View {
-        HStack {
-            Text(webServerManager.statusMessage).font(.footnote).padding(.leading)
-            Spacer()
-        }
-        .frame(height: 28).background(.bar)
-    }
-    
-    private var addAlbumSheet: some View {
-        VStack(spacing: 20) {
-            Text("新しいアルバム").font(.headline)
-            VStack(alignment: .leading) {
-                Text("名前:")
-                TextField("アルバム名", text: $newAlbumName).textFieldStyle(.roundedBorder)
-                Text("種類:")
-                Picker("種類", selection: $newAlbumType) {
+        .listStyle(SidebarListStyle())
+        .sheet(isPresented: $isShowingAddAlbumSheet) {
+            VStack(spacing: 20) {
+                Text("新規アルバム").font(.headline)
+                TextField("アルバム名", text: $newAlbumName)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                
+                Picker("タイプ", selection: $newAlbumType) {
                     Text("動画アルバム").tag(AlbumType.video)
                     Text("画像アルバム").tag(AlbumType.photo)
-                }.pickerStyle(.segmented)
-            }.padding(.horizontal)
-            HStack {
-                Button("キャンセル") { isShowingAddAlbumSheet = false; newAlbumName = "" }.keyboardShortcut(.cancelAction)
-                Button("作成") { if !newAlbumName.isEmpty { dataManager.createAlbum(name: newAlbumName, type: newAlbumType); isShowingAddAlbumSheet = false; newAlbumName = ""; newAlbumType = .video } }.buttonStyle(.borderedProminent).disabled(newAlbumName.isEmpty).keyboardShortcut(.defaultAction)
-            }.padding()
-        }.frame(minWidth: 300).padding()
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                
+                HStack {
+                    Button("キャンセル") {
+                        isShowingAddAlbumSheet = false
+                        newAlbumName = ""
+                        newAlbumType = .video
+                    }
+                    Spacer()
+                    Button("作成") {
+                        dataManager.createAlbum(name: newAlbumName, type: newAlbumType)
+                        isShowingAddAlbumSheet = false
+                        newAlbumName = ""
+                        newAlbumType = .video
+                    }
+                    .disabled(newAlbumName.isEmpty || newAlbumName == "ALL VIDEOS" || newAlbumName == "ALL PHOTOS")
+                }
+            }
+            .padding()
+            .frame(width: 300)
+        }
+        .alert(item: $albumToDelete) { album in
+            Alert(
+                title: Text("アルバムの削除"),
+                message: Text("「\(album.name)」を削除しますか？アルバム内のファイルは「ALL VIDEOS」または「ALL PHOTOS」に残ります。"),
+                primaryButton: .destructive(Text("削除")) {
+                    dataManager.deleteAlbum(albumID: album.id)
+                    if selection == .album(album.id) {
+                        selection = .home
+                    }
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
     
-    private func handleSidebarDrop(providers: [NSItemProvider]) -> Bool {
+    private func handleDropOnSidebar(providers: [NSItemProvider]) -> Bool {
         for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url = url else { return }
-                    var isDir: ObjCBool = false
-                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                        Task {
-                            let counts = await dataManager.scanFolder(folderURL: url)
-                            await MainActor.run {
-                                if counts.videoCount > 0 && counts.photoCount > 0 {
-                                    self.pendingSidebarFolderURL = url
-                                    self.sidebarMixedContentInfo = "動画: \(counts.videoCount)本\n画像: \(counts.photoCount)枚"
-                                    self.showSidebarMixedContentAlert = true
-                                } else if counts.photoCount > 0 { Task { await dataManager.importFolder(folderURL: url, as: .photo) } }
-                                else if counts.videoCount > 0 { Task { await dataManager.importFolder(folderURL: url, as: .video) } }
-                                else { Task { await dataManager.importFolder(folderURL: url, as: .video) } }
-                            }
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
+                guard let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                
+                DispatchQueue.main.async {
+                    var isDirectory: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                        let counts = dataManager.scanFolder(folderURL: url)
+                        if counts.videoCount > 0 && counts.photoCount > 0 {
+                            self.sidebarMixedContentInfo = "動画: \(counts.videoCount)件, 画像: \(counts.photoCount)件"
+                            self.pendingSidebarFolderURL = url
+                            self.showSidebarMixedContentAlert = true
+                        } else if counts.photoCount > 0 {
+                            Task { await dataManager.importFolder(folderURL: url, as: .photo) }
+                        } else {
+                            Task { await dataManager.importFolder(folderURL: url, as: .video) }
                         }
                     }
                 }
@@ -178,285 +211,261 @@ struct ContentView: View {
     }
 }
 
-// ===================================
-//  HomeView (最近の項目削除・容量表示維持)
-// ===================================
-
+// MARK: - HomeView
 struct HomeView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
-    @State private var showCacheClearedAlert = false
-    @State private var totalSizeString: String = "計算中..."
-    
-    var videoCount: Int { dataManager.videos.filter { $0.mediaType == .video }.count }
-    var photoCount: Int { dataManager.videos.filter { $0.mediaType == .photo }.count }
-    var albumCount: Int { dataManager.albums.count }
-    
+
     var body: some View {
-        ScrollView {
-            VStack(spacing: 30) {
-                // ヘッダー
-                VStack(spacing: 10) {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 60))
-                        .foregroundColor(.accentColor)
-                    Text("Video Server for Mac")
-                        .font(.largeTitle.weight(.bold))
+        VStack(spacing: 30) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 60))
+                .foregroundColor(.accentColor)
+            
+            Text("Mac Video Server")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+            
+            VStack(spacing: 15) {
+                HStack {
+                    Text("サーバー状態:")
                     Text(webServerManager.statusMessage)
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(8)
-                        // コピー機能追加
-                        .onTapGesture {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(webServerManager.statusMessage, forType: .string)
-                        }
+                        .fontWeight(.bold)
+                        .foregroundColor(webServerManager.statusMessage.contains("✅") ? .green : (webServerManager.statusMessage.contains("🛑") ? .secondary : .red))
                 }
-                .padding(.top, 40)
                 
-                // 統計カード
-                HStack(spacing: 20) {
-                    StatCard(title: "動画", value: "\(videoCount)", icon: "film.fill", color: .cyan)
-                    StatCard(title: "画像", value: "\(photoCount)", icon: "photo.fill", color: .orange)
-                    StatCard(title: "アルバム", value: "\(albumCount)", icon: "folder.fill", color: .blue)
-                    StatCard(title: "容量", value: totalSizeString, icon: "externaldrive.fill", color: .purple)
-                }
-                .padding(.horizontal)
-                
-                Divider()
-                
-                // メンテナンス機能
-                VStack(alignment: .leading, spacing: 15) {
-                    Text("メンテナンス").font(.title2.weight(.bold))
-                    HStack {
-                        Button(action: {
-                            dataManager.clearThumbnailCache()
-                            showCacheClearedAlert = true
-                        }) {
-                            HStack {
-                                Image(systemName: "arrow.clockwise.circle.fill")
-                                Text("サムネイルキャッシュを削除")
-                            }
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        Spacer()
+                // ★ 追加: ポート番号の設定UI
+                HStack {
+                    Text("ポート番号:")
+                    TextField("例: 8080", value: $webServerManager.targetPort, format: .number)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 80)
+                        .multilineTextAlignment(.center)
+                        .disabled(webServerManager.statusMessage.contains("✅"))
+                    
+                    Button(action: {
+                        webServerManager.targetPort = 8080
+                    }) {
+                        Image(systemName: "arrow.counterclockwise")
                     }
-                    Text("iOS側で画像が表示されない場合や、サムネイルが黒くなる場合に実行してください。").font(.caption).foregroundColor(.secondary)
+                    .buttonStyle(PlainButtonStyle())
+                    .disabled(webServerManager.statusMessage.contains("✅"))
+                    .help("デフォルト(8080)に戻す")
                 }
-                .padding()
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                .cornerRadius(12)
-                .padding(.horizontal)
                 
-                Spacer()
+                HStack(spacing: 20) {
+                    Button(action: {
+                        webServerManager.startServer()
+                    }) {
+                        Label("開始", systemImage: "play.fill")
+                    }
+                    .disabled(webServerManager.statusMessage.contains("✅"))
+                    
+                    Button(action: {
+                        webServerManager.stopServer()
+                    }) {
+                        Label("停止", systemImage: "stop.fill")
+                    }
+                    .disabled(!webServerManager.statusMessage.contains("✅"))
+                }
             }
             .padding()
+            .background(Color(NSColor.windowBackgroundColor))
+            .cornerRadius(12)
+            .shadow(radius: 2)
+            
+            VStack(alignment: .leading, spacing: 10) {
+                Text("ストレージ情報").font(.headline)
+                HStack {
+                    Text("総アイテム数:")
+                    Spacer()
+                    Text("\(dataManager.videos.count)")
+                }
+                HStack {
+                    Text("使用容量:")
+                    Spacer()
+                    Text(dataManager.calculateTotalStorageSize())
+                }
+            }
+            .padding()
+            .background(Color(NSColor.windowBackgroundColor))
+            .cornerRadius(12)
+            .shadow(radius: 2)
+            .frame(maxWidth: 300)
+            
+            Spacer()
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .alert("キャッシュを削除しました", isPresented: $showCacheClearedAlert) {
-            Button("OK", role: .cancel) { }
-        } message: { Text("次回iOSアプリで表示する際に、新しいサムネイルが再生成されます。") }
-        .task {
-            // 容量計算を実行
-            totalSizeString = dataManager.calculateTotalStorageSize()
-        }
-        // データ変更時に容量を再計算
-        .onChange(of: dataManager.videos) { _ in
-            totalSizeString = dataManager.calculateTotalStorageSize()
-        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.underPageBackgroundColor))
     }
 }
 
-struct StatCard: View {
-    let title: String
-    let value: String
-    let icon: String
-    let color: Color
-    
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Image(systemName: icon).foregroundColor(color)
-                Text(title).foregroundColor(.secondary)
-            }.font(.headline)
-            Text(value)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundColor(.primary)
-                .minimumScaleFactor(0.5) // 文字が長すぎる場合は小さくする
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-    }
-}
-
+// MARK: - AlbumDetailView
 struct AlbumDetailView: View {
-    let albumID: UUID
+    let album: Album
     @ObservedObject var dataManager: VideoDataManager
     
-    @State private var viewMode: ViewMode = .grid
-    @State private var searchText = ""
-    @State private var selectedVideoIDs = Set<VideoItem.ID>()
-    @State private var lastSelectedVideoID: VideoItem.ID?
-    @State private var isDetailTargeted = false
-    @State private var showDetailMixedContentAlert = false
-    @State private var pendingDetailFolderURL: URL?
-    @State private var detailMixedContentInfo = ""
-    
-    private enum ViewMode { case grid, list }
-    private let columns = [GridItem(.adaptive(minimum: 160))]
-    
+    @State private var isTargeted = false
+    @State private var selectedVideoIDs = Set<UUID>()
+    @State private var showMixedContentAlert = false
+    @State private var pendingFolderURL: URL?
+    @State private var mixedContentInfo = ""
+    @State private var lastSelectedVideoID: UUID?
+
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16), count: 3)
+    }
+
     var body: some View {
         ZStack {
-            if let album = dataManager.albums.first(where: { $0.id == albumID }) {
-                content(album: album)
-            } else {
-                Text("アルバムが見つかりません")
-            }
-            if isDetailTargeted {
-                Color.accentColor.opacity(0.1).edgesIgnoringSafeArea(.all)
-                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.accentColor, lineWidth: 4).padding())
-                VStack {
-                    Image(systemName: "arrow.down.doc.fill").font(.system(size: 60)).foregroundColor(.accentColor)
-                    Text("ここにドロップして追加").font(.title2).fontWeight(.bold).foregroundColor(.accentColor)
-                }
-            }
-        }
-        .onDrop(of: [.fileURL], isTargeted: $isDetailTargeted) { providers in handleDetailDrop(providers: providers) }
-        .alert("フォルダ内に動画と画像が混在しています", isPresented: $showDetailMixedContentAlert) {
-            Button("インポートする") {
-                if let url = pendingDetailFolderURL {
-                    Task {
-                        let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-                        for fileURL in contents ?? [] { await dataManager.importMedia(from: fileURL, to: albumID) }
-                    }
-                }
-                pendingDetailFolderURL = nil
-            }
-            Button("キャンセル", role: .cancel) { pendingDetailFolderURL = nil }
-        } message: { Text(detailMixedContentInfo + "\n\nこのアルバムの種類に合うファイルのみインポートしますか？") }
-    }
-    
-    @ViewBuilder
-    private func content(album: Album) -> some View {
-        let videosInAlbum = dataManager.videos.filter { album.videoIDs.contains($0.id) }
-        let filteredVideos = videosInAlbum.filter { video in
-            searchText.isEmpty || video.originalFilename.localizedCaseInsensitiveContains(searchText)
-        }
-        
-        VStack {
-            if videosInAlbum.isEmpty && album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
+            let albumVideos = dataManager.videos.filter { album.videoIDs.contains($0.id) }
+            
+            if albumVideos.isEmpty {
                 VStack(spacing: 20) {
-                    Text("項目がありません").font(.headline)
-                    Text("ツールバーのボタン、またはドラッグ＆ドロップで\nメディアを追加してください。").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
-                    Button(action: openFileImporter) { Label("ファイルを選択", systemImage: "square.and.arrow.down").font(.headline).padding() }.buttonStyle(.borderedProminent)
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 50))
+                        .foregroundColor(.secondary)
+                    Text("ここにファイルやフォルダをドロップして追加")
+                        .font(.title2)
+                        .foregroundColor(.secondary)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                if filteredVideos.isEmpty && !videosInAlbum.isEmpty {
-                    Text("一致する項目がありません").foregroundColor(.secondary); Spacer()
-                } else if viewMode == .grid { videoGridView(videos: filteredVideos) } else { videoListView(videos: filteredVideos) }
-            }
-        }
-        .navigationTitle(album.name)
-        .searchable(text: $searchText, prompt: "名前で検索")
-        .toolbar {
-            ToolbarItem {
-                Button(role: .destructive, action: deleteSelectedVideos) { Label("削除", systemImage: "trash") }.disabled(selectedVideoIDs.isEmpty)
-            }
-            ToolbarItem {
-                Button(action: openFileImporter) { Label("インポート", systemImage: "square.and.arrow.down") }
-            }
-            ToolbarItem {
-                Picker("表示形式", selection: $viewMode) {
-                    Label("グリッド", systemImage: "square.grid.2x2").tag(ViewMode.grid)
-                    Label("リスト", systemImage: "list.bullet").tag(ViewMode.list)
-                }.pickerStyle(.segmented)
-            }
-        }
-    }
-    
-    private func videoGridView(videos: [VideoItem]) -> some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 20) {
-                ForEach(videos) { video in
-                    Button(action: { handleGridSelection(for: video, in: videos, flags: NSEvent.modifierFlags) }) {
-                        MacVideoThumbnailView(videoItem: video, storageURL: dataManager.videoStorageURL)
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 4).opacity(selectedVideoIDs.contains(video.id) ? 1 : 0))
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu { videoContextMenu(for: video) }
-                }
-            }
-            .padding()
-        }
-    }
-    
-    private func videoListView(videos: [VideoItem]) -> some View {
-        List(videos, selection: $selectedVideoIDs) { video in
-            HStack(spacing: 15) {
-                MacVideoThumbnailView(videoItem: video, storageURL: dataManager.videoStorageURL).frame(width: 80, height: 80)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(video.originalFilename).fontWeight(.semibold).lineLimit(2)
-                    if video.mediaType == .video { Text("長さ: \(formatDuration(video.duration))").font(.subheadline).foregroundColor(.secondary) }
-                    else { Text("画像").font(.subheadline).foregroundColor(.secondary) }
-                    Text("追加日: \(video.importDate, formatter: itemFormatter)").font(.caption).foregroundColor(.gray)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 4)
-            .contextMenu { videoContextMenu(for: video) }
-        }
-    }
-    
-    @ViewBuilder
-    private func videoContextMenu(for video: VideoItem) -> some View {
-        Button(role: .destructive) {
-            if selectedVideoIDs.contains(video.id) { deleteSelectedVideos() } else { dataManager.deleteVideos(videoIDs: [video.id]) }
-        } label: {
-            let count = selectedVideoIDs.contains(video.id) ? selectedVideoIDs.count : 1
-            Label("\(count)項目を削除", systemImage: "trash")
-        }
-    }
-    
-    private func openFileImporter() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true; panel.allowsMultipleSelection = true; panel.allowedContentTypes = [.movie, .image]
-        if panel.runModal() == .OK {
-            for url in panel.urls { Task { await dataManager.importMedia(from: url, to: albumID) } }
-        }
-    }
-    
-    private func handleDetailDrop(providers: [NSItemProvider]) -> Bool {
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    if let url = url {
-                        Task {
-                            var isDir: ObjCBool = false
-                            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                                let counts = await dataManager.scanFolder(folderURL: url)
-                                await MainActor.run {
-                                    if counts.videoCount > 0 && counts.photoCount > 0 {
-                                        self.pendingDetailFolderURL = url
-                                        self.detailMixedContentInfo = "動画: \(counts.videoCount)本\n画像: \(counts.photoCount)枚"
-                                        self.showDetailMixedContentAlert = true
-                                    } else {
-                                        Task {
-                                            let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-                                            for fileURL in contents ?? [] { await dataManager.importMedia(from: fileURL, to: albumID) }
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(albumVideos) { video in
+                            VStack {
+                                MacVideoThumbnailView(videoItem: video, storageURL: dataManager.videoStorageURL)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(selectedVideoIDs.contains(video.id) ? Color.accentColor : Color.clear, lineWidth: 3)
+                                    )
+                                    .onTapGesture(count: 2) {
+                                        openFile(video)
+                                    }
+                                    .simultaneousGesture(
+                                        TapGesture(count: 1).onEnded {
+                                            if let event = NSApp.currentEvent {
+                                                handleGridSelection(for: video, in: albumVideos, flags: event.modifierFlags)
+                                            } else {
+                                                handleGridSelection(for: video, in: albumVideos, flags: [])
+                                            }
+                                        }
+                                    )
+                                    .contextMenu {
+                                        Button("開く") { openFile(video) }
+                                        Button("Finderで表示") { revealInFinder(video) }
+                                        Divider()
+                                        if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
+                                            Button("アルバムから外す") {
+                                                dataManager.removeVideosFromAlbum(videoIDs: [video.id], albumID: album.id)
+                                            }
+                                        }
+                                        Button("完全に削除", role: .destructive) {
+                                            dataManager.deleteVideos(videoIDs: [video.id])
                                         }
                                     }
+                                
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(video.originalFilename)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    
+                                    HStack {
+                                        Text(itemFormatter.string(from: video.importDate))
+                                        Spacer()
+                                        if video.mediaType == .video {
+                                            Text(formatDuration(video.duration))
+                                        }
+                                    }
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
                                 }
-                            } else { await dataManager.importMedia(from: url, to: albumID) }
+                                .padding(.horizontal, 4)
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            
+            if isTargeted {
+                Color.accentColor.opacity(0.2)
+                    .edgesIgnoringSafeArea(.all)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.accentColor, lineWidth: 4)
+                            .padding(2)
+                    )
+            }
+        }
+        .toolbar {
+            if !selectedVideoIDs.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: deleteSelectedVideos) {
+                        Label("削除", systemImage: "trash")
+                            .foregroundColor(.red)
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Text("\(selectedVideoIDs.count)項目を選択中")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .onTapGesture {
+            selectedVideoIDs.removeAll()
+            lastSelectedVideoID = nil
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            return handleDrop(providers: providers)
+        }
+        .alert("異なるメディアタイプの混在", isPresented: $showMixedContentAlert) {
+            Button("現在のアルバムのタイプ (\(album.type.displayName)) としてインポート") {
+                if let url = pendingFolderURL {
+                    Task { await dataManager.importFolder(folderURL: url, as: album.type); pendingFolderURL = nil }
+                }
+            }
+            Button("キャンセル", role: .cancel) { pendingFolderURL = nil }
+        } message: {
+            Text("\(mixedContentInfo)\n指定したタイプ (\(album.type.displayName)) 以外のファイルは無視されます。")
+        }
+    }
+    
+    // MARK: - Actions
+    
+    private func openFile(_ video: VideoItem) {
+        let url = dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)
+        NSWorkspace.shared.open(url)
+    }
+    
+    private func revealInFinder(_ video: VideoItem) {
+        let url = dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+    
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
+                guard let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                
+                DispatchQueue.main.async {
+                    var isDirectory: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+                        if isDirectory.boolValue {
+                            let counts = dataManager.scanFolder(folderURL: url)
+                            
+                            if (album.type == .video && counts.photoCount > 0) || (album.type == .photo && counts.videoCount > 0) {
+                                self.mixedContentInfo = "動画: \(counts.videoCount)件, 画像: \(counts.photoCount)件"
+                                self.pendingFolderURL = url
+                                self.showMixedContentAlert = true
+                            } else {
+                                Task { await dataManager.importFolder(folderURL: url, as: album.type) }
+                            }
+                        } else {
+                            Task { await dataManager.importMedia(from: url, to: album.id) }
                         }
                     }
                 }
@@ -487,6 +496,6 @@ struct AlbumDetailView: View {
     private var itemFormatter: DateFormatter { let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .none; return f }
     private func formatDuration(_ totalSeconds: TimeInterval) -> String {
         let secondsInt = Int(totalSeconds)
-        return String(format: "%d:%02d", secondsInt / 60, secondsInt % 60)
+        return String(format: "%02d:%02d", secondsInt / 60, secondsInt % 60)
     }
 }

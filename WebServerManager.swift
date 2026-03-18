@@ -6,7 +6,7 @@ import Darwin
 import Combine
 
 // ===================================
-//  WebServerManager.swift (画質リクエスト対応版)
+//  WebServerManager.swift (超高機能Webブラウザ対応版)
 // ===================================
 
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
@@ -17,8 +17,18 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     
     @Published var statusMessage: String = "停止中"
     
+    @Published var targetPort: Int {
+        didSet {
+            UserDefaults.standard.set(targetPort, forKey: "serverPort")
+        }
+    }
+    
     init(dataManager: VideoDataManager) {
         self.dataManager = dataManager
+        
+        let savedPort = UserDefaults.standard.integer(forKey: "serverPort")
+        self.targetPort = savedPort == 0 ? 8080 : savedPort
+        
         super.init()
         print("✅ [LIFECYCLE] WebServerManager initialized.")
         setupRoutes()
@@ -44,6 +54,355 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
     // MARK: - API Routes
     private func setupRoutes() {
+        
+        // ★ HTML内にJavaScriptの変数を書きやすくするため、Raw String (#""" ... """#) を使用しています
+        server["/"] = { _ -> HttpResponse in
+            let html = #"""
+            <!DOCTYPE html>
+            <html lang="ja">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                <title>Mac Video Server</title>
+                <style>
+                    :root {
+                        --bg-color: #0D0D14;
+                        --bg-secondary: #161622;
+                        --accent-color: #D9BA73;
+                        --text-primary: #FFFFFF;
+                        --text-secondary: rgba(255,255,255,0.6);
+                    }
+                    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg-color); color: var(--text-primary); margin: 0; padding: 0; padding-bottom: 50px; }
+                    
+                    /* Header */
+                    .header { display: flex; align-items: center; position: sticky; top: 0; background: rgba(13, 13, 20, 0.85); padding: 16px 20px; z-index: 10; backdrop-filter: blur(12px); border-bottom: 1px solid rgba(217, 186, 115, 0.2); }
+                    .back-btn { display: none; background: rgba(255,255,255,0.1); color: var(--accent-color); border: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; cursor: pointer; margin-right: 16px; transition: 0.2s; backdrop-filter: blur(4px); }
+                    .back-btn:active { background: rgba(255,255,255,0.2); }
+                    h1 { font-size: 20px; margin: 0; font-weight: bold; letter-spacing: 0.5px; color: var(--accent-color); }
+                    
+                    .container { padding: 20px; max-width: 1200px; margin: 0 auto; }
+                    .section-title { font-size: 16px; font-weight: 600; color: var(--text-secondary); margin-top: 24px; margin-bottom: 12px; letter-spacing: 1px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; }
+                    
+                    /* Grid & Cards */
+                    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+                    .card { background: var(--bg-secondary); border-radius: 20px; overflow: hidden; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; border: 1px solid rgba(255,255,255,0.05); position: relative; }
+                    .card:active { transform: scale(0.96); }
+                    .thumb-container { position: relative; width: 100%; padding-top: 100%; background: #000; overflow: hidden; }
+                    .thumb { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transition: opacity 0.3s; }
+                    .icon-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 48px; opacity: 0.8; }
+                    .title { padding: 12px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+                    
+                    /* Badges */
+                    .badge-count { position: absolute; bottom: 10px; right: 10px; background: var(--accent-color); color: #000; padding: 2px 8px; border-radius: 8px; font-size: 12px; font-weight: bold; }
+                    .badge-type { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); color: var(--accent-color); padding: 4px; border-radius: 6px; font-size: 12px; backdrop-filter: blur(4px); }
+                    .badge-duration { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; backdrop-filter: blur(4px); }
+                    
+                    /* Toolbar (Search & Sort) */
+                    .toolbar { display: flex; gap: 12px; margin-bottom: 20px; }
+                    .search-bar { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 12px 16px; border-radius: 12px; color: white; font-size: 14px; outline: none; transition: 0.2s; }
+                    .search-bar:focus { border-color: var(--accent-color); background: rgba(255,255,255,0.1); }
+                    .sort-select { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 0 16px; border-radius: 12px; font-size: 14px; outline: none; appearance: none; cursor: pointer; }
+                    
+                    /* Player Modal */
+                    #player-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 1000; flex-direction: column; }
+                    .player-header { position: absolute; top: 0; left: 0; width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 20px; z-index: 1001; background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent); pointer-events: none; }
+                    .player-header > * { pointer-events: auto; }
+                    .filename-display { color: white; font-size: 16px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.8); max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    
+                    .controls-right { display: flex; gap: 16px; align-items: center; }
+                    .quality-select { background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.4); padding: 6px 12px; border-radius: 16px; font-size: 13px; backdrop-filter: blur(8px); outline: none; cursor: pointer; }
+                    .quality-select option { background: #222; color: #fff; }
+                    .close-btn { width: 40px; height: 40px; background: rgba(255,255,255,0.2); border-radius: 20px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: white; cursor: pointer; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1); }
+                    
+                    .media-container { flex: 1; display: flex; justify-content: center; align-items: center; position: relative; width: 100%; height: 100%; }
+                    video, .photo-viewer { width: 100%; height: 100%; max-height: 100vh; object-fit: contain; outline: none; }
+                    
+                    /* Navigation Arrows */
+                    .nav-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 50px; height: 80px; background: rgba(0,0,0,0.3); color: white; display: flex; justify-content: center; align-items: center; font-size: 32px; cursor: pointer; border-radius: 8px; backdrop-filter: blur(4px); transition: 0.2s; z-index: 1001; opacity: 0; pointer-events: none; }
+                    .media-container:hover .nav-btn { opacity: 1; pointer-events: auto; }
+                    .nav-btn:hover { background: rgba(0,0,0,0.6); color: var(--accent-color); }
+                    .nav-prev { left: 20px; }
+                    .nav-next { right: 20px; }
+                    
+                    @media (max-width: 600px) {
+                        .nav-btn { display: none; } /* モバイルでは矢印を非表示（タップ領域と被るため）*/
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <button class="back-btn" id="back-btn" onclick="showAlbumsView()">← 戻る</button>
+                    <h1 id="page-title">Mac Video Server</h1>
+                </div>
+
+                <div class="container" id="albums-view">
+                    <div id="library-section"></div>
+                    <div id="video-albums-section"></div>
+                    <div id="photo-albums-section"></div>
+                </div>
+
+                <div class="container" id="videos-view" style="display: none;">
+                    <div class="toolbar">
+                        <input type="text" class="search-bar" id="search-input" placeholder="ファイル名で検索..." oninput="renderVideos()">
+                        <select class="sort-select" id="sort-select" onchange="renderVideos()">
+                            <option value="desc">新しい順</option>
+                            <option value="asc">古い順</option>
+                            <option value="durationDesc">長い順</option>
+                            <option value="durationAsc">短い順</option>
+                        </select>
+                    </div>
+                    <div class="grid" id="videos-grid"></div>
+                </div>
+
+                <!-- プレーヤーモーダル -->
+                <div id="player-modal">
+                    <div class="player-header">
+                        <div class="filename-display" id="player-filename"></div>
+                        <div class="controls-right">
+                            <select class="quality-select" id="quality-select" onchange="changeQuality(this.value)">
+                                <option value="original">Original</option>
+                                <option value="1080p" selected>1080p (軽量)</option>
+                                <option value="540p">540p (節約)</option>
+                            </select>
+                            <div class="close-btn" onclick="closePlayer()">✕</div>
+                        </div>
+                    </div>
+                    <div class="media-container" id="media-container">
+                        <div class="nav-btn nav-prev" onclick="prevMedia()">&#10094;</div>
+                        <!-- Video or Img tag will be injected here -->
+                        <div class="nav-btn nav-next" onclick="nextMedia()">&#10095;</div>
+                    </div>
+                </div>
+
+                <script>
+                    let currentRawVideos = [];
+                    let currentFilteredVideos = [];
+                    let currentAlbumName = "";
+                    let currentMediaIndex = 0;
+                    let selectedQuality = "1080p";
+
+                    function formatDuration(seconds) {
+                        if(!seconds) return "0:00";
+                        const m = Math.floor(seconds / 60);
+                        const s = Math.floor(seconds % 60);
+                        return m + ":" + (s < 10 ? "0" : "") + s;
+                    }
+
+                    function showAlbumsView() {
+                        document.getElementById('albums-view').style.display = 'block';
+                        document.getElementById('videos-view').style.display = 'none';
+                        document.getElementById('back-btn').style.display = 'none';
+                        document.getElementById('page-title').innerText = 'Mac Video Server';
+                        loadAlbums();
+                    }
+
+                    async function loadAlbums() {
+                        const libSec = document.getElementById('library-section');
+                        const vidSec = document.getElementById('video-albums-section');
+                        const phoSec = document.getElementById('photo-albums-section');
+                        
+                        libSec.innerHTML = '<p style="color:#888;">読み込み中...</p>';
+                        vidSec.innerHTML = ''; phoSec.innerHTML = '';
+                        
+                        try {
+                            const res = await fetch('/albums');
+                            const albums = await res.json();
+                            
+                            let libHtml = '<div class="section-title">ライブラリ</div><div class="grid">';
+                            let vidHtml = '<div class="section-title">動画アルバム</div><div class="grid">';
+                            let phoHtml = '<div class="section-title">写真アルバム</div><div class="grid">';
+                            
+                            let hasVid = false, hasPho = false;
+
+                            albums.forEach(album => {
+                                const cardHtml = `
+                                    <div class="card" onclick="loadVideos('${album.id}', '${album.name}')">
+                                        <div class="thumb-container">
+                                            <div class="icon-center">${album.type === 'photo' ? '🖼️' : '📁'}</div>
+                                            <div class="badge-count">${album.videoCount}</div>
+                                        </div>
+                                        <div class="title" style="color: ${album.type === 'photo' ? '#ff9f0a' : '#fff'}">${album.name}</div>
+                                    </div>
+                                `;
+                                if (album.name === "ALL VIDEOS" || album.name === "ALL PHOTOS" || album.type === "mixed") {
+                                    libHtml += cardHtml;
+                                } else if (album.type === "photo") {
+                                    phoHtml += cardHtml;
+                                    hasPho = true;
+                                } else {
+                                    vidHtml += cardHtml;
+                                    hasVid = true;
+                                }
+                            });
+                            
+                            libSec.innerHTML = libHtml + '</div>';
+                            vidSec.innerHTML = hasVid ? vidHtml + '</div>' : '';
+                            phoSec.innerHTML = hasPho ? phoHtml + '</div>' : '';
+                            
+                        } catch (e) {
+                            libSec.innerHTML = '<p style="color:red;">エラーが発生しました</p>';
+                        }
+                    }
+
+                    async function loadVideos(albumId, albumName) {
+                        currentAlbumName = albumName;
+                        document.getElementById('albums-view').style.display = 'none';
+                        document.getElementById('videos-view').style.display = 'block';
+                        document.getElementById('back-btn').style.display = 'block';
+                        document.getElementById('page-title').innerText = albumName;
+                        document.getElementById('search-input').value = "";
+                        
+                        const grid = document.getElementById('videos-grid');
+                        grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#888;">読み込み中...</p>';
+                        
+                        try {
+                            const res = await fetch(`/albums/${albumId}/videos`);
+                            currentRawVideos = await res.json();
+                            renderVideos();
+                        } catch (e) {
+                            grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:red;">取得エラー</p>';
+                        }
+                    }
+
+                    function renderVideos() {
+                        const searchText = document.getElementById('search-input').value.toLowerCase();
+                        const sortOrder = document.getElementById('sort-select').value;
+                        const grid = document.getElementById('videos-grid');
+                        
+                        // フィルタリング
+                        currentFilteredVideos = currentRawVideos.filter(v => v.filename.toLowerCase().includes(searchText));
+                        
+                        // ソート
+                        currentFilteredVideos.sort((a, b) => {
+                            if (sortOrder === 'durationDesc') {
+                                return (b.duration || 0) - (a.duration || 0);
+                            } else if (sortOrder === 'durationAsc') {
+                                return (a.duration || 0) - (b.duration || 0);
+                            } else {
+                                const dateA = new Date(a.creationDate || a.importDate);
+                                const dateB = new Date(b.creationDate || b.importDate);
+                                return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+                            }
+                        });
+                        
+                        if (currentFilteredVideos.length === 0) {
+                            grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#888;">メディアが見つかりません</p>';
+                            return;
+                        }
+                        
+                        let html = '';
+                        currentFilteredVideos.forEach((video, index) => {
+                            const isPhoto = video.mediaType === 'photo';
+                            const typeIcon = isPhoto ? '📷' : '🎥';
+                            const durBadge = !isPhoto && video.duration > 0 ? `<div class="badge-duration">${formatDuration(video.duration)}</div>` : '';
+                            
+                            html += `
+                                <div class="card" onclick="openMedia(${index})">
+                                    <div class="thumb-container">
+                                        <img class="thumb" src="/thumbnail/${video.id}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\'><rect width=\\'100%\\' height=\\'100%\\' fill=\\'%23111\\'/></svg>'">
+                                        ${durBadge}
+                                        <div class="badge-type">${typeIcon}</div>
+                                    </div>
+                                    <div class="title">${video.filename}</div>
+                                </div>
+                            `;
+                        });
+                        grid.innerHTML = html;
+                    }
+
+                    // --- プレーヤー機能 ---
+                    function openMedia(index) {
+                        if (index < 0 || index >= currentFilteredVideos.length) return;
+                        currentMediaIndex = index;
+                        const media = currentFilteredVideos[index];
+                        const isPhoto = media.mediaType === 'photo';
+                        
+                        document.getElementById('player-filename').innerText = media.filename;
+                        const container = document.getElementById('media-container');
+                        
+                        // 既存のメディア要素を削除
+                        const oldMedia = document.getElementById('main-media');
+                        if (oldMedia) oldMedia.remove();
+                        
+                        if (isPhoto) {
+                            document.getElementById('quality-select').style.display = 'none';
+                            const img = document.createElement('img');
+                            img.id = 'main-media';
+                            img.className = 'photo-viewer';
+                            img.src = `/video/${media.id}`; // 画像の実体URL
+                            container.insertBefore(img, container.children[1]);
+                        } else {
+                            document.getElementById('quality-select').style.display = 'block';
+                            const video = document.createElement('video');
+                            video.id = 'main-media';
+                            video.controls = true;
+                            video.playsInline = true;
+                            video.src = `/video/${media.id}?q=${selectedQuality}`;
+                            
+                            // レジューム再生（LocalStorageから読み込み）
+                            const savedTime = localStorage.getItem('resume_' + media.id);
+                            if (savedTime) {
+                                video.currentTime = parseFloat(savedTime);
+                            }
+                            
+                            // 再生位置の保存
+                            video.addEventListener('timeupdate', () => {
+                                if(video.currentTime > 2) {
+                                    localStorage.setItem('resume_' + media.id, video.currentTime);
+                                }
+                            });
+                            
+                            container.insertBefore(video, container.children[1]);
+                            video.play().catch(e => console.log("自動再生がブロックされました"));
+                        }
+                        
+                        document.getElementById('player-modal').style.display = 'flex';
+                    }
+
+                    function changeQuality(q) {
+                        selectedQuality = q;
+                        const media = currentFilteredVideos[currentMediaIndex];
+                        if (media && media.mediaType !== 'photo') {
+                            const video = document.getElementById('main-media');
+                            const currentTime = video.currentTime;
+                            const isPaused = video.paused;
+                            
+                            video.src = `/video/${media.id}?q=${q}`;
+                            video.currentTime = currentTime;
+                            if (!isPaused) video.play();
+                        }
+                    }
+
+                    function closePlayer() {
+                        const media = document.getElementById('main-media');
+                        if (media && media.tagName === 'VIDEO') {
+                            media.pause();
+                            media.src = '';
+                        }
+                        document.getElementById('player-modal').style.display = 'none';
+                    }
+
+                    function prevMedia() { openMedia(currentMediaIndex - 1); }
+                    function nextMedia() { openMedia(currentMediaIndex + 1); }
+
+                    // キーボードナビゲーション
+                    document.addEventListener('keydown', (e) => {
+                        if (document.getElementById('player-modal').style.display === 'flex') {
+                            if (e.key === 'ArrowLeft') prevMedia();
+                            if (e.key === 'ArrowRight') nextMedia();
+                            if (e.key === 'Escape') closePlayer();
+                        }
+                    });
+
+                    // 初期ロード
+                    showAlbumsView();
+                </script>
+            </body>
+            </html>
+            """#
+            return .ok(.html(html))
+        }
         
         server["/albums"] = { [weak self] _ -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
@@ -170,19 +529,16 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             }
         }
 
-        // ★ 動画再生ルート (iOSから指定された画質の動画を返す)
         server["/video/:id"] = { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
             
-            // iOSから送られてくるクエリパラメータ "q" (画質) を取得。無ければ original
             let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "original"
             
             var videoURL: URL?
             DispatchQueue.main.sync {
                 if let videoItem = dataManager.videos.first(where: { $0.id == videoID }) {
-                    // 要求された画質に応じてプロキシを探す
                     if quality == "1080p" {
                         let proxyURL = dataManager.proxyStorageURL.appendingPathComponent("\(videoIDString)_1080p.mp4")
                         if FileManager.default.fileExists(atPath: proxyURL.path) {
@@ -195,7 +551,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         }
                     }
                     
-                    // 指定の画質が存在しない、または original の場合は元ファイルを返す
                     if videoURL == nil {
                         videoURL = dataManager.fileURL(for: videoItem)
                     }
@@ -255,12 +610,16 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     // MARK: - Server Control
     func startServer() {
         guard !server.operating else { return }
+        
+        let portToUse = in_port_t(targetPort)
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             do {
-                try self.server.start(0, forceIPv4: true)
+                try self.server.start(portToUse, forceIPv4: true)
                 let actualPort = try self.server.port()
                 DispatchQueue.main.async {
+                    self.targetPort = Int(actualPort)
                     guard let computerName = Host.current().localizedName else {
                         self.statusMessage = "❌ [FATAL] Could not get computer name."; self.server.stop(); return
                     }
@@ -271,7 +630,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     self.netService?.publish()
                 }
             } catch {
-                DispatchQueue.main.async { self.statusMessage = "❌ Server start failed: \(error.localizedDescription)" }
+                DispatchQueue.main.async {
+                    self.statusMessage = "❌ 起動失敗: ポート \(portToUse) は既に使用されている可能性があります。"
+                }
             }
         }
     }
@@ -291,7 +652,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
     }
 
-    func netService(_ sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
+    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
         self.statusMessage = "❌ Bonjour publish failed."
         self.server.stop()
     }

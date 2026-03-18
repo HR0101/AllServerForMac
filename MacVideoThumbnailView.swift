@@ -3,7 +3,7 @@ import AVFoundation
 import AppKit
 
 // ===================================
-//  MacVideoThumbnailView.swift (黒サムネイル回避・順次探索版)
+//  MacVideoThumbnailView.swift (参照リンク・ダウンロードフォルダ対応版)
 // ===================================
 
 struct MacVideoThumbnailView: View {
@@ -43,12 +43,50 @@ struct MacVideoThumbnailView: View {
         .task { await generateThumbnail() }
     }
 
+    // ★ 実際のファイルの場所を特定するメソッド（参照リンクやダウンロードフォルダに対応）
+    private func getActualFileURL() -> URL? {
+        // 1. Macから追加された参照リンクの場合
+        if let extPath = videoItem.externalFilePath {
+            let extURL = URL(fileURLWithPath: extPath)
+            if FileManager.default.fileExists(atPath: extURL.path) {
+                return extURL
+            }
+        }
+        
+        if videoItem.internalFilename.isEmpty { return nil }
+        
+        // 2. 隠しフォルダに存在する場合
+        let hiddenURL = storageURL.appendingPathComponent(videoItem.internalFilename)
+        if FileManager.default.fileExists(atPath: hiddenURL.path) {
+            return hiddenURL
+        }
+        
+        // 3. ダウンロードフォルダ（iOSからのアップロード）に存在する場合
+        if let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            let downloadURL = downloadsDir.appendingPathComponent("VideoServerForMac_Media").appendingPathComponent(videoItem.internalFilename)
+            if FileManager.default.fileExists(atPath: downloadURL.path) {
+                return downloadURL
+            }
+        }
+        
+        return nil
+    }
+
     private func generateThumbnail() async {
-        let fileURL = storageURL.appendingPathComponent(videoItem.internalFilename)
+        guard let fileURL = getActualFileURL() else { return }
         
         if videoItem.mediaType == .photo {
-            if let image = NSImage(contentsOf: fileURL) {
-                self.thumbnail = image
+            if let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil) {
+                let options: [CFString: Any] = [
+                    kCGImageSourceThumbnailMaxPixelSize: 300,
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true
+                ]
+                if let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) {
+                    await MainActor.run {
+                        self.thumbnail = NSImage(cgImage: cgImage, size: .zero)
+                    }
+                }
             }
             return
         }
@@ -60,16 +98,15 @@ struct MacVideoThumbnailView: View {
         generator.requestedTimeToleranceAfter = .zero
         
         let duration = (try? await asset.load(.duration).seconds) ?? 0
-        
-        // 探索候補 (WebServerManagerと同じロジック)
-        var attempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0]
+        let maxAttempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0].filter { $0 < duration }
+        var attempts = maxAttempts
         if duration < 5 { attempts.insert(0.0, at: 0) }
-        let validAttempts = attempts.filter { $0 < duration }
+        if attempts.isEmpty { attempts.append(0.0) }
+
+        var bestImage: CGImage? = nil
+        var fallbackImage: CGImage? = nil
         
-        var bestImage: CGImage?
-        var fallbackImage: CGImage?
-        
-        for seconds in validAttempts {
+        for seconds in attempts {
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
             if let cgImage = try? await generator.image(at: time).image {
                 if fallbackImage == nil { fallbackImage = cgImage }
