@@ -1,8 +1,6 @@
 import SwiftUI
 
-// ===================================
-//  StorageManagerView.swift (究極の調査・自動クリーンアップ対応版)
-// ===================================
+
 
 struct StorageManagerView: View {
     @ObservedObject var dataManager: VideoDataManager
@@ -83,7 +81,6 @@ struct StorageManagerView: View {
             } else {
                 VStack(spacing: 12) {
                     
-                    // ★ 新機能：中身が同じ重複動画を自動で一掃するボタン
                     Button(action: removeDuplicates) {
                         Text("内容が完全に一致する重複動画を自動削除する（タイトル違いも認識）")
                             .frame(maxWidth: .infinity)
@@ -158,8 +155,7 @@ struct StorageManagerView: View {
             }
         }
     }
-    
-    // ★ 欠落していた formatBytes 関数を追加
+
     private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useGB, .useMB]

@@ -5,11 +5,9 @@ import CryptoKit
 import Combine
 import UniformTypeIdentifiers
 
-// ===================================
-//  VideoDataManager.swift (プロキシ自動生成停止版)
-// ===================================
 
-// MARK: - データモデル
+
+// データモデル
 
 enum MediaType: String, Codable, Hashable {
     case video
@@ -135,11 +133,9 @@ class VideoDataManager: ObservableObject {
         
         loadData()
         repairMissingSymlinks()
-        // ★ 容量圧迫の原因だったプロキシの自動生成を停止しました
-        // generateMissingProxies()
     }
     
-    // MARK: - ストレージ管理・強力な最適化機能
+    // ストレージ管理
     
     func getStorageUsage() -> (videosSize: Int64, proxiesSize: Int64, downloadsSize: Int64, appTotalSize: Int64) {
         var vSize: Int64 = 0
@@ -374,17 +370,7 @@ class VideoDataManager: ObservableObject {
     }
     
     private func generateMissingProxies() {
-        // ★ 容量圧迫を防ぐため、プロキシ生成処理を停止
-        /*
-        let items = videos.filter { $0.mediaType == .video }
-        for item in items {
-            guard let sourceURL = fileURL(for: item) else { continue }
-            let proxy540URL = proxyStorageURL.appendingPathComponent("\(item.id.uuidString)_540p.mp4")
-            if !FileManager.default.fileExists(atPath: proxy540URL.path) {
-                enqueueProxyTask(sourceURL: sourceURL, preset: AVAssetExportPreset960x540, destinationURL: proxy540URL)
-            }
-        }
-        */
+
     }
     
     private func enqueueProxyTask(sourceURL: URL, preset: String, destinationURL: URL) {
@@ -423,7 +409,7 @@ class VideoDataManager: ObservableObject {
         }
     }
     
-    // MARK: - データ集計・操作
+    // データ集計・操作
     var recentItems: [VideoItem] { Array(videos.sorted { $0.importDate > $1.importDate }.prefix(10)) }
     
     func calculateTotalStorageSize() -> String {
@@ -527,15 +513,7 @@ class VideoDataManager: ObservableObject {
             
             saveData()
             
-            // ★ プロキシの自動生成タスク追加を停止
-            /*
-            if mediaType == .video {
-                if let sourceForProxy = fileURL(for: newItem) {
-                    let proxy540URL = proxyStorageURL.appendingPathComponent("\(newID.uuidString)_540p.mp4")
-                    enqueueProxyTask(sourceURL: sourceForProxy, preset: AVAssetExportPreset960x540, destinationURL: proxy540URL)
-                }
-            }
-            */
+
             
         } catch {}
     }

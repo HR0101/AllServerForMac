@@ -2,9 +2,7 @@ import SwiftUI
 import AVFoundation
 import AppKit
 
-// ===================================
-//  MacVideoThumbnailView.swift (参照リンク・ダウンロードフォルダ対応版)
-// ===================================
+
 
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
@@ -14,6 +12,7 @@ struct MacVideoThumbnailView: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             Color.black
+            
             
             if let thumbnail = thumbnail {
                 Image(nsImage: thumbnail)
@@ -43,7 +42,7 @@ struct MacVideoThumbnailView: View {
         .task { await generateThumbnail() }
     }
 
-    // ★ 実際のファイルの場所を特定するメソッド（参照リンクやダウンロードフォルダに対応）
+    // 実際のファイルの場所を特定するメソッド（参照リンクやダウンロードフォルダに対応）
     private func getActualFileURL() -> URL? {
         // 1. Macから追加された参照リンクの場合
         if let extPath = videoItem.externalFilePath {

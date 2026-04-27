@@ -5,9 +5,7 @@ import AppKit
 import Darwin
 import Combine
 
-// ===================================
-//  WebServerManager.swift (超高機能Webブラウザ対応版)
-// ===================================
+
 
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private let server = HttpServer()
@@ -52,10 +50,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         NotificationCenter.default.removeObserver(self)
     }
 
-    // MARK: - API Routes
+    //API Routes
     private func setupRoutes() {
         
-        // ★ HTML内にJavaScriptの変数を書きやすくするため、Raw String (#""" ... """#) を使用しています
         server["/"] = { _ -> HttpResponse in
             let html = #"""
             <!DOCTYPE html>
@@ -146,10 +143,12 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     <div class="toolbar">
                         <input type="text" class="search-bar" id="search-input" placeholder="ファイル名で検索..." oninput="renderVideos()">
                         <select class="sort-select" id="sort-select" onchange="renderVideos()">
-                            <option value="desc">新しい順</option>
-                            <option value="asc">古い順</option>
-                            <option value="durationDesc">長い順</option>
-                            <option value="durationAsc">短い順</option>
+                            <option value="importDesc">追加日が新しい順</option>
+                            <option value="importAsc">追加日が古い順</option>
+                            <option value="creationDesc">撮影日が新しい順</option>
+                            <option value="creationAsc">撮影日が古い順</option>
+                            <option value="durationDesc">長さが長い順</option>
+                            <option value="durationAsc">長さが短い順</option>
                         </select>
                     </div>
                     <div class="grid" id="videos-grid"></div>
@@ -161,8 +160,8 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         <div class="filename-display" id="player-filename"></div>
                         <div class="controls-right">
                             <select class="quality-select" id="quality-select" onchange="changeQuality(this.value)">
-                                <option value="original">Original</option>
-                                <option value="1080p" selected>1080p (軽量)</option>
+                                <option value="original" selected>Original</option>
+                                <option value="1080p">1080p (軽量)</option>
                                 <option value="540p">540p (節約)</option>
                             </select>
                             <div class="close-btn" onclick="closePlayer()">✕</div>
@@ -279,11 +278,20 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                                 return (b.duration || 0) - (a.duration || 0);
                             } else if (sortOrder === 'durationAsc') {
                                 return (a.duration || 0) - (b.duration || 0);
-                            } else {
+                            } else if (sortOrder === 'importDesc') {
+                                return new Date(b.importDate) - new Date(a.importDate);
+                            } else if (sortOrder === 'importAsc') {
+                                return new Date(a.importDate) - new Date(b.importDate);
+                            } else if (sortOrder === 'creationDesc') {
                                 const dateA = new Date(a.creationDate || a.importDate);
                                 const dateB = new Date(b.creationDate || b.importDate);
-                                return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+                                return dateB - dateA;
+                            } else if (sortOrder === 'creationAsc') {
+                                const dateA = new Date(a.creationDate || a.importDate);
+                                const dateB = new Date(b.creationDate || b.importDate);
+                                return dateA - dateB;
                             }
+                            return 0;
                         });
                         
                         if (currentFilteredVideos.length === 0) {
@@ -386,12 +394,87 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     function prevMedia() { openMedia(currentMediaIndex - 1); }
                     function nextMedia() { openMedia(currentMediaIndex + 1); }
 
-                    // キーボードナビゲーション
+                    // --- YouTubeライクなキーボードナビゲーション ---
                     document.addEventListener('keydown', (e) => {
                         if (document.getElementById('player-modal').style.display === 'flex') {
-                            if (e.key === 'ArrowLeft') prevMedia();
-                            if (e.key === 'ArrowRight') nextMedia();
-                            if (e.key === 'Escape') closePlayer();
+                            const media = document.getElementById('main-media');
+                            const isVideo = media && media.tagName === 'VIDEO';
+
+                            // 検索ボックスなどにフォーカスがある場合はショートカットを無効化
+                            if (document.activeElement.tagName === 'INPUT') return;
+
+                            // Escキーで閉じる
+                            if (e.key === 'Escape') {
+                                closePlayer();
+                                return;
+                            }
+
+                            if (isVideo) {
+                                switch (e.key.toLowerCase()) {
+                                    case ' ': // スペースキー
+                                    case 'k':
+                                        e.preventDefault();
+                                        if (media.paused) media.play();
+                                        else media.pause();
+                                        break;
+                                    case 'j':
+                                        e.preventDefault();
+                                        media.currentTime = Math.max(0, media.currentTime - 10);
+                                        break;
+                                    case 'l':
+                                        e.preventDefault();
+                                        media.currentTime = Math.min(media.duration, media.currentTime + 10);
+                                        break;
+                                    case 'arrowleft':
+                                        e.preventDefault();
+                                        if (e.shiftKey) {
+                                            prevMedia(); // Shift + ← で前の動画
+                                        } else {
+                                            media.currentTime = Math.max(0, media.currentTime - 10); // ← で10秒戻る
+                                        }
+                                        break;
+                                    case 'arrowright':
+                                        e.preventDefault();
+                                        if (e.shiftKey) {
+                                            nextMedia(); // Shift + → で次の動画
+                                        } else {
+                                            media.currentTime = Math.min(media.duration, media.currentTime + 10); // → で10秒進む
+                                        }
+                                        break;
+                                    case 'arrowup':
+                                        e.preventDefault();
+                                        media.volume = Math.min(1.0, media.volume + 0.1);
+                                        break;
+                                    case 'arrowdown':
+                                        e.preventDefault();
+                                        media.volume = Math.max(0.0, media.volume - 0.1);
+                                        break;
+                                    case 'm':
+                                        e.preventDefault();
+                                        media.muted = !media.muted;
+                                        break;
+                                    case 'f':
+                                        e.preventDefault();
+                                        if (!document.fullscreenElement) {
+                                            if (media.requestFullscreen) {
+                                                media.requestFullscreen();
+                                            } else if (media.webkitRequestFullscreen) { // Safari対応
+                                                media.webkitRequestFullscreen();
+                                            }
+                                        } else {
+                                            if (document.exitFullscreen) {
+                                                document.exitFullscreen();
+                                            } else if (document.webkitExitFullscreen) { // Safari対応
+                                                document.webkitExitFullscreen();
+                                            }
+                                        }
+                                        break;
+                                }
+                            } else {
+                                // 写真の場合は単純に左右キーで前後のメディアへ移動
+                                if (e.key === 'ArrowLeft') prevMedia();
+                                if (e.key === 'ArrowRight') nextMedia();
+                            }
                         }
                     });
 
@@ -607,7 +690,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         print("✅ [SETUP] API routes configured.")
     }
     
-    // MARK: - Server Control
+    // Server Control
     func startServer() {
         guard !server.operating else { return }
         
@@ -642,22 +725,21 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private func stopServerInternal() {
         netService?.stop(); netService = nil
         server.stop()
-        if Thread.isMainThread { statusMessage = "🛑 サーバー停止" } else { DispatchQueue.main.async { self.statusMessage = "🛑 サーバー停止" } }
+        if Thread.isMainThread { statusMessage = "サーバー停止" } else { DispatchQueue.main.async { self.statusMessage = "🛑 サーバー停止" } }
     }
     
     @objc private func handleSessionOrAppTermination() { stopServerInternal() }
     
     func netServiceDidPublish(_ sender: NetService) {
         let ipAddress = getIPAddress() ?? "N/A"
-        self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
+        self.statusMessage = "実行中: http://\(ipAddress):\(sender.port)"
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        self.statusMessage = "❌ Bonjour publish failed."
+        self.statusMessage = "Bonjour publish failed."
         self.server.stop()
     }
     
-    // MARK: - Helpers
     private func serveFile(at url: URL, request: HttpRequest) -> HttpResponse {
         do {
             let attr = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -820,7 +902,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     }
 }
 
-// MARK: - Shared Data Models & MimeType
 struct RemoteAlbumInfo: Codable { let id: String; let name: String; let videoCount: Int; let type: String? }
 struct RemoteVideoInfo: Codable { let id: String; let filename: String; let duration: TimeInterval; let importDate: Date; let creationDate: Date?; let mediaType: String? }
 private struct MimeType {

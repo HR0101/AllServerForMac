@@ -2,9 +2,7 @@ import SwiftUI
 import CoreServices
 import UniformTypeIdentifiers
 
-// ===================================
-//  ContentView.swift (ポート番号設定UI追加版)
-// ===================================
+
 
 enum NavigationSelection: Hashable {
     case home
@@ -211,7 +209,6 @@ struct ContentView: View {
     }
 }
 
-// MARK: - HomeView
 struct HomeView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
@@ -234,7 +231,7 @@ struct HomeView: View {
                         .foregroundColor(webServerManager.statusMessage.contains("✅") ? .green : (webServerManager.statusMessage.contains("🛑") ? .secondary : .red))
                 }
                 
-                // ★ 追加: ポート番号の設定UI
+                // 追加: ポート番号の設定UI
                 HStack {
                     Text("ポート番号:")
                     TextField("例: 8080", value: $webServerManager.targetPort, format: .number)
@@ -434,7 +431,6 @@ struct AlbumDetailView: View {
         }
     }
     
-    // MARK: - Actions
     
     private func openFile(_ video: VideoItem) {
         let url = dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)
