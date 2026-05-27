@@ -1,14 +1,128 @@
 import SwiftUI
 import CoreServices
 import UniformTypeIdentifiers
+import Charts
+import Darwin
+import Combine // ★ これを追加しました
 
-
+// ===================================
+//  ContentView.swift (システムリソース＆グラフ表示対応・エラー修正版)
+// ===================================
 
 enum NavigationSelection: Hashable {
     case home
     case album(UUID)
 }
 
+// MARK: - システムモニター (CPU/メモリ情報の取得)
+struct CPUDataPoint: Identifiable {
+    let id = UUID()
+    let time: Int
+    let value: Double
+}
+
+class SystemMonitor: ObservableObject {
+    @Published var cpuUsage: Double = 0.0
+    @Published var memoryUsage: Double = 0.0
+    @Published var cpuHistory: [CPUDataPoint] = []
+    
+    private var timer: Timer?
+    private var previousInfo: host_cpu_load_info?
+    private var counter = 0
+    
+    init() {
+        // グラフの初期表示用（過去30秒分を0で埋める）
+        for i in 0..<30 {
+            cpuHistory.append(CPUDataPoint(time: i - 30, value: 0))
+        }
+        startMonitoring()
+    }
+    
+    deinit {
+        stopMonitoring()
+    }
+    
+    func startMonitoring() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updateStats()
+        }
+    }
+    
+    func stopMonitoring() {
+        timer?.invalidate()
+        timer = nil
+    }
+    
+    private func updateStats() {
+        let cpu = getCPUUsage()
+        let mem = getMemoryUsage()
+        
+        DispatchQueue.main.async {
+            self.cpuUsage = cpu
+            self.memoryUsage = mem
+            self.counter += 1
+            self.cpuHistory.append(CPUDataPoint(time: self.counter, value: cpu))
+            if self.cpuHistory.count > 30 {
+                self.cpuHistory.removeFirst()
+            }
+        }
+    }
+    
+    private func getCPUUsage() -> Double {
+        var size = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size)
+        var cpuLoadInfo = host_cpu_load_info()
+        
+        let result = withUnsafeMutablePointer(to: &cpuLoadInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(size)) {
+                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &size)
+            }
+        }
+        
+        if result == KERN_SUCCESS {
+            if let prev = previousInfo {
+                let userDiff = Double(cpuLoadInfo.cpu_ticks.0 - prev.cpu_ticks.0)
+                let sysDiff = Double(cpuLoadInfo.cpu_ticks.1 - prev.cpu_ticks.1)
+                let idleDiff = Double(cpuLoadInfo.cpu_ticks.2 - prev.cpu_ticks.2)
+                let niceDiff = Double(cpuLoadInfo.cpu_ticks.3 - prev.cpu_ticks.3)
+                
+                let totalTicks = userDiff + sysDiff + idleDiff + niceDiff
+                let activeTicks = userDiff + sysDiff + niceDiff
+                
+                previousInfo = cpuLoadInfo
+                return totalTicks > 0 ? (activeTicks / totalTicks) * 100.0 : 0.0
+            } else {
+                previousInfo = cpuLoadInfo
+                return 0.0
+            }
+        }
+        return 0.0
+    }
+    
+    private func getMemoryUsage() -> Double {
+        var stats = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+        
+        let result = withUnsafeMutablePointer(to: &stats) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+        
+        if result == KERN_SUCCESS {
+            let active = Double(stats.active_count) * Double(vm_page_size)
+            let wire = Double(stats.wire_count) * Double(vm_page_size)
+            let compressed = Double(stats.compressor_page_count) * Double(vm_page_size)
+            
+            let usedMemory = active + wire + compressed
+            let physicalMemory = Double(ProcessInfo.processInfo.physicalMemory)
+            
+            return physicalMemory > 0 ? (usedMemory / physicalMemory) * 100.0 : 0.0
+        }
+        return 0.0
+    }
+}
+
+// MARK: - メインビュー
 struct ContentView: View {
     @StateObject private var dataManager: VideoDataManager
     @StateObject private var webServerManager: WebServerManager
@@ -209,91 +323,202 @@ struct ContentView: View {
     }
 }
 
+// MARK: - HomeView
 struct HomeView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
+    @StateObject private var systemMonitor = SystemMonitor()
 
     var body: some View {
-        VStack(spacing: 30) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 60))
-                .foregroundColor(.accentColor)
-            
-            Text("Mac Video Server")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-            
-            VStack(spacing: 15) {
-                HStack {
-                    Text("サーバー状態:")
-                    Text(webServerManager.statusMessage)
-                        .fontWeight(.bold)
-                        .foregroundColor(webServerManager.statusMessage.contains("✅") ? .green : (webServerManager.statusMessage.contains("🛑") ? .secondary : .red))
-                }
+        ScrollView {
+            VStack(spacing: 30) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 60))
+                    .foregroundColor(.accentColor)
+                    .padding(.top, 20)
                 
-                // 追加: ポート番号の設定UI
-                HStack {
-                    Text("ポート番号:")
-                    TextField("例: 8080", value: $webServerManager.targetPort, format: .number)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .frame(width: 80)
-                        .multilineTextAlignment(.center)
+                Text("Mac Video Server")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                
+                // サーバー設定・状態セクション
+                VStack(spacing: 15) {
+                    HStack {
+                        Text("サーバー状態:")
+                        Text(webServerManager.statusMessage)
+                            .fontWeight(.bold)
+                            .foregroundColor(webServerManager.statusMessage.contains("✅") ? .green : (webServerManager.statusMessage.contains("🛑") ? .secondary : .red))
+                    }
+                    
+                    HStack {
+                        Text("ポート番号:")
+                        TextField("例: 8080", value: $webServerManager.targetPort, format: .number)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .frame(width: 80)
+                            .multilineTextAlignment(.center)
+                            .disabled(webServerManager.statusMessage.contains("✅"))
+                        
+                        Button(action: {
+                            webServerManager.targetPort = 8080
+                        }) {
+                            Image(systemName: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(PlainButtonStyle())
                         .disabled(webServerManager.statusMessage.contains("✅"))
-                    
-                    Button(action: {
-                        webServerManager.targetPort = 8080
-                    }) {
-                        Image(systemName: "arrow.counterclockwise")
+                        .help("デフォルト(8080)に戻す")
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .disabled(webServerManager.statusMessage.contains("✅"))
-                    .help("デフォルト(8080)に戻す")
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("自動停止タイマー", isOn: $webServerManager.autoStopEnabled)
+                            .disabled(webServerManager.statusMessage.contains("✅"))
+                        
+                        if webServerManager.autoStopEnabled {
+                            HStack {
+                                Text("停止までの時間:")
+                                TextField("分", value: $webServerManager.autoStopIntervalMinutes, format: .number)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .frame(width: 60)
+                                    .multilineTextAlignment(.trailing)
+                                    .disabled(webServerManager.statusMessage.contains("✅"))
+                                Text("分")
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+                    
+                    HStack(spacing: 20) {
+                        Button(action: {
+                            webServerManager.startServer()
+                        }) {
+                            Label("開始", systemImage: "play.fill")
+                        }
+                        .disabled(webServerManager.statusMessage.contains("✅"))
+                        
+                        Button(action: {
+                            webServerManager.stopServer()
+                        }) {
+                            Label("停止", systemImage: "stop.fill")
+                        }
+                        .disabled(!webServerManager.statusMessage.contains("✅"))
+                    }
+                    
+                    if webServerManager.statusMessage.contains("✅") {
+                        VStack(spacing: 4) {
+                            HStack {
+                                Text("稼働時間:")
+                                Text(webServerManager.uptimeString)
+                                    .monospacedDigit()
+                            }
+                            if webServerManager.autoStopEnabled {
+                                HStack {
+                                    Text("自動停止まで約:")
+                                    let remaining = max(0, (webServerManager.autoStopIntervalMinutes * 60) - Int(Date().timeIntervalSince(webServerManager.serverStartTime ?? Date())))
+                                    Text("\(remaining / 60)分 \(remaining % 60)秒")
+                                        .monospacedDigit()
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                        }
+                        .font(.footnote)
+                        .padding(.top, 4)
+                    }
                 }
+                .padding()
+                .background(Color(NSColor.windowBackgroundColor))
+                .cornerRadius(12)
+                .shadow(radius: 2)
+                .frame(maxWidth: 350)
                 
-                HStack(spacing: 20) {
-                    Button(action: {
-                        webServerManager.startServer()
-                    }) {
-                        Label("開始", systemImage: "play.fill")
-                    }
-                    .disabled(webServerManager.statusMessage.contains("✅"))
+                // システムリソース＆グラフ表示セクション
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("システムリソース")
+                        .font(.headline)
+                        .padding(.bottom, 4)
                     
-                    Button(action: {
-                        webServerManager.stopServer()
-                    }) {
-                        Label("停止", systemImage: "stop.fill")
+                    HStack {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("CPU使用率:")
+                                Spacer()
+                                Text(String(format: "%.1f %%", systemMonitor.cpuUsage))
+                                    .monospacedDigit()
+                                    .fontWeight(.bold)
+                            }
+                            HStack {
+                                Text("メモリ使用率:")
+                                Spacer()
+                                Text(String(format: "%.1f %%", systemMonitor.memoryUsage))
+                                    .monospacedDigit()
+                                    .fontWeight(.bold)
+                            }
+                        }
+                        .frame(width: 160)
+                        
+                        Spacer()
                     }
-                    .disabled(!webServerManager.statusMessage.contains("✅"))
+                    
+                    // CPU使用率の折れ線（エリア）グラフ
+                    Chart {
+                        ForEach(systemMonitor.cpuHistory) { point in
+                            LineMark(
+                                x: .value("Time", point.time),
+                                y: .value("CPU(%)", point.value)
+                            )
+                            .interpolationMethod(.catmullRom)
+                            .foregroundStyle(Color.accentColor)
+                            
+                            AreaMark(
+                                x: .value("Time", point.time),
+                                y: .value("CPU(%)", point.value)
+                            )
+                            .interpolationMethod(.catmullRom)
+                            .foregroundStyle(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [Color.accentColor.opacity(0.4), Color.accentColor.opacity(0.0)]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        }
+                    }
+                    .chartYScale(domain: 0...100)
+                    .chartXAxis(.hidden)
+                    .frame(height: 100)
+                    .padding(.top, 8)
                 }
+                .padding()
+                .background(Color(NSColor.windowBackgroundColor))
+                .cornerRadius(12)
+                .shadow(radius: 2)
+                .frame(maxWidth: 350)
+                
+                // ストレージ情報セクション
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("ストレージ情報").font(.headline)
+                    HStack {
+                        Text("総アイテム数:")
+                        Spacer()
+                        Text("\(dataManager.videos.count)")
+                    }
+                    HStack {
+                        Text("使用容量:")
+                        Spacer()
+                        Text(dataManager.calculateTotalStorageSize())
+                    }
+                }
+                .padding()
+                .background(Color(NSColor.windowBackgroundColor))
+                .cornerRadius(12)
+                .shadow(radius: 2)
+                .frame(maxWidth: 350)
+                
+                Spacer()
             }
-            .padding()
-            .background(Color(NSColor.windowBackgroundColor))
-            .cornerRadius(12)
-            .shadow(radius: 2)
-            
-            VStack(alignment: .leading, spacing: 10) {
-                Text("ストレージ情報").font(.headline)
-                HStack {
-                    Text("総アイテム数:")
-                    Spacer()
-                    Text("\(dataManager.videos.count)")
-                }
-                HStack {
-                    Text("使用容量:")
-                    Spacer()
-                    Text(dataManager.calculateTotalStorageSize())
-                }
-            }
-            .padding()
-            .background(Color(NSColor.windowBackgroundColor))
-            .cornerRadius(12)
-            .shadow(radius: 2)
-            .frame(maxWidth: 300)
-            
-            Spacer()
+            .padding(40)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.underPageBackgroundColor))
     }
 }
@@ -431,6 +656,7 @@ struct AlbumDetailView: View {
         }
     }
     
+    // MARK: - Actions
     
     private func openFile(_ video: VideoItem) {
         let url = dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)

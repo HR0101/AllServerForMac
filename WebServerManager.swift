@@ -5,7 +5,9 @@ import AppKit
 import Darwin
 import Combine
 
-
+// ===================================
+//  WebServerManager.swift (自動停止タイマー対応版)
+// ===================================
 
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private let server = HttpServer()
@@ -14,6 +16,23 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private weak var dataManager: VideoDataManager?
     
     @Published var statusMessage: String = "停止中"
+    
+    // ★ 稼働タイマー用のプロパティ
+    @Published var serverStartTime: Date?
+    @Published var uptimeString: String = "00:00:00"
+    private var timerCancellable: AnyCancellable?
+    
+    // ★ 自動停止機能用のプロパティを追加
+    @Published var autoStopEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(autoStopEnabled, forKey: "autoStopEnabled")
+        }
+    }
+    @Published var autoStopIntervalMinutes: Int {
+        didSet {
+            UserDefaults.standard.set(autoStopIntervalMinutes, forKey: "autoStopIntervalMinutes")
+        }
+    }
     
     @Published var targetPort: Int {
         didSet {
@@ -26,6 +45,10 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         
         let savedPort = UserDefaults.standard.integer(forKey: "serverPort")
         self.targetPort = savedPort == 0 ? 8080 : savedPort
+        
+        self.autoStopEnabled = UserDefaults.standard.bool(forKey: "autoStopEnabled")
+        let savedInterval = UserDefaults.standard.integer(forKey: "autoStopIntervalMinutes")
+        self.autoStopIntervalMinutes = savedInterval == 0 ? 60 : savedInterval
         
         super.init()
         print("✅ [LIFECYCLE] WebServerManager initialized.")
@@ -50,7 +73,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         NotificationCenter.default.removeObserver(self)
     }
 
-    //API Routes
+    // MARK: - API Routes
     private func setupRoutes() {
         
         server["/"] = { _ -> HttpResponse in
@@ -154,14 +177,13 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     <div class="grid" id="videos-grid"></div>
                 </div>
 
-                <!-- プレーヤーモーダル -->
                 <div id="player-modal">
                     <div class="player-header">
                         <div class="filename-display" id="player-filename"></div>
                         <div class="controls-right">
                             <select class="quality-select" id="quality-select" onchange="changeQuality(this.value)">
-                                <option value="original" selected>Original</option>
-                                <option value="1080p">1080p (軽量)</option>
+                                <option value="original">Original</option>
+                                <option value="1080p" selected>1080p (軽量)</option>
                                 <option value="540p">540p (節約)</option>
                             </select>
                             <div class="close-btn" onclick="closePlayer()">✕</div>
@@ -169,7 +191,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     </div>
                     <div class="media-container" id="media-container">
                         <div class="nav-btn nav-prev" onclick="prevMedia()">&#10094;</div>
-                        <!-- Video or Img tag will be injected here -->
                         <div class="nav-btn nav-next" onclick="nextMedia()">&#10095;</div>
                     </div>
                 </div>
@@ -533,6 +554,30 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .internalServerError }
         }
         
+        // iOSアプリから稼働時間を取得するためのAPI
+        server["/server/status"] = { [weak self] _ -> HttpResponse in
+            var uptime = 0
+            DispatchQueue.main.sync {
+                if let start = self?.serverStartTime {
+                    uptime = Int(Date().timeIntervalSince(start))
+                }
+            }
+            struct StatusData: Codable { let uptime: Int }
+            if let data = try? JSONEncoder().encode(StatusData(uptime: uptime)) {
+                return .ok(.data(data, contentType: "application/json"))
+            }
+            return .internalServerError
+        }
+        
+        // iOSアプリからサーバーを遠隔で停止させるためのAPI
+        server.post["/server/shutdown"] = { [weak self] _ -> HttpResponse in
+            DispatchQueue.main.async {
+                self?.stopServerInternal()
+                NSApplication.shared.terminate(nil) // Macアプリ自体を完全に終了させる
+            }
+            return .ok(.text("Shutdown initiated"))
+        }
+        
         server.post["/albums/create"] = { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct CreateReq: Codable { let name: String; let type: String }
@@ -690,7 +735,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         print("✅ [SETUP] API routes configured.")
     }
     
-    // Server Control
+    // MARK: - Server Control
     func startServer() {
         guard !server.operating else { return }
         
@@ -711,6 +756,28 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     self.netService = NetService(domain: "local.", type: "_myvideoserver._tcp.", name: uniqueServiceName, port: Int32(actualPort))
                     self.netService?.delegate = self
                     self.netService?.publish()
+                    
+                    // 稼働時間の計測タイマーと自動停止チェックを開始
+                    self.serverStartTime = Date()
+                    self.timerCancellable = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect().sink { [weak self] _ in
+                        guard let self = self, let start = self.serverStartTime else { return }
+                        let diff = Int(Date().timeIntervalSince(start))
+                        
+                        // ★ 自動停止の判定ロジック
+                        if self.autoStopEnabled {
+                            let limitSeconds = self.autoStopIntervalMinutes * 60
+                            if diff >= limitSeconds {
+                                self.stopServerInternal()
+                                NSApplication.shared.terminate(nil) // アプリ自体を終了
+                                return
+                            }
+                        }
+                        
+                        let h = diff / 3600
+                        let m = (diff % 3600) / 60
+                        let s = diff % 60
+                        self.uptimeString = String(format: "%02d:%02d:%02d", h, m, s)
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -725,21 +792,29 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private func stopServerInternal() {
         netService?.stop(); netService = nil
         server.stop()
-        if Thread.isMainThread { statusMessage = "サーバー停止" } else { DispatchQueue.main.async { self.statusMessage = "🛑 サーバー停止" } }
+        
+        // タイマーの停止処理
+        DispatchQueue.main.async {
+            self.serverStartTime = nil
+            self.timerCancellable?.cancel()
+            self.uptimeString = "00:00:00"
+            self.statusMessage = "🛑 サーバー停止"
+        }
     }
     
     @objc private func handleSessionOrAppTermination() { stopServerInternal() }
     
     func netServiceDidPublish(_ sender: NetService) {
         let ipAddress = getIPAddress() ?? "N/A"
-        self.statusMessage = "実行中: http://\(ipAddress):\(sender.port)"
+        self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        self.statusMessage = "Bonjour publish failed."
+        self.statusMessage = "❌ Bonjour publish failed."
         self.server.stop()
     }
     
+    // MARK: - Helpers
     private func serveFile(at url: URL, request: HttpRequest) -> HttpResponse {
         do {
             let attr = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -902,6 +977,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     }
 }
 
+// MARK: - Shared Data Models & MimeType
 struct RemoteAlbumInfo: Codable { let id: String; let name: String; let videoCount: Int; let type: String? }
 struct RemoteVideoInfo: Codable { let id: String; let filename: String; let duration: TimeInterval; let importDate: Date; let creationDate: Date?; let mediaType: String? }
 private struct MimeType {
