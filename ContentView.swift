@@ -3,18 +3,15 @@ import CoreServices
 import UniformTypeIdentifiers
 import Charts
 import Darwin
-import Combine // ★ これを追加しました
+import Combine 
 
-// ===================================
-//  ContentView.swift (システムリソース＆グラフ表示対応・エラー修正版)
-// ===================================
 
 enum NavigationSelection: Hashable {
     case home
     case album(UUID)
 }
 
-// MARK: - システムモニター (CPU/メモリ情報の取得)
+// システムモニター
 struct CPUDataPoint: Identifiable {
     let id = UUID()
     let time: Int
