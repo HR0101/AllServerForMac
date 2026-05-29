@@ -111,6 +111,9 @@ class VideoDataManager: ObservableObject {
     private var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     private var isGeneratingProxy = false
 
+    // ★ オンデマンド・プロキシ生成の進捗 (key: "<id>_<quality>" / 値: 0...1 / nil=非生成中)
+    private var proxyProgressMap: [String: Double] = [:]
+
     init() {
         guard let moviesDir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first else {
             fatalError("Movies directory not found.")
@@ -408,7 +411,86 @@ class VideoDataManager: ObservableObject {
             try? FileManager.default.removeItem(at: destinationURL)
         }
     }
-    
+
+    // MARK: - オンデマンド・プロキシ生成 (視聴時のみ生成し、視聴後に削除)
+    func proxyFileURL(videoID: String, quality: String) -> URL {
+        proxyStorageURL.appendingPathComponent("\(videoID)_\(quality).mp4")
+    }
+
+    func isProxyReady(videoID: String, quality: String) -> Bool {
+        FileManager.default.fileExists(atPath: proxyFileURL(videoID: videoID, quality: quality).path)
+    }
+
+    /// 生成中なら 0...1 の進捗、生成していなければ nil を返す
+    func proxyGenerationProgress(videoID: String, quality: String) -> Double? {
+        proxyProgressMap["\(videoID)_\(quality)"]
+    }
+
+    /// オンデマンドでプロキシ生成を開始する (既に生成済み/生成中なら何もしない)
+    func startOnDemandProxy(videoID: String, quality: String) {
+        let key = "\(videoID)_\(quality)"
+        guard proxyProgressMap[key] == nil else { return }          // 生成中
+        guard !isProxyReady(videoID: videoID, quality: quality) else { return } // 生成済み
+        guard let item = videos.first(where: { $0.id.uuidString == videoID }),
+              item.mediaType == .video,
+              let sourceURL = fileURL(for: item) else { return }
+
+        let preset = (quality == "540p") ? AVAssetExportPreset960x540 : AVAssetExportPreset1920x1080
+        let dest = proxyFileURL(videoID: videoID, quality: quality)
+
+        // 視聴後に溜まらないよう、生成前に他のプロキシを削除し常に1本だけ保持する
+        sweepProxies(except: dest)
+
+        proxyProgressMap[key] = 0.0
+        Task { await generateOnDemandProxy(sourceURL: sourceURL, destinationURL: dest, preset: preset, key: key) }
+    }
+
+    private func generateOnDemandProxy(sourceURL: URL, destinationURL: URL, preset: String, key: String) async {
+        try? FileManager.default.removeItem(at: destinationURL)
+        let asset = AVURLAsset(url: sourceURL)
+        guard let exportSession = AVAssetExportSession(asset: asset, presetName: preset) else {
+            await MainActor.run { self.proxyProgressMap[key] = nil }
+            return
+        }
+        exportSession.outputURL = destinationURL
+        exportSession.outputFileType = .mp4
+        exportSession.shouldOptimizeForNetworkUse = true
+
+        // 変換の進捗を定期的に反映する
+        let progressTimer = Task { @MainActor in
+            while !Task.isCancelled {
+                self.proxyProgressMap[key] = Double(exportSession.progress)
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+        }
+
+        await withCheckedContinuation { continuation in
+            exportSession.exportAsynchronously { continuation.resume() }
+        }
+        progressTimer.cancel()
+
+        await MainActor.run {
+            if exportSession.status != .completed {
+                try? FileManager.default.removeItem(at: destinationURL)
+            }
+            self.proxyProgressMap[key] = nil   // 完了/失敗で生成中フラグを解除
+        }
+    }
+
+    /// 指定URL以外のプロキシを全削除する (常に1本だけ保持するため)
+    private func sweepProxies(except keepURL: URL?) {
+        guard let urls = try? FileManager.default.contentsOfDirectory(at: proxyStorageURL, includingPropertiesForKeys: nil) else { return }
+        for url in urls {
+            if let keep = keepURL, url.lastPathComponent == keep.lastPathComponent { continue }
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// 視聴終了時に呼ぶ: すべてのオンデマンドプロキシを削除する
+    func deleteAllProxies() {
+        sweepProxies(except: nil)
+    }
+
     // データ集計・操作
     var recentItems: [VideoItem] { Array(videos.sorted { $0.importDate > $1.importDate }.prefix(10)) }
     

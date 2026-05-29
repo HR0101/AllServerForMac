@@ -5,9 +5,6 @@ import AppKit
 import Darwin
 import Combine
 
-// ===================================
-//  WebServerManager.swift (自動停止タイマー対応版)
-// ===================================
 
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private let server = HttpServer()
@@ -17,7 +14,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     
     @Published var statusMessage: String = "停止中"
     
-    // ★ 稼働タイマー用のプロパティ
+    // 稼働タイマー用のプロパティ
     @Published var serverStartTime: Date?
     @Published var uptimeString: String = "00:00:00"
     private var timerCancellable: AnyCancellable?
@@ -33,23 +30,79 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             UserDefaults.standard.set(autoStopIntervalMinutes, forKey: "autoStopIntervalMinutes")
         }
     }
-    
+
+    // ★ スケジュール起動/停止（毎日決まった時刻に起動・終了）
+    @Published var scheduleEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(scheduleEnabled, forKey: "scheduleEnabled")
+            if !scheduleEnabled { removeSchedule() }
+        }
+    }
+    @Published var scheduleStartTime: Date {
+        didSet { UserDefaults.standard.set(scheduleStartTime, forKey: "scheduleStartTime") }
+    }
+    @Published var scheduleStopTime: Date {
+        didSet { UserDefaults.standard.set(scheduleStopTime, forKey: "scheduleStopTime") }
+    }
+    @Published var scheduleStatusMessage: String = ""
+
+
     @Published var targetPort: Int {
         didSet {
             UserDefaults.standard.set(targetPort, forKey: "serverPort")
         }
     }
-    
+
+    // ★ セキュリティ：PIN認証
+    @Published var authEnabled: Bool = true {
+        didSet {
+            authEnabledCache = authEnabled
+            UserDefaults.standard.set(authEnabled, forKey: "authEnabled")
+        }
+    }
+    @Published var authPIN: String = "" {
+        didSet {
+            authPINCache = authPIN
+            UserDefaults.standard.set(authPIN, forKey: "authPIN")
+        }
+    }
+    // バックグラウンドスレッドから安全に読むためのスナップショット
+    private var authEnabledCache = true
+    private var authPINCache = ""
+
+    // ★ アクセスログ（新しいものが先頭）
+    @Published var accessLogs: [AccessLogEntry] = []
+    private let maxAccessLogs = 200
+
     init(dataManager: VideoDataManager) {
         self.dataManager = dataManager
-        
+
         let savedPort = UserDefaults.standard.integer(forKey: "serverPort")
         self.targetPort = savedPort == 0 ? 8080 : savedPort
-        
+
         self.autoStopEnabled = UserDefaults.standard.bool(forKey: "autoStopEnabled")
         let savedInterval = UserDefaults.standard.integer(forKey: "autoStopIntervalMinutes")
         self.autoStopIntervalMinutes = savedInterval == 0 ? 60 : savedInterval
-        
+
+        // スケジュール設定の読み込み（既定: 起動 09:00 / 停止 23:00）
+        self.scheduleEnabled = UserDefaults.standard.bool(forKey: "scheduleEnabled")
+        let cal = Calendar.current
+        self.scheduleStartTime = (UserDefaults.standard.object(forKey: "scheduleStartTime") as? Date)
+            ?? cal.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
+        self.scheduleStopTime = (UserDefaults.standard.object(forKey: "scheduleStopTime") as? Date)
+            ?? cal.date(bySettingHour: 23, minute: 0, second: 0, of: Date()) ?? Date()
+
+        // 認証設定の読み込み（初回はPINを自動生成）
+        let authEnabledValue = UserDefaults.standard.object(forKey: "authEnabled") as? Bool ?? true
+        self.authEnabled = authEnabledValue
+        let savedPIN = UserDefaults.standard.string(forKey: "authPIN") ?? ""
+        let pin = savedPIN.isEmpty ? String(format: "%06d", Int.random(in: 0...999999)) : savedPIN
+        self.authPIN = pin
+        // didSet は init 中に発火しないため、キャッシュと永続化を手動で行う
+        self.authEnabledCache = authEnabledValue
+        self.authPINCache = pin
+        UserDefaults.standard.set(pin, forKey: "authPIN")
+
         super.init()
         print("✅ [LIFECYCLE] WebServerManager initialized.")
         setupRoutes()
@@ -66,17 +119,75 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             name: NSWorkspace.sessionDidResignActiveNotification,
             object: nil
         )
+
+        // スケジュール起動: 起動時刻〜停止時刻の時間帯にアプリが立ち上がったら自動でサーバーを開始する
+        if scheduleEnabled && isWithinScheduleWindow(Date()) {
+            startServer()
+        }
     }
-    
+
     deinit {
         print("🛑 [LIFECYCLE] WebServerManager deinitialized.")
         NotificationCenter.default.removeObserver(self)
     }
 
+    // MARK: - Auth & Access Log
+    func regeneratePIN() {
+        authPIN = String(format: "%06d", Int.random(in: 0...999999))
+    }
+
+    private func extractPIN(from request: HttpRequest) -> String? {
+        if let header = request.headers["x-auth-pin"], !header.isEmpty { return header }
+        if let q = request.queryParams.first(where: { $0.0 == "pin" })?.1, !q.isEmpty { return q }
+        if let cookie = request.headers["cookie"] {
+            for part in cookie.split(separator: ";") {
+                let kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                if kv.count == 2, kv[0] == "pin", !kv[1].isEmpty { return kv[1] }
+            }
+        }
+        return nil
+    }
+
+    private func isAuthorized(_ request: HttpRequest) -> Bool {
+        if !authEnabledCache { return true }
+        guard let pin = extractPIN(from: request) else { return false }
+        return pin == authPINCache
+    }
+
+    private func logAccess(_ request: HttpRequest, authorized: Bool) {
+        let ip = request.address ?? "unknown"
+        let method = request.method
+        let path = request.path
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.accessLogs.insert(AccessLogEntry(date: Date(), ip: ip, method: method, path: path, authorized: authorized), at: 0)
+            if self.accessLogs.count > self.maxAccessLogs {
+                self.accessLogs.removeLast(self.accessLogs.count - self.maxAccessLogs)
+            }
+        }
+    }
+
+    /// 認証チェック付きでルートハンドラを包む
+    private func protected(_ handler: @escaping (HttpRequest) -> HttpResponse) -> (HttpRequest) -> HttpResponse {
+        return { [weak self] request in
+            guard let self = self else { return .internalServerError }
+            let ok = self.isAuthorized(request)
+            self.logAccess(request, authorized: ok)
+            if !ok {
+                let body = Array(#"{"error":"auth_required"}"#.utf8)
+                return .raw(401, "Unauthorized",
+                            ["Content-Type": "application/json", "WWW-Authenticate": "PIN"],
+                            { try? $0.write(body) })
+            }
+            return handler(request)
+        }
+    }
+
     // MARK: - API Routes
     private func setupRoutes() {
         
-        server["/"] = { _ -> HttpResponse in
+        server["/"] = { [weak self] request -> HttpResponse in
+            self?.logAccess(request, authorized: true)
             let html = #"""
             <!DOCTYPE html>
             <html lang="ja">
@@ -148,6 +259,18 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     @media (max-width: 600px) {
                         .nav-btn { display: none; } /* モバイルでは矢印を非表示（タップ領域と被るため）*/
                     }
+
+                    /* Login Overlay */
+                    #login-modal { display: none; position: fixed; inset: 0; background: rgba(13,13,20,0.96); z-index: 2000; justify-content: center; align-items: center; backdrop-filter: blur(8px); }
+                    .login-card { background: var(--bg-secondary); border: 1px solid rgba(217,186,115,0.25); border-radius: 24px; padding: 36px 28px; width: 90%; max-width: 320px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+                    .login-card .lock { font-size: 44px; margin-bottom: 8px; }
+                    .login-card h2 { color: var(--accent-color); margin: 8px 0 4px; font-size: 20px; }
+                    .login-card p { color: var(--text-secondary); font-size: 13px; margin: 0 0 20px; }
+                    .pin-input { width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 24px; letter-spacing: 8px; text-align: center; padding: 14px; border-radius: 14px; outline: none; box-sizing: border-box; }
+                    .pin-input:focus { border-color: var(--accent-color); }
+                    .login-btn { margin-top: 16px; width: 100%; background: var(--accent-color); color: #000; font-weight: bold; font-size: 16px; padding: 14px; border: none; border-radius: 14px; cursor: pointer; }
+                    .login-btn:active { opacity: 0.85; }
+                    .login-error { color: #ff6b6b; font-size: 13px; margin-top: 12px; min-height: 18px; }
                 </style>
             </head>
             <body>
@@ -177,6 +300,17 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     <div class="grid" id="videos-grid"></div>
                 </div>
 
+                <div id="login-modal">
+                    <div class="login-card">
+                        <div class="lock">🔒</div>
+                        <h2>PIN認証</h2>
+                        <p>このサーバーは保護されています。<br>Macの画面に表示されているPINを入力してください。</p>
+                        <input type="password" inputmode="numeric" class="pin-input" id="pin-input" placeholder="••••••" maxlength="12" onkeydown="if(event.key==='Enter') submitPIN()">
+                        <button class="login-btn" onclick="submitPIN()">ロック解除</button>
+                        <div class="login-error" id="login-error"></div>
+                    </div>
+                </div>
+
                 <div id="player-modal">
                     <div class="player-header">
                         <div class="filename-display" id="player-filename"></div>
@@ -201,6 +335,20 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     let currentAlbumName = "";
                     let currentMediaIndex = 0;
                     let selectedQuality = "1080p";
+
+                    // --- PIN認証 ---
+                    function showLogin() {
+                        document.getElementById('login-modal').style.display = 'flex';
+                        setTimeout(() => document.getElementById('pin-input').focus(), 100);
+                    }
+                    function submitPIN() {
+                        const val = document.getElementById('pin-input').value.trim();
+                        if (!val) return;
+                        // Cookieに保存することで、画像/動画タグのリクエストにも自動付与される
+                        document.cookie = 'pin=' + encodeURIComponent(val) + ';path=/;max-age=31536000;samesite=lax';
+                        document.getElementById('login-error').innerText = '';
+                        loadAlbums();
+                    }
 
                     function formatDuration(seconds) {
                         if(!seconds) return "0:00";
@@ -227,6 +375,13 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         
                         try {
                             const res = await fetch('/albums');
+                            if (res.status === 401) {
+                                libSec.innerHTML = '';
+                                document.getElementById('login-error').innerText = document.cookie.indexOf('pin=') >= 0 ? 'PINが正しくありません。' : '';
+                                showLogin();
+                                return;
+                            }
+                            document.getElementById('login-modal').style.display = 'none';
                             const albums = await res.json();
                             
                             let libHtml = '<div class="section-title">ライブラリ</div><div class="grid">';
@@ -278,6 +433,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         
                         try {
                             const res = await fetch(`/albums/${albumId}/videos`);
+                            if (res.status === 401) { showLogin(); return; }
                             currentRawVideos = await res.json();
                             renderVideos();
                         } catch (e) {
@@ -440,18 +596,18 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                                         break;
                                     case 'j':
                                         e.preventDefault();
-                                        media.currentTime = Math.max(0, media.currentTime - 10);
+                                        media.currentTime = Math.max(0, media.currentTime - 5);
                                         break;
                                     case 'l':
                                         e.preventDefault();
-                                        media.currentTime = Math.min(media.duration, media.currentTime + 10);
+                                        media.currentTime = Math.min(media.duration, media.currentTime + 5);
                                         break;
                                     case 'arrowleft':
                                         e.preventDefault();
                                         if (e.shiftKey) {
                                             prevMedia(); // Shift + ← で前の動画
                                         } else {
-                                            media.currentTime = Math.max(0, media.currentTime - 10); // ← で10秒戻る
+                                            media.currentTime = Math.max(0, media.currentTime - 5); // ← で10秒戻る
                                         }
                                         break;
                                     case 'arrowright':
@@ -459,7 +615,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                                         if (e.shiftKey) {
                                             nextMedia(); // Shift + → で次の動画
                                         } else {
-                                            media.currentTime = Math.min(media.duration, media.currentTime + 10); // → で10秒進む
+                                            media.currentTime = Math.min(media.duration, media.currentTime + 5); // → で10秒進む
                                         }
                                         break;
                                     case 'arrowup':
@@ -508,7 +664,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return .ok(.html(html))
         }
         
-        server["/albums"] = { [weak self] _ -> HttpResponse in
+        server["/albums"] = protected { [weak self] _ -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             var albumInfos: [RemoteAlbumInfo] = []
             DispatchQueue.main.sync {
@@ -524,7 +680,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .internalServerError }
         }
         
-        server["/albums/:id/videos"] = { [weak self] request -> HttpResponse in
+        server["/albums/:id/videos"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             guard let albumIDString = request.params[":id"], let albumID = UUID(uuidString: albumIDString) else {
                 return .badRequest(.text("Invalid album ID"))
@@ -555,7 +711,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         }
         
         // iOSアプリから稼働時間を取得するためのAPI
-        server["/server/status"] = { [weak self] _ -> HttpResponse in
+        server["/server/status"] = protected { [weak self] _ -> HttpResponse in
             var uptime = 0
             DispatchQueue.main.sync {
                 if let start = self?.serverStartTime {
@@ -568,9 +724,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             }
             return .internalServerError
         }
-        
-        // iOSアプリからサーバーを遠隔で停止させるためのAPI
-        server.post["/server/shutdown"] = { [weak self] _ -> HttpResponse in
+
+        // iOSアプリからサーバーを遠隔で完全終了させるためのAPI
+        server.post["/server/shutdown"] = protected { [weak self] _ -> HttpResponse in
             DispatchQueue.main.async {
                 self?.stopServerInternal()
                 NSApplication.shared.terminate(nil) // Macアプリ自体を完全に終了させる
@@ -578,7 +734,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return .ok(.text("Shutdown initiated"))
         }
         
-        server.post["/albums/create"] = { [weak self] request -> HttpResponse in
+        server.post["/albums/create"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct CreateReq: Codable { let name: String; let type: String }
             do {
@@ -589,14 +745,14 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .badRequest(.text("Invalid request")) }
         }
 
-        server.delete["/albums/:id"] = { [weak self] request -> HttpResponse in
+        server.delete["/albums/:id"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let idStr = request.params[":id"], let id = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
             DispatchQueue.main.async { dataManager.deleteAlbum(albumID: id) }
             return .ok(.text("Deleted"))
         }
 
-        server.post["/move"] = { [weak self] request -> HttpResponse in
+        server.post["/move"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct MoveRequest: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
             do {
@@ -609,7 +765,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .badRequest(.text("Invalid request body")) }
         }
 
-        server.post["/deleteVideos"] = { [weak self] request -> HttpResponse in
+        server.post["/deleteVideos"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct DelRequest: Codable { let videoIds: [String]; let albumId: String }
             do {
@@ -621,7 +777,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .badRequest(.text("Invalid request body")) }
         }
 
-        server.post["/upload"] = { [weak self] request -> HttpResponse in
+        server.post["/upload"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             
             let encodedFilename = request.headers["x-filename"] ?? "uploaded_media"
@@ -657,7 +813,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             }
         }
 
-        server["/video/:id"] = { [weak self] request -> HttpResponse in
+        server["/video/:id"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
@@ -687,8 +843,39 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             guard let url = videoURL else { return .notFound }
             return self.serveFile(at: url, request: request)
         }
-        
-        server["/thumbnail/:id"] = { [weak self] request -> HttpResponse in
+
+        // ★ 低画質プロキシをオンデマンド生成し、進捗を返す (state: "ready" / "generating")
+        server["/video/:id/prepare"] = protected { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager,
+                  let idStr = request.params[":id"] else { return .notFound }
+            let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "1080p"
+            var state = "generating"
+            var progress = 0.0
+            DispatchQueue.main.sync {
+                if dataManager.isProxyReady(videoID: idStr, quality: quality) {
+                    state = "ready"
+                } else if let p = dataManager.proxyGenerationProgress(videoID: idStr, quality: quality) {
+                    state = "generating"; progress = p
+                } else {
+                    dataManager.startOnDemandProxy(videoID: idStr, quality: quality)
+                    state = "generating"; progress = 0
+                }
+            }
+            struct PrepareResp: Codable { let state: String; let progress: Double }
+            if let data = try? JSONEncoder().encode(PrepareResp(state: state, progress: progress)) {
+                return .ok(.data(data, contentType: "application/json"))
+            }
+            return .internalServerError
+        }
+
+        // ★ 視聴終了時にオンデマンドプロキシを削除する (常に1本分のみ保持するため全削除)
+        server.delete["/video/:id/proxy"] = protected { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
+            DispatchQueue.main.async { dataManager.deleteAllProxies() }
+            return .ok(.text("Deleted"))
+        }
+
+        server["/thumbnail/:id"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
@@ -759,25 +946,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     
                     // 稼働時間の計測タイマーと自動停止チェックを開始
                     self.serverStartTime = Date()
-                    self.timerCancellable = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect().sink { [weak self] _ in
-                        guard let self = self, let start = self.serverStartTime else { return }
-                        let diff = Int(Date().timeIntervalSince(start))
-                        
-                        // ★ 自動停止の判定ロジック
-                        if self.autoStopEnabled {
-                            let limitSeconds = self.autoStopIntervalMinutes * 60
-                            if diff >= limitSeconds {
-                                self.stopServerInternal()
-                                NSApplication.shared.terminate(nil) // アプリ自体を終了
-                                return
-                            }
-                        }
-                        
-                        let h = diff / 3600
-                        let m = (diff % 3600) / 60
-                        let s = diff % 60
-                        self.uptimeString = String(format: "%02d:%02d:%02d", h, m, s)
-                    }
+                    self.startUptimeTimer()
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -787,8 +956,45 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         }
     }
 
+    // ★ 稼働時間タイマー（自動停止チェック付き）。起動時・再開時の両方から呼ぶ
+    private func startUptimeTimer() {
+        self.timerCancellable?.cancel()
+        self.timerCancellable = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect().sink { [weak self] _ in
+            guard let self = self, let start = self.serverStartTime else { return }
+            let diff = Int(Date().timeIntervalSince(start))
+
+            // ★ 自動停止の判定ロジック
+            if self.autoStopEnabled {
+                let limitSeconds = self.autoStopIntervalMinutes * 60
+                if diff >= limitSeconds {
+                    self.stopServerInternal()
+                    NSApplication.shared.terminate(nil) // アプリ自体を終了
+                    return
+                }
+            }
+
+            // ★ スケジュール停止の判定ロジック（停止時刻になったら完全終了）
+            if self.scheduleEnabled {
+                let now = Date()
+                let cal = Calendar.current
+                let stop = cal.dateComponents([.hour, .minute], from: self.scheduleStopTime)
+                let cur = cal.dateComponents([.hour, .minute], from: now)
+                if cur.hour == stop.hour && cur.minute == stop.minute {
+                    self.stopServerInternal()
+                    NSApplication.shared.terminate(nil) // アプリ自体を終了
+                    return
+                }
+            }
+
+            let h = diff / 3600
+            let m = (diff % 3600) / 60
+            let s = diff % 60
+            self.uptimeString = String(format: "%02d:%02d:%02d", h, m, s)
+        }
+    }
+
     @objc func stopServer() { stopServerInternal() }
-    
+
     private func stopServerInternal() {
         netService?.stop(); netService = nil
         server.stop()
@@ -803,7 +1009,135 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     }
     
     @objc private func handleSessionOrAppTermination() { stopServerInternal() }
-    
+
+    // MARK: - スケジュール起動/停止
+    /// 現在時刻が起動時刻〜停止時刻の時間帯に入っているか（日をまたぐ設定にも対応）
+    func isWithinScheduleWindow(_ now: Date) -> Bool {
+        let cal = Calendar.current
+        let s = cal.dateComponents([.hour, .minute], from: scheduleStartTime)
+        let e = cal.dateComponents([.hour, .minute], from: scheduleStopTime)
+        let n = cal.dateComponents([.hour, .minute], from: now)
+        let startMin = (s.hour ?? 0) * 60 + (s.minute ?? 0)
+        let stopMin  = (e.hour ?? 0) * 60 + (e.minute ?? 0)
+        let nowMin   = (n.hour ?? 0) * 60 + (n.minute ?? 0)
+        if startMin == stopMin { return false }
+        if startMin < stopMin { return nowMin >= startMin && nowMin < stopMin }
+        return nowMin >= startMin || nowMin < stopMin // 日をまたぐ場合
+    }
+
+    private var launchAgentLabel: String {
+        (Bundle.main.bundleIdentifier ?? "com.allserverformac.app") + ".autostart"
+    }
+    private var launchAgentURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
+    }
+
+    /// 設定画面の「適用」ボタンから呼ぶ。LaunchAgent登録 + スリープ起床(pmset)を設定する
+    func applySchedule() {
+        installLaunchAgent()
+        scheduleWake()
+    }
+
+    /// スケジュール解除（LaunchAgent削除 + pmset起床解除）
+    func removeSchedule() {
+        removeLaunchAgent()
+        cancelWake()
+        DispatchQueue.main.async { self.scheduleStatusMessage = "スケジュールを解除しました。" }
+    }
+
+    private func installLaunchAgent() {
+        let cal = Calendar.current
+        let comp = cal.dateComponents([.hour, .minute], from: scheduleStartTime)
+        let hour = comp.hour ?? 9
+        let minute = comp.minute ?? 0
+        let appPath = Bundle.main.bundlePath
+
+        let plist: [String: Any] = [
+            "Label": launchAgentLabel,
+            "ProgramArguments": ["/usr/bin/open", appPath],
+            "StartCalendarInterval": ["Hour": hour, "Minute": minute],
+            "RunAtLoad": false
+        ]
+
+        do {
+            let dir = launchAgentURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: launchAgentURL)
+            reloadLaunchAgent()
+            let timeStr = String(format: "%02d:%02d", hour, minute)
+            DispatchQueue.main.async {
+                self.scheduleStatusMessage = "✅ 毎日 \(timeStr) に自動起動するよう登録しました。"
+            }
+        } catch {
+            DispatchQueue.main.async {
+                self.scheduleStatusMessage = "❌ 自動起動の登録に失敗: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func reloadLaunchAgent() {
+        let path = launchAgentURL.path
+        _ = runProcess("/bin/launchctl", ["unload", path])   // 既存があれば解除（失敗は無視）
+        _ = runProcess("/bin/launchctl", ["load", "-w", path])
+    }
+
+    private func removeLaunchAgent() {
+        let path = launchAgentURL.path
+        _ = runProcess("/bin/launchctl", ["unload", path])
+        try? FileManager.default.removeItem(at: launchAgentURL)
+    }
+
+    /// スリープ中でも起動時刻にMacを起こす（pmset / 管理者権限が必要）。起動2分前に起床させる
+    private func scheduleWake() {
+        let cal = Calendar.current
+        let comp = cal.dateComponents([.hour, .minute], from: scheduleStartTime)
+        var total = (comp.hour ?? 9) * 60 + (comp.minute ?? 0) - 2
+        if total < 0 { total += 24 * 60 }
+        let timeStr = String(format: "%02d:%02d:00", total / 60, total % 60)
+        runAdminShell("/usr/bin/pmset repeat wakeorpoweron MTWRFSU \(timeStr)") { ok in
+            DispatchQueue.main.async {
+                if !ok {
+                    self.scheduleStatusMessage = "⚠️ 自動起動は登録しましたが、スリープ起床(pmset)の設定がキャンセル/失敗しました。"
+                }
+            }
+        }
+    }
+
+    private func cancelWake() {
+        runAdminShell("/usr/bin/pmset repeat cancel") { _ in }
+    }
+
+    /// 管理者権限でシェルコマンドを実行（GUIでパスワード入力を求める）
+    private func runAdminShell(_ command: String, completion: @escaping (Bool) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let escaped = command.replacingOccurrences(of: "\"", with: "\\\"")
+            let source = "do shell script \"\(escaped)\" with administrator privileges"
+            var errorDict: NSDictionary?
+            if let script = NSAppleScript(source: source) {
+                script.executeAndReturnError(&errorDict)
+                completion(errorDict == nil)
+            } else {
+                completion(false)
+            }
+        }
+    }
+
+    @discardableResult
+    private func runProcess(_ launchPath: String, _ args: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = args
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch {
+            return -1
+        }
+    }
+
     func netServiceDidPublish(_ sender: NetService) {
         let ipAddress = getIPAddress() ?? "N/A"
         self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
@@ -979,6 +1313,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
 // MARK: - Shared Data Models & MimeType
 struct RemoteAlbumInfo: Codable { let id: String; let name: String; let videoCount: Int; let type: String? }
+struct AccessLogEntry: Identifiable, Hashable { let id = UUID(); let date: Date; let ip: String; let method: String; let path: String; let authorized: Bool }
 struct RemoteVideoInfo: Codable { let id: String; let filename: String; let duration: TimeInterval; let importDate: Date; let creationDate: Date?; let mediaType: String? }
 private struct MimeType {
     static func forPath(_ path: String) -> String {

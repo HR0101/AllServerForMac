@@ -326,6 +326,8 @@ struct HomeView: View {
     @ObservedObject var webServerManager: WebServerManager
     @StateObject private var systemMonitor = SystemMonitor()
 
+    @State private var isShowingAccessLog = false
+
     var body: some View {
         ScrollView {
             VStack(spacing: 30) {
@@ -384,7 +386,36 @@ struct HomeView: View {
                     .padding()
                     .background(Color(NSColor.controlBackgroundColor))
                     .cornerRadius(8)
-                    
+
+                    // スケジュール起動/停止
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("毎日決まった時間に起動/停止", isOn: $webServerManager.scheduleEnabled)
+
+                        if webServerManager.scheduleEnabled {
+                            DatePicker("起動時刻:", selection: $webServerManager.scheduleStartTime, displayedComponents: .hourAndMinute)
+                            DatePicker("停止時刻:", selection: $webServerManager.scheduleStopTime, displayedComponents: .hourAndMinute)
+
+                            Button(action: { webServerManager.applySchedule() }) {
+                                Label("このスケジュールを適用", systemImage: "calendar.badge.clock")
+                            }
+
+                            Text("※ 適用時に管理者パスワードの入力を求められます（スリープからの自動起床設定のため）。停止時刻になるとアプリは完全終了します。")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            if !webServerManager.scheduleStatusMessage.isEmpty {
+                                Text(webServerManager.scheduleStatusMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(8)
+
                     HStack(spacing: 20) {
                         Button(action: {
                             webServerManager.startServer()
@@ -428,6 +459,59 @@ struct HomeView: View {
                 .shadow(radius: 2)
                 .frame(maxWidth: 350)
                 
+                // セキュリティセクション
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "lock.shield.fill").foregroundColor(.accentColor)
+                        Text("セキュリティ").font(.headline)
+                    }
+
+                    Toggle("PIN認証を必須にする", isOn: $webServerManager.authEnabled)
+                        .help("オンにすると、Web・iOSアプリからのアクセスにPINが必要になります。")
+
+                    if webServerManager.authEnabled {
+                        HStack {
+                            Text("接続PIN:")
+                            Spacer()
+                            Text(webServerManager.authPIN)
+                                .font(.system(.title3, design: .monospaced).weight(.bold))
+                                .foregroundColor(.accentColor)
+                                .textSelection(.enabled)
+                            Button(action: { webServerManager.regeneratePIN() }) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .help("PINを再生成する")
+                        }
+                        Text("このPINをiPhoneアプリ・ブラウザで入力してください。")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("⚠️ 認証が無効です。同じWi-Fi内の誰でもアクセスできます。")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+
+                    Divider()
+
+                    Button(action: { isShowingAccessLog = true }) {
+                        HStack {
+                            Image(systemName: "list.bullet.rectangle")
+                            Text("アクセスログを見る")
+                            Spacer()
+                            Text("\(webServerManager.accessLogs.count)").foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(NSColor.windowBackgroundColor))
+                .cornerRadius(12)
+                .shadow(radius: 2)
+                .frame(maxWidth: 350)
+                .sheet(isPresented: $isShowingAccessLog) {
+                    AccessLogView(webServerManager: webServerManager)
+                }
+
                 // システムリソース＆グラフ表示セクション
                 VStack(alignment: .leading, spacing: 10) {
                     Text("システムリソース")
@@ -716,5 +800,54 @@ struct AlbumDetailView: View {
     private func formatDuration(_ totalSeconds: TimeInterval) -> String {
         let secondsInt = Int(totalSeconds)
         return String(format: "%02d:%02d", secondsInt / 60, secondsInt % 60)
+    }
+}
+
+// MARK: - AccessLogView
+struct AccessLogView: View {
+    @ObservedObject var webServerManager: WebServerManager
+    @Environment(\.dismiss) var dismiss
+
+    private var timeFormatter: DateFormatter {
+        let f = DateFormatter(); f.dateFormat = "MM/dd HH:mm:ss"; return f
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("アクセスログ").font(.headline)
+                Spacer()
+                Button("クリア") { webServerManager.accessLogs.removeAll() }
+                    .disabled(webServerManager.accessLogs.isEmpty)
+                Button("閉じる") { dismiss() }
+            }
+            .padding()
+
+            Divider()
+
+            if webServerManager.accessLogs.isEmpty {
+                Spacer()
+                Text("まだアクセスがありません").foregroundColor(.secondary)
+                Spacer()
+            } else {
+                Table(webServerManager.accessLogs) {
+                    TableColumn("時刻") { entry in
+                        Text(timeFormatter.string(from: entry.date)).font(.system(.caption, design: .monospaced))
+                    }
+                    TableColumn("IP") { entry in
+                        Text(entry.ip).font(.system(.caption, design: .monospaced))
+                    }
+                    TableColumn("メソッド") { entry in Text(entry.method).font(.caption) }
+                    TableColumn("パス") { entry in
+                        Text(entry.path).font(.caption).lineLimit(1).truncationMode(.middle)
+                    }
+                    TableColumn("認証") { entry in
+                        Image(systemName: entry.authorized ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                            .foregroundColor(entry.authorized ? .green : .red)
+                    }
+                }
+            }
+        }
+        .frame(width: 640, height: 460)
     }
 }
