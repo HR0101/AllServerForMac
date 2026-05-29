@@ -131,11 +131,13 @@ struct StorageManagerView: View {
     }
     
     private func calculateSizes() {
-        let sizes = dataManager.getStorageUsage()
-        self.videosSize = sizes.videosSize
-        self.proxiesSize = sizes.proxiesSize
-        self.downloadsSize = sizes.downloadsSize
-        self.appTotalSize = sizes.appTotalSize
+        Task {
+            let sizes = await dataManager.getStorageUsage()
+            self.videosSize = sizes.videosSize
+            self.proxiesSize = sizes.proxiesSize
+            self.downloadsSize = sizes.downloadsSize
+            self.appTotalSize = sizes.appTotalSize
+        }
     }
     
     private func removeDuplicates() {

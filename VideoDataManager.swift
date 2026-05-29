@@ -7,7 +7,28 @@ import UniformTypeIdentifiers
 
 
 
-// データモデル
+// MARK: - Shared Utilities
+
+func isImagePredominantlyBlack(image: CGImage, threshold: CGFloat = 0.1) -> Bool {
+    let size = 20
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    var rawData = [UInt8](repeating: 0, count: size * size * 4)
+    guard let context = CGContext(
+        data: &rawData, width: size, height: size,
+        bitsPerComponent: 8, bytesPerRow: size * 4,
+        space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { return false }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(size), height: CGFloat(size)))
+    var darkPixelCount = 0
+    for i in 0..<(size * size) {
+        let offset = i * 4
+        let luminance = 0.299 * CGFloat(rawData[offset]) / 255.0
+                      + 0.587 * CGFloat(rawData[offset + 1]) / 255.0
+                      + 0.114 * CGFloat(rawData[offset + 2]) / 255.0
+        if luminance < threshold { darkPixelCount += 1 }
+    }
+    return Double(darkPixelCount) / Double(size * size) > 0.8
+}
 
 enum MediaType: String, Codable, Hashable {
     case video
@@ -98,20 +119,20 @@ class VideoDataManager: ObservableObject {
     @Published var videos: [VideoItem] = []
     @Published var albums: [Album] = []
     
-    let appRootURL: URL // アプリのルートディレクトリ
+    let appRootURL: URL
     let videoStorageURL: URL
     let downloadStorageURL: URL
     let thumbnailStorageURL: URL
     let proxyStorageURL: URL
     private let dataFileURL: URL
     
-    private let allVideosAlbumName = "ALL VIDEOS"
-    private let allPhotosAlbumName = "ALL PHOTOS"
+    static let allVideosAlbumName = "ALL VIDEOS"
+    static let allPhotosAlbumName = "ALL PHOTOS"
 
     private var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     private var isGeneratingProxy = false
 
-    // ★ オンデマンド・プロキシ生成の進捗 (key: "<id>_<quality>" / 値: 0...1 / nil=非生成中)
+    // key: "<videoID>_<quality>", 値: 0...1 の進捗、nil = 生成していない
     private var proxyProgressMap: [String: Double] = [:]
 
     init() {
@@ -138,47 +159,44 @@ class VideoDataManager: ObservableObject {
         repairMissingSymlinks()
     }
     
-    // ストレージ管理
-    
-    func getStorageUsage() -> (videosSize: Int64, proxiesSize: Int64, downloadsSize: Int64, appTotalSize: Int64) {
-        var vSize: Int64 = 0
-        var pSize: Int64 = 0
-        var dSize: Int64 = 0
-        var totalSize: Int64 = 0
-        
-        if let videoURLs = try? FileManager.default.contentsOfDirectory(at: videoStorageURL, includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey]) {
-            for url in videoURLs {
-                let resources = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
-                if resources?.isSymbolicLink == false {
-                    vSize += Int64(resources?.fileSize ?? 0)
+    nonisolated func getStorageUsage() async -> (videosSize: Int64, proxiesSize: Int64, downloadsSize: Int64, appTotalSize: Int64) {
+        let videoStorageURL = self.videoStorageURL
+        let proxyStorageURL = self.proxyStorageURL
+        let downloadStorageURL = self.downloadStorageURL
+        let appRootURL = self.appRootURL
+
+        return await Task.detached(priority: .utility) {
+            var vSize: Int64 = 0
+            var pSize: Int64 = 0
+            var dSize: Int64 = 0
+            var totalSize: Int64 = 0
+
+            if let urls = try? FileManager.default.contentsOfDirectory(at: videoStorageURL, includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey]) {
+                for url in urls {
+                    let res = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
+                    if res?.isSymbolicLink == false { vSize += Int64(res?.fileSize ?? 0) }
                 }
             }
-        }
-        
-        if let proxyURLs = try? FileManager.default.contentsOfDirectory(at: proxyStorageURL, includingPropertiesForKeys: [.fileSizeKey]) {
-            for url in proxyURLs {
-                let resources = try? url.resourceValues(forKeys: [.fileSizeKey])
-                pSize += Int64(resources?.fileSize ?? 0)
-            }
-        }
-        
-        if let downloadURLs = try? FileManager.default.contentsOfDirectory(at: downloadStorageURL, includingPropertiesForKeys: [.fileSizeKey]) {
-            for url in downloadURLs {
-                let resources = try? url.resourceValues(forKeys: [.fileSizeKey])
-                dSize += Int64(resources?.fileSize ?? 0)
-            }
-        }
-        
-        if let enumerator = FileManager.default.enumerator(at: appRootURL, includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey]) {
-            for case let url as URL in enumerator {
-                let resources = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
-                if resources?.isSymbolicLink == false {
-                    totalSize += Int64(resources?.fileSize ?? 0)
+            if let urls = try? FileManager.default.contentsOfDirectory(at: proxyStorageURL, includingPropertiesForKeys: [.fileSizeKey]) {
+                for url in urls {
+                    let res = try? url.resourceValues(forKeys: [.fileSizeKey])
+                    pSize += Int64(res?.fileSize ?? 0)
                 }
             }
-        }
-        
-        return (vSize, pSize, dSize, totalSize)
+            if let urls = try? FileManager.default.contentsOfDirectory(at: downloadStorageURL, includingPropertiesForKeys: [.fileSizeKey]) {
+                for url in urls {
+                    let res = try? url.resourceValues(forKeys: [.fileSizeKey])
+                    dSize += Int64(res?.fileSize ?? 0)
+                }
+            }
+            if let enumerator = FileManager.default.enumerator(at: appRootURL, includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey]) {
+                while let url = enumerator.nextObject() as? URL {
+                    let res = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
+                    if res?.isSymbolicLink == false { totalSize += Int64(res?.fileSize ?? 0) }
+                }
+            }
+            return (vSize, pSize, dSize, totalSize)
+        }.value
     }
     
     func openDownloadsFolderInFinder() {
@@ -372,10 +390,6 @@ class VideoDataManager: ObservableObject {
         return nil
     }
     
-    private func generateMissingProxies() {
-
-    }
-    
     private func enqueueProxyTask(sourceURL: URL, preset: String, destinationURL: URL) {
         proxyQueue.append((sourceURL: sourceURL, preset: preset, destinationURL: destinationURL))
         processNextProxyTask()
@@ -412,7 +426,7 @@ class VideoDataManager: ObservableObject {
         }
     }
 
-    // MARK: - オンデマンド・プロキシ生成 (視聴時のみ生成し、視聴後に削除)
+    // MARK: - On-demand Proxy
     func proxyFileURL(videoID: String, quality: String) -> URL {
         proxyStorageURL.appendingPathComponent("\(videoID)_\(quality).mp4")
     }
@@ -429,8 +443,8 @@ class VideoDataManager: ObservableObject {
     /// オンデマンドでプロキシ生成を開始する (既に生成済み/生成中なら何もしない)
     func startOnDemandProxy(videoID: String, quality: String) {
         let key = "\(videoID)_\(quality)"
-        guard proxyProgressMap[key] == nil else { return }          // 生成中
-        guard !isProxyReady(videoID: videoID, quality: quality) else { return } // 生成済み
+        guard proxyProgressMap[key] == nil else { return }
+        guard !isProxyReady(videoID: videoID, quality: quality) else { return }
         guard let item = videos.first(where: { $0.id.uuidString == videoID }),
               item.mediaType == .video,
               let sourceURL = fileURL(for: item) else { return }
@@ -456,7 +470,6 @@ class VideoDataManager: ObservableObject {
         exportSession.outputFileType = .mp4
         exportSession.shouldOptimizeForNetworkUse = true
 
-        // 変換の進捗を定期的に反映する
         let progressTimer = Task { @MainActor in
             while !Task.isCancelled {
                 self.proxyProgressMap[key] = Double(exportSession.progress)
@@ -491,7 +504,6 @@ class VideoDataManager: ObservableObject {
         sweepProxies(except: nil)
     }
 
-    // データ集計・操作
     var recentItems: [VideoItem] { Array(videos.sorted { $0.importDate > $1.importDate }.prefix(10)) }
     
     func calculateTotalStorageSize() -> String {
@@ -538,7 +550,10 @@ class VideoDataManager: ObservableObject {
         defer { if shouldStopAccessing { sourceURL.stopAccessingSecurityScopedResource() } }
 
         do {
-            let fileHash = try computeFileHash(for: sourceURL)
+            let urlForHash = sourceURL
+            let fileHash = try await Task.detached(priority: .utility) {
+                try VideoDataManager.computeFileHash(for: urlForHash)
+            }.value
             if let existingItem = videos.first(where: { $0.fileHash == fileHash }) {
                 if let albumIndex = albums.firstIndex(where: { $0.id == albumID }), !albums[albumIndex].videoIDs.contains(existingItem.id) { albums[albumIndex].videoIDs.append(existingItem.id); saveData() }
                 return
@@ -591,7 +606,7 @@ class VideoDataManager: ObservableObject {
             
             videos.append(newItem)
             if let index = albums.firstIndex(where: { $0.id == albumID }) { albums[index].videoIDs.append(newID) }
-            if mediaType == .photo { if let idx = albums.firstIndex(where: { $0.name == allPhotosAlbumName }) { albums[idx].videoIDs.append(newID) } } else { if let idx = albums.firstIndex(where: { $0.name == allVideosAlbumName }) { albums[idx].videoIDs.append(newID) } }
+            if mediaType == .photo { if let idx = albums.firstIndex(where: { $0.name == VideoDataManager.allPhotosAlbumName }) { albums[idx].videoIDs.append(newID) } } else { if let idx = albums.firstIndex(where: { $0.name == VideoDataManager.allVideosAlbumName }) { albums[idx].videoIDs.append(newID) } }
             
             saveData()
             
@@ -632,14 +647,23 @@ class VideoDataManager: ObservableObject {
         saveData()
     }
     
-    func removeVideosFromAlbum(videoIDs: [UUID], albumID: UUID) { if let index = albums.firstIndex(where: { $0.id == albumID }) { let name = albums[index].name; if name == allVideosAlbumName || name == allPhotosAlbumName { deleteVideos(videoIDs: videoIDs) } else { albums[index].videoIDs.removeAll { videoIDs.contains($0) }; saveData() } } }
-    func createAlbum(name: String, type: AlbumType) { guard name != allVideosAlbumName && name != allPhotosAlbumName else { return }; albums.append(Album(id: UUID(), name: name, videoIDs: [], type: type)); saveData() }
-    func deleteAlbum(albumID: UUID) { guard let album = albums.first(where: { $0.id == albumID }), album.name != allVideosAlbumName, album.name != allPhotosAlbumName else { return }; albums.removeAll { $0.id == albumID }; saveData() }
-    func moveVideos(videoIDs: [UUID], from sourceAlbumID: UUID, to targetAlbumID: UUID) { guard albums.contains(where: { $0.id == targetAlbumID }) else { return }; if let sourceIndex = albums.firstIndex(where: { $0.id == sourceAlbumID }), albums[sourceIndex].name != allVideosAlbumName, albums[sourceIndex].name != allPhotosAlbumName { albums[sourceIndex].videoIDs.removeAll { videoIDs.contains($0) } }; if let targetIndex = albums.firstIndex(where: { $0.id == targetAlbumID }) { let existingIDs = Set(albums[targetIndex].videoIDs); let newIDs = videoIDs.filter { !existingIDs.contains($0) }; albums[targetIndex].videoIDs.append(contentsOf: newIDs) }; saveData() }
+    func removeVideosFromAlbum(videoIDs: [UUID], albumID: UUID) { if let index = albums.firstIndex(where: { $0.id == albumID }) { let name = albums[index].name; if name == VideoDataManager.allVideosAlbumName || name == VideoDataManager.allPhotosAlbumName { deleteVideos(videoIDs: videoIDs) } else { albums[index].videoIDs.removeAll { videoIDs.contains($0) }; saveData() } } }
+    func createAlbum(name: String, type: AlbumType) { guard name != VideoDataManager.allVideosAlbumName && name != VideoDataManager.allPhotosAlbumName else { return }; albums.append(Album(id: UUID(), name: name, videoIDs: [], type: type)); saveData() }
+    func deleteAlbum(albumID: UUID) { guard let album = albums.first(where: { $0.id == albumID }), album.name != VideoDataManager.allVideosAlbumName, album.name != VideoDataManager.allPhotosAlbumName else { return }; albums.removeAll { $0.id == albumID }; saveData() }
+    func moveVideos(videoIDs: [UUID], from sourceAlbumID: UUID, to targetAlbumID: UUID) { guard albums.contains(where: { $0.id == targetAlbumID }) else { return }; if let sourceIndex = albums.firstIndex(where: { $0.id == sourceAlbumID }), albums[sourceIndex].name != VideoDataManager.allVideosAlbumName, albums[sourceIndex].name != VideoDataManager.allPhotosAlbumName { albums[sourceIndex].videoIDs.removeAll { videoIDs.contains($0) } }; if let targetIndex = albums.firstIndex(where: { $0.id == targetAlbumID }) { let existingIDs = Set(albums[targetIndex].videoIDs); let newIDs = videoIDs.filter { !existingIDs.contains($0) }; albums[targetIndex].videoIDs.append(contentsOf: newIDs) }; saveData() }
 
     private func saveData() { do { let data = try JSONEncoder().encode(DataContainer(videos: videos, albums: albums)); try data.write(to: dataFileURL, options: .atomic) } catch {} }
     private func loadData() { do { guard FileManager.default.fileExists(atPath: dataFileURL.path), let data = try? Data(contentsOf: dataFileURL), !data.isEmpty else { setupInitialAlbums(); saveData(); return }; let container = try JSONDecoder().decode(DataContainer.self, from: data); self.videos = container.videos; self.albums = container.albums; setupInitialAlbums() } catch { setupInitialAlbums(); saveData() } }
-    private func setupInitialAlbums() { updateOrCreateSystemAlbum(name: allVideosAlbumName, type: .video, ids: Set(videos.filter { $0.mediaType == .video }.map { $0.id })); updateOrCreateSystemAlbum(name: allPhotosAlbumName, type: .photo, ids: Set(videos.filter { $0.mediaType == .photo }.map { $0.id })) }
+    private func setupInitialAlbums() { updateOrCreateSystemAlbum(name: VideoDataManager.allVideosAlbumName, type: .video, ids: Set(videos.filter { $0.mediaType == .video }.map { $0.id })); updateOrCreateSystemAlbum(name: VideoDataManager.allPhotosAlbumName, type: .photo, ids: Set(videos.filter { $0.mediaType == .photo }.map { $0.id })) }
     private func updateOrCreateSystemAlbum(name: String, type: AlbumType, ids: Set<UUID>) { if let index = albums.firstIndex(where: { $0.name == name }) { albums[index].videoIDs = Array(ids); albums[index].type = type } else { albums.insert(Album(id: UUID(), name: name, videoIDs: Array(ids), type: type), at: 0) } }
-    private func computeFileHash(for url: URL) throws -> String { let handle = try FileHandle(forReadingFrom: url); var hasher = SHA256(); while autoreleasepool(invoking: { let chunk = handle.readData(ofLength: 8192); if !chunk.isEmpty { hasher.update(data: chunk); return true } else { return false } }) {}; return hasher.finalize().map { String(format: "%02x", $0) }.joined() }
+    nonisolated private static func computeFileHash(for url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        var hasher = SHA256()
+        while autoreleasepool(invoking: {
+            let chunk = handle.readData(ofLength: 65536)
+            if !chunk.isEmpty { hasher.update(data: chunk); return true }
+            return false
+        }) {}
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 }

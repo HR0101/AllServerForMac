@@ -11,7 +11,6 @@ enum NavigationSelection: Hashable {
     case album(UUID)
 }
 
-// システムモニター
 struct CPUDataPoint: Identifiable {
     let id = UUID()
     let time: Int
@@ -28,7 +27,6 @@ class SystemMonitor: ObservableObject {
     private var counter = 0
     
     init() {
-        // グラフの初期表示用（過去30秒分を0で埋める）
         for i in 0..<30 {
             cpuHistory.append(CPUDataPoint(time: i - 30, value: 0))
         }
@@ -138,8 +136,6 @@ struct ContentView: View {
 
     @State private var isShowingStorageManager = false
 
-    private let allVideosAlbumName = "ALL VIDEOS"
-
     init() {
         let manager = VideoDataManager()
         _dataManager = StateObject(wrappedValue: manager)
@@ -213,12 +209,12 @@ struct ContentView: View {
             }
             
             Section(header: Text("ライブラリ")) {
-                if let allVideos = dataManager.albums.first(where: { $0.name == "ALL VIDEOS" }) {
+                if let allVideos = dataManager.albums.first(where: { $0.name == VideoDataManager.allVideosAlbumName }) {
                     NavigationLink(value: NavigationSelection.album(allVideos.id)) {
                         Label("すべての動画", systemImage: "film")
                     }
                 }
-                if let allPhotos = dataManager.albums.first(where: { $0.name == "ALL PHOTOS" }) {
+                if let allPhotos = dataManager.albums.first(where: { $0.name == VideoDataManager.allPhotosAlbumName }) {
                     NavigationLink(value: NavigationSelection.album(allPhotos.id)) {
                         Label("すべての画像", systemImage: "photo.on.rectangle")
                     }
@@ -235,7 +231,7 @@ struct ContentView: View {
                     .buttonStyle(PlainButtonStyle())
                 }
             ) {
-                ForEach(dataManager.albums.filter { $0.name != "ALL VIDEOS" && $0.name != "ALL PHOTOS" }) { album in
+                ForEach(dataManager.albums.filter { $0.name != VideoDataManager.allVideosAlbumName && $0.name != VideoDataManager.allPhotosAlbumName }) { album in
                     NavigationLink(value: NavigationSelection.album(album.id)) {
                         Label(album.name, systemImage: album.type == .photo ? "photo.on.rectangle" : "folder")
                     }
@@ -273,7 +269,7 @@ struct ContentView: View {
                         newAlbumName = ""
                         newAlbumType = .video
                     }
-                    .disabled(newAlbumName.isEmpty || newAlbumName == "ALL VIDEOS" || newAlbumName == "ALL PHOTOS")
+                    .disabled(newAlbumName.isEmpty || newAlbumName == VideoDataManager.allVideosAlbumName || newAlbumName == VideoDataManager.allPhotosAlbumName)
                 }
             }
             .padding()
@@ -340,37 +336,36 @@ struct HomeView: View {
                     .font(.largeTitle)
                     .fontWeight(.bold)
                 
-                // サーバー設定・状態セクション
                 VStack(spacing: 15) {
                     HStack {
                         Text("サーバー状態:")
                         Text(webServerManager.statusMessage)
                             .fontWeight(.bold)
-                            .foregroundColor(webServerManager.statusMessage.contains("✅") ? .green : (webServerManager.statusMessage.contains("🛑") ? .secondary : .red))
+                            .foregroundColor(webServerManager.isRunning ? .green : (webServerManager.statusMessage.hasPrefix("🛑") ? .secondary : .red))
                     }
-                    
+
                     HStack {
                         Text("ポート番号:")
                         TextField("例: 8080", value: $webServerManager.targetPort, format: .number)
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .frame(width: 80)
                             .multilineTextAlignment(.center)
-                            .disabled(webServerManager.statusMessage.contains("✅"))
-                        
+                            .disabled(webServerManager.isRunning)
+
                         Button(action: {
                             webServerManager.targetPort = 8080
                         }) {
                             Image(systemName: "arrow.counterclockwise")
                         }
                         .buttonStyle(PlainButtonStyle())
-                        .disabled(webServerManager.statusMessage.contains("✅"))
+                        .disabled(webServerManager.isRunning)
                         .help("デフォルト(8080)に戻す")
                     }
-                    
+
                     VStack(alignment: .leading, spacing: 8) {
                         Toggle("自動停止タイマー", isOn: $webServerManager.autoStopEnabled)
-                            .disabled(webServerManager.statusMessage.contains("✅"))
-                        
+                            .disabled(webServerManager.isRunning)
+
                         if webServerManager.autoStopEnabled {
                             HStack {
                                 Text("停止までの時間:")
@@ -378,7 +373,7 @@ struct HomeView: View {
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                                     .frame(width: 60)
                                     .multilineTextAlignment(.trailing)
-                                    .disabled(webServerManager.statusMessage.contains("✅"))
+                                    .disabled(webServerManager.isRunning)
                                 Text("分")
                             }
                         }
@@ -387,7 +382,6 @@ struct HomeView: View {
                     .background(Color(NSColor.controlBackgroundColor))
                     .cornerRadius(8)
 
-                    // スケジュール起動/停止
                     VStack(alignment: .leading, spacing: 8) {
                         Toggle("毎日決まった時間に起動/停止", isOn: $webServerManager.scheduleEnabled)
 
@@ -422,17 +416,17 @@ struct HomeView: View {
                         }) {
                             Label("開始", systemImage: "play.fill")
                         }
-                        .disabled(webServerManager.statusMessage.contains("✅"))
-                        
+                        .disabled(webServerManager.isRunning)
+
                         Button(action: {
                             webServerManager.stopServer()
                         }) {
                             Label("停止", systemImage: "stop.fill")
                         }
-                        .disabled(!webServerManager.statusMessage.contains("✅"))
+                        .disabled(!webServerManager.isRunning)
                     }
-                    
-                    if webServerManager.statusMessage.contains("✅") {
+
+                    if webServerManager.isRunning {
                         VStack(spacing: 4) {
                             HStack {
                                 Text("稼働時間:")
@@ -459,7 +453,6 @@ struct HomeView: View {
                 .shadow(radius: 2)
                 .frame(maxWidth: 350)
                 
-                // セキュリティセクション
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Image(systemName: "lock.shield.fill").foregroundColor(.accentColor)
@@ -512,7 +505,6 @@ struct HomeView: View {
                     AccessLogView(webServerManager: webServerManager)
                 }
 
-                // システムリソース＆グラフ表示セクション
                 VStack(alignment: .leading, spacing: 10) {
                     Text("システムリソース")
                         .font(.headline)
@@ -540,7 +532,6 @@ struct HomeView: View {
                         Spacer()
                     }
                     
-                    // CPU使用率の折れ線（エリア）グラフ
                     Chart {
                         ForEach(systemMonitor.cpuHistory) { point in
                             LineMark(
@@ -575,7 +566,6 @@ struct HomeView: View {
                 .shadow(radius: 2)
                 .frame(maxWidth: 350)
                 
-                // ストレージ情報セクション
                 VStack(alignment: .leading, spacing: 10) {
                     Text("ストレージ情報").font(.headline)
                     HStack {
@@ -616,14 +606,20 @@ struct AlbumDetailView: View {
     @State private var mixedContentInfo = ""
     @State private var lastSelectedVideoID: UUID?
 
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16), count: 3)
-    }
+    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)]
 
     var body: some View {
         ZStack {
             let albumVideos = dataManager.videos.filter { album.videoIDs.contains($0.id) }
-            
+
+            // 背景タップで選択解除（カードタップ時は内側のジェスチャーが優先される）
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedVideoIDs.removeAll()
+                    lastSelectedVideoID = nil
+                }
+
             if albumVideos.isEmpty {
                 VStack(spacing: 20) {
                     Image(systemName: "arrow.down.doc")
@@ -639,7 +635,7 @@ struct AlbumDetailView: View {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(albumVideos) { video in
                             VStack {
-                                MacVideoThumbnailView(videoItem: video, storageURL: dataManager.videoStorageURL)
+                                MacVideoThumbnailView(videoItem: video, dataManager: dataManager)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 12)
                                             .stroke(selectedVideoIDs.contains(video.id) ? Color.accentColor : Color.clear, lineWidth: 3)
@@ -647,20 +643,15 @@ struct AlbumDetailView: View {
                                     .onTapGesture(count: 2) {
                                         openFile(video)
                                     }
-                                    .simultaneousGesture(
-                                        TapGesture(count: 1).onEnded {
-                                            if let event = NSApp.currentEvent {
-                                                handleGridSelection(for: video, in: albumVideos, flags: event.modifierFlags)
-                                            } else {
-                                                handleGridSelection(for: video, in: albumVideos, flags: [])
-                                            }
-                                        }
-                                    )
+                                    .onTapGesture(count: 1) {
+                                        let flags = NSApp.currentEvent?.modifierFlags ?? []
+                                        handleGridSelection(for: video, in: albumVideos, flags: flags)
+                                    }
                                     .contextMenu {
                                         Button("開く") { openFile(video) }
                                         Button("Finderで表示") { revealInFinder(video) }
                                         Divider()
-                                        if album.name != "ALL VIDEOS" && album.name != "ALL PHOTOS" {
+                                        if album.name != VideoDataManager.allVideosAlbumName && album.name != VideoDataManager.allPhotosAlbumName {
                                             Button("アルバムから外す") {
                                                 dataManager.removeVideosFromAlbum(videoIDs: [video.id], albumID: album.id)
                                             }
@@ -669,15 +660,15 @@ struct AlbumDetailView: View {
                                             dataManager.deleteVideos(videoIDs: [video.id])
                                         }
                                     }
-                                
+
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(video.originalFilename)
                                         .font(.caption)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
-                                    
+
                                     HStack {
-                                        Text(itemFormatter.string(from: video.importDate))
+                                        Text(AlbumDetailView.itemFormatter.string(from: video.importDate))
                                         Spacer()
                                         if video.mediaType == .video {
                                             Text(formatDuration(video.duration))
@@ -693,7 +684,7 @@ struct AlbumDetailView: View {
                     .padding()
                 }
             }
-            
+
             if isTargeted {
                 Color.accentColor.opacity(0.2)
                     .edgesIgnoringSafeArea(.all)
@@ -717,10 +708,6 @@ struct AlbumDetailView: View {
                         .foregroundColor(.secondary)
                 }
             }
-        }
-        .onTapGesture {
-            selectedVideoIDs.removeAll()
-            lastSelectedVideoID = nil
         }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             return handleDrop(providers: providers)
@@ -796,7 +783,13 @@ struct AlbumDetailView: View {
         }
     }
     
-    private var itemFormatter: DateFormatter { let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .none; return f }
+    private static let itemFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .none
+        return f
+    }()
+
     private func formatDuration(_ totalSeconds: TimeInterval) -> String {
         let secondsInt = Int(totalSeconds)
         return String(format: "%02d:%02d", secondsInt / 60, secondsInt % 60)
@@ -808,9 +801,11 @@ struct AccessLogView: View {
     @ObservedObject var webServerManager: WebServerManager
     @Environment(\.dismiss) var dismiss
 
-    private var timeFormatter: DateFormatter {
-        let f = DateFormatter(); f.dateFormat = "MM/dd HH:mm:ss"; return f
-    }
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MM/dd HH:mm:ss"
+        return f
+    }()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -832,7 +827,7 @@ struct AccessLogView: View {
             } else {
                 Table(webServerManager.accessLogs) {
                     TableColumn("時刻") { entry in
-                        Text(timeFormatter.string(from: entry.date)).font(.system(.caption, design: .monospaced))
+                        Text(AccessLogView.timeFormatter.string(from: entry.date)).font(.system(.caption, design: .monospaced))
                     }
                     TableColumn("IP") { entry in
                         Text(entry.ip).font(.system(.caption, design: .monospaced))

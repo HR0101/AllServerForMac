@@ -13,13 +13,12 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private weak var dataManager: VideoDataManager?
     
     @Published var statusMessage: String = "停止中"
+    var isRunning: Bool { serverStartTime != nil }
     
-    // 稼働タイマー用のプロパティ
     @Published var serverStartTime: Date?
     @Published var uptimeString: String = "00:00:00"
     private var timerCancellable: AnyCancellable?
     
-    // ★ 自動停止機能用のプロパティを追加
     @Published var autoStopEnabled: Bool {
         didSet {
             UserDefaults.standard.set(autoStopEnabled, forKey: "autoStopEnabled")
@@ -31,7 +30,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         }
     }
 
-    // ★ スケジュール起動/停止（毎日決まった時刻に起動・終了）
     @Published var scheduleEnabled: Bool = false {
         didSet {
             UserDefaults.standard.set(scheduleEnabled, forKey: "scheduleEnabled")
@@ -53,7 +51,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         }
     }
 
-    // ★ セキュリティ：PIN認証
     @Published var authEnabled: Bool = true {
         didSet {
             authEnabledCache = authEnabled
@@ -70,7 +67,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private var authEnabledCache = true
     private var authPINCache = ""
 
-    // ★ アクセスログ（新しいものが先頭）
     @Published var accessLogs: [AccessLogEntry] = []
     private let maxAccessLogs = 200
 
@@ -84,7 +80,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         let savedInterval = UserDefaults.standard.integer(forKey: "autoStopIntervalMinutes")
         self.autoStopIntervalMinutes = savedInterval == 0 ? 60 : savedInterval
 
-        // スケジュール設定の読み込み（既定: 起動 09:00 / 停止 23:00）
         self.scheduleEnabled = UserDefaults.standard.bool(forKey: "scheduleEnabled")
         let cal = Calendar.current
         self.scheduleStartTime = (UserDefaults.standard.object(forKey: "scheduleStartTime") as? Date)
@@ -92,7 +87,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         self.scheduleStopTime = (UserDefaults.standard.object(forKey: "scheduleStopTime") as? Date)
             ?? cal.date(bySettingHour: 23, minute: 0, second: 0, of: Date()) ?? Date()
 
-        // 認証設定の読み込み（初回はPINを自動生成）
         let authEnabledValue = UserDefaults.standard.object(forKey: "authEnabled") as? Bool ?? true
         self.authEnabled = authEnabledValue
         let savedPIN = UserDefaults.standard.string(forKey: "authPIN") ?? ""
@@ -120,7 +114,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             object: nil
         )
 
-        // スケジュール起動: 起動時刻〜停止時刻の時間帯にアプリが立ち上がったら自動でサーバーを開始する
         if scheduleEnabled && isWithinScheduleWindow(Date()) {
             startServer()
         }
@@ -336,7 +329,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     let currentMediaIndex = 0;
                     let selectedQuality = "1080p";
 
-                    // --- PIN認証 ---
                     function showLogin() {
                         document.getElementById('login-modal').style.display = 'flex';
                         setTimeout(() => document.getElementById('pin-input').focus(), 100);
@@ -392,7 +384,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
                             albums.forEach(album => {
                                 const cardHtml = `
-                                    <div class="card" onclick="loadVideos('${album.id}', '${album.name}')">
+                                    <div class="card" onclick="loadVideos(${JSON.stringify(album.id)}, ${JSON.stringify(album.name)})">
                                         <div class="thumb-container">
                                             <div class="icon-center">${album.type === 'photo' ? '🖼️' : '📁'}</div>
                                             <div class="badge-count">${album.videoCount}</div>
@@ -446,10 +438,8 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         const sortOrder = document.getElementById('sort-select').value;
                         const grid = document.getElementById('videos-grid');
                         
-                        // フィルタリング
                         currentFilteredVideos = currentRawVideos.filter(v => v.filename.toLowerCase().includes(searchText));
-                        
-                        // ソート
+
                         currentFilteredVideos.sort((a, b) => {
                             if (sortOrder === 'durationDesc') {
                                 return (b.duration || 0) - (a.duration || 0);
@@ -496,7 +486,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         grid.innerHTML = html;
                     }
 
-                    // --- プレーヤー機能 ---
                     function openMedia(index) {
                         if (index < 0 || index >= currentFilteredVideos.length) return;
                         currentMediaIndex = index;
@@ -506,7 +495,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         document.getElementById('player-filename').innerText = media.filename;
                         const container = document.getElementById('media-container');
                         
-                        // 既存のメディア要素を削除
                         const oldMedia = document.getElementById('main-media');
                         if (oldMedia) oldMedia.remove();
                         
@@ -515,7 +503,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             const img = document.createElement('img');
                             img.id = 'main-media';
                             img.className = 'photo-viewer';
-                            img.src = `/video/${media.id}`; // 画像の実体URL
+                            img.src = `/video/${media.id}`;
                             container.insertBefore(img, container.children[1]);
                         } else {
                             document.getElementById('quality-select').style.display = 'block';
@@ -525,13 +513,11 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             video.playsInline = true;
                             video.src = `/video/${media.id}?q=${selectedQuality}`;
                             
-                            // レジューム再生（LocalStorageから読み込み）
                             const savedTime = localStorage.getItem('resume_' + media.id);
                             if (savedTime) {
                                 video.currentTime = parseFloat(savedTime);
                             }
-                            
-                            // 再生位置の保存
+
                             video.addEventListener('timeupdate', () => {
                                 if(video.currentTime > 2) {
                                     localStorage.setItem('resume_' + media.id, video.currentTime);
@@ -571,16 +557,13 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     function prevMedia() { openMedia(currentMediaIndex - 1); }
                     function nextMedia() { openMedia(currentMediaIndex + 1); }
 
-                    // --- YouTubeライクなキーボードナビゲーション ---
                     document.addEventListener('keydown', (e) => {
                         if (document.getElementById('player-modal').style.display === 'flex') {
                             const media = document.getElementById('main-media');
                             const isVideo = media && media.tagName === 'VIDEO';
 
-                            // 検索ボックスなどにフォーカスがある場合はショートカットを無効化
                             if (document.activeElement.tagName === 'INPUT') return;
 
-                            // Escキーで閉じる
                             if (e.key === 'Escape') {
                                 closePlayer();
                                 return;
@@ -605,17 +588,17 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                                     case 'arrowleft':
                                         e.preventDefault();
                                         if (e.shiftKey) {
-                                            prevMedia(); // Shift + ← で前の動画
+                                            prevMedia();
                                         } else {
-                                            media.currentTime = Math.max(0, media.currentTime - 5); // ← で10秒戻る
+                                            media.currentTime = Math.max(0, media.currentTime - 5);
                                         }
                                         break;
                                     case 'arrowright':
                                         e.preventDefault();
                                         if (e.shiftKey) {
-                                            nextMedia(); // Shift + → で次の動画
+                                            nextMedia();
                                         } else {
-                                            media.currentTime = Math.min(media.duration, media.currentTime + 5); // → で10秒進む
+                                            media.currentTime = Math.min(media.duration, media.currentTime + 5);
                                         }
                                         break;
                                     case 'arrowup':
@@ -648,14 +631,12 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                                         break;
                                 }
                             } else {
-                                // 写真の場合は単純に左右キーで前後のメディアへ移動
                                 if (e.key === 'ArrowLeft') prevMedia();
                                 if (e.key === 'ArrowRight') nextMedia();
                             }
                         }
                     });
 
-                    // 初期ロード
                     showAlbumsView();
                 </script>
             </body>
@@ -710,7 +691,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             } catch { return .internalServerError }
         }
         
-        // iOSアプリから稼働時間を取得するためのAPI
         server["/server/status"] = protected { [weak self] _ -> HttpResponse in
             var uptime = 0
             DispatchQueue.main.sync {
@@ -725,11 +705,10 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return .internalServerError
         }
 
-        // iOSアプリからサーバーを遠隔で完全終了させるためのAPI
         server.post["/server/shutdown"] = protected { [weak self] _ -> HttpResponse in
             DispatchQueue.main.async {
                 self?.stopServerInternal()
-                NSApplication.shared.terminate(nil) // Macアプリ自体を完全に終了させる
+                NSApplication.shared.terminate(nil)
             }
             return .ok(.text("Shutdown initiated"))
         }
@@ -795,7 +774,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 if let aid = UUID(uuidString: albumIdStr) {
                     targetAlbumID = aid
                 } else {
-                    guard let allVideos = dataManager.albums.first(where: { $0.name == "ALL VIDEOS" }) else {
+                    guard let allVideos = dataManager.albums.first(where: { $0.name == VideoDataManager.allVideosAlbumName }) else {
                         return .internalServerError
                     }
                     targetAlbumID = allVideos.id
@@ -844,7 +823,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return self.serveFile(at: url, request: request)
         }
 
-        // ★ 低画質プロキシをオンデマンド生成し、進捗を返す (state: "ready" / "generating")
         server["/video/:id/prepare"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let idStr = request.params[":id"] else { return .notFound }
@@ -868,7 +846,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return .internalServerError
         }
 
-        // ★ 視聴終了時にオンデマンドプロキシを削除する (常に1本分のみ保持するため全削除)
         server.delete["/video/:id/proxy"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             DispatchQueue.main.async { dataManager.deleteAllProxies() }
@@ -944,7 +921,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     self.netService?.delegate = self
                     self.netService?.publish()
                     
-                    // 稼働時間の計測タイマーと自動停止チェックを開始
                     self.serverStartTime = Date()
                     self.startUptimeTimer()
                 }
@@ -956,24 +932,21 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         }
     }
 
-    // ★ 稼働時間タイマー（自動停止チェック付き）。起動時・再開時の両方から呼ぶ
     private func startUptimeTimer() {
         self.timerCancellable?.cancel()
         self.timerCancellable = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect().sink { [weak self] _ in
             guard let self = self, let start = self.serverStartTime else { return }
             let diff = Int(Date().timeIntervalSince(start))
 
-            // ★ 自動停止の判定ロジック
             if self.autoStopEnabled {
                 let limitSeconds = self.autoStopIntervalMinutes * 60
                 if diff >= limitSeconds {
                     self.stopServerInternal()
-                    NSApplication.shared.terminate(nil) // アプリ自体を終了
+                    NSApplication.shared.terminate(nil)
                     return
                 }
             }
 
-            // ★ スケジュール停止の判定ロジック（停止時刻になったら完全終了）
             if self.scheduleEnabled {
                 let now = Date()
                 let cal = Calendar.current
@@ -981,7 +954,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 let cur = cal.dateComponents([.hour, .minute], from: now)
                 if cur.hour == stop.hour && cur.minute == stop.minute {
                     self.stopServerInternal()
-                    NSApplication.shared.terminate(nil) // アプリ自体を終了
+                    NSApplication.shared.terminate(nil)
                     return
                 }
             }
@@ -999,7 +972,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         netService?.stop(); netService = nil
         server.stop()
         
-        // タイマーの停止処理
         DispatchQueue.main.async {
             self.serverStartTime = nil
             self.timerCancellable?.cancel()
@@ -1167,8 +1139,20 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     "Content-Range": "bytes \(start)-\(end)/\(size)", "Accept-Ranges": "bytes"
                 ], { writer in try? writer.write(data) })
             } else {
-                let data = try Data(contentsOf: url)
-                return .ok(.data(data, contentType: mime))
+                let file = try FileHandle(forReadingFrom: url)
+                return .raw(200, "OK", [
+                    "Content-Type": mime,
+                    "Content-Length": String(size),
+                    "Accept-Ranges": "bytes"
+                ], { writer in
+                    defer { file.closeFile() }
+                    let chunkSize = 512 * 1024
+                    while true {
+                        let chunk = file.readData(ofLength: chunkSize)
+                        if chunk.isEmpty { break }
+                        try? writer.write(chunk)
+                    }
+                })
             }
         } catch { return .internalServerError }
     }
@@ -1265,29 +1249,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
         }
         return nil
-    }
-    
-    private func isImagePredominantlyBlack(image: CGImage, threshold: CGFloat = 0.1) -> Bool {
-        let size = 20
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        var rawData = [UInt8](repeating: 0, count: size * size * 4)
-        
-        guard let context = CGContext(data: &rawData, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-        
-        context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(size), height: CGFloat(size)))
-        
-        var darkPixelCount = 0
-        let totalPixels = size * size
-        
-        for i in 0..<totalPixels {
-            let offset = i * 4
-            let r = CGFloat(rawData[offset]) / 255.0
-            let g = CGFloat(rawData[offset+1]) / 255.0
-            let b = CGFloat(rawData[offset+2]) / 255.0
-            let luminance = 0.299 * r + 0.587 * g + 0.114 * b
-            if luminance < threshold { darkPixelCount += 1 }
-        }
-        return Double(darkPixelCount) / Double(totalPixels) > 0.8
     }
     
     private func cropAndResize(nsImage: NSImage, targetSize: CGSize, compression: Double) -> Data? {
