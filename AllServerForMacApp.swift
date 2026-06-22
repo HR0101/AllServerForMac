@@ -5,7 +5,7 @@ struct AllServerForMacApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 800, minHeight: 600)
+                .frame(minWidth: 980, minHeight: 680)
         }
     }
 }

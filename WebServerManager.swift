@@ -4,6 +4,7 @@ import AVFoundation
 import AppKit
 import Darwin
 import Combine
+import MediaServerKit
 
 
 class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
@@ -13,6 +14,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     private weak var dataManager: VideoDataManager?
     
     @Published var statusMessage: String = "停止中"
+    @Published var serverURL: String?
     var isRunning: Bool { serverStartTime != nil }
     
     @Published var serverStartTime: Date?
@@ -69,6 +71,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
     @Published var accessLogs: [AccessLogEntry] = []
     private let maxAccessLogs = 200
+
+    /// アップロード受け入れの上限（ディスク枯渇の防止用）。20GB。
+    private let maxUploadBytes = 21_474_836_480
 
     init(dataManager: VideoDataManager) {
         self.dataManager = dataManager
@@ -141,10 +146,44 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return nil
     }
 
+    // MARK: - 総当たり攻撃対策
+    // IP ごとに連続失敗回数を記録し、一定回数を超えたら指数バックオフでロックアウトする。
+    // サーバーのワーカースレッドから触られるため NSLock で保護する。
+    private let authLock = NSLock()
+    private var authFailures: [String: (count: Int, lockedUntil: Date?)] = [:]
+    private let maxAttemptsBeforeLockout = 5
+
+    private func isLockedOut(_ ip: String) -> Bool {
+        authLock.lock(); defer { authLock.unlock() }
+        if let until = authFailures[ip]?.lockedUntil, until > Date() { return true }
+        return false
+    }
+
+    /// PIN を実際に提示したリクエストの成否のみを記録する（PIN 未提示の初回アクセスは数えない）
+    private func recordAuthResult(ip: String, success: Bool) {
+        authLock.lock(); defer { authLock.unlock() }
+        if success {
+            authFailures[ip] = nil
+        } else {
+            var entry = authFailures[ip] ?? (count: 0, lockedUntil: nil)
+            entry.count += 1
+            // 5回目以降は失敗のたびに 30s → 60s → 120s … 最大 1 時間ロック
+            if let delay = PINSecurity.lockoutDelay(failCount: entry.count, maxAttempts: maxAttemptsBeforeLockout) {
+                entry.lockedUntil = Date().addingTimeInterval(delay)
+            }
+            authFailures[ip] = entry
+        }
+    }
+
     private func isAuthorized(_ request: HttpRequest) -> Bool {
         if !authEnabledCache { return true }
+        let ip = request.address ?? "unknown"
+        if isLockedOut(ip) { return false }
+        // PIN が無いリクエスト（ログイン前の初回アクセス等）は失敗としてカウントしない
         guard let pin = extractPIN(from: request) else { return false }
-        return pin == authPINCache
+        let ok = PINSecurity.constantTimeEquals(pin, authPINCache)
+        recordAuthResult(ip: ip, success: ok)
+        return ok
     }
 
     private func logAccess(_ request: HttpRequest, authorized: Bool) {
@@ -325,9 +364,17 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 <script>
                     let currentRawVideos = [];
                     let currentFilteredVideos = [];
+                    let currentAlbums = [];
                     let currentAlbumName = "";
                     let currentMediaIndex = 0;
                     let selectedQuality = "1080p";
+
+                    // XSS対策: innerHTML に差し込む前にユーザー入力（ファイル名・アルバム名）をエスケープする
+                    function esc(s) {
+                        return String(s).replace(/[&<>"']/g, function(c) {
+                            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+                        });
+                    }
 
                     function showLogin() {
                         document.getElementById('login-modal').style.display = 'flex';
@@ -375,6 +422,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             }
                             document.getElementById('login-modal').style.display = 'none';
                             const albums = await res.json();
+                            currentAlbums = albums;
                             
                             let libHtml = '<div class="section-title">ライブラリ</div><div class="grid">';
                             let vidHtml = '<div class="section-title">動画アルバム</div><div class="grid">';
@@ -382,14 +430,14 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             
                             let hasVid = false, hasPho = false;
 
-                            albums.forEach(album => {
+                            albums.forEach((album, index) => {
                                 const cardHtml = `
-                                    <div class="card" onclick="loadVideos(${JSON.stringify(album.id)}, ${JSON.stringify(album.name)})">
+                                    <div class="card" onclick="loadVideos(${index})">
                                         <div class="thumb-container">
                                             <div class="icon-center">${album.type === 'photo' ? '🖼️' : '📁'}</div>
                                             <div class="badge-count">${album.videoCount}</div>
                                         </div>
-                                        <div class="title" style="color: ${album.type === 'photo' ? '#ff9f0a' : '#fff'}">${album.name}</div>
+                                        <div class="title" style="color: ${album.type === 'photo' ? '#ff9f0a' : '#fff'}">${esc(album.name)}</div>
                                     </div>
                                 `;
                                 if (album.name === "ALL VIDEOS" || album.name === "ALL PHOTOS" || album.type === "mixed") {
@@ -412,19 +460,22 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         }
                     }
 
-                    async function loadVideos(albumId, albumName) {
-                        currentAlbumName = albumName;
+                    async function loadVideos(albumIndex) {
+                        const album = currentAlbums[albumIndex];
+                        if (!album) return;
+                        const albumId = album.id;
+                        currentAlbumName = album.name;
                         document.getElementById('albums-view').style.display = 'none';
                         document.getElementById('videos-view').style.display = 'block';
                         document.getElementById('back-btn').style.display = 'block';
-                        document.getElementById('page-title').innerText = albumName;
+                        document.getElementById('page-title').innerText = album.name;
                         document.getElementById('search-input').value = "";
-                        
+
                         const grid = document.getElementById('videos-grid');
                         grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#888;">読み込み中...</p>';
-                        
+
                         try {
-                            const res = await fetch(`/albums/${albumId}/videos`);
+                            const res = await fetch(`/albums/${encodeURIComponent(albumId)}/videos`);
                             if (res.status === 401) { showLogin(); return; }
                             currentRawVideos = await res.json();
                             renderVideos();
@@ -475,11 +526,11 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             html += `
                                 <div class="card" onclick="openMedia(${index})">
                                     <div class="thumb-container">
-                                        <img class="thumb" src="/thumbnail/${video.id}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\'><rect width=\\'100%\\' height=\\'100%\\' fill=\\'%23111\\'/></svg>'">
+                                        <img class="thumb" src="/thumbnail/${encodeURIComponent(video.id)}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\'><rect width=\\'100%\\' height=\\'100%\\' fill=\\'%23111\\'/></svg>'">
                                         ${durBadge}
                                         <div class="badge-type">${typeIcon}</div>
                                     </div>
-                                    <div class="title">${video.filename}</div>
+                                    <div class="title">${esc(video.filename)}</div>
                                 </div>
                             `;
                         });
@@ -503,7 +554,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             const img = document.createElement('img');
                             img.id = 'main-media';
                             img.className = 'photo-viewer';
-                            img.src = `/video/${media.id}`;
+                            img.src = `/video/${encodeURIComponent(media.id)}`;
                             container.insertBefore(img, container.children[1]);
                         } else {
                             document.getElementById('quality-select').style.display = 'block';
@@ -511,7 +562,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             video.id = 'main-media';
                             video.controls = true;
                             video.playsInline = true;
-                            video.src = `/video/${media.id}?q=${selectedQuality}`;
+                            video.src = `/video/${encodeURIComponent(media.id)}?q=${selectedQuality}`;
                             
                             const savedTime = localStorage.getItem('resume_' + media.id);
                             if (savedTime) {
@@ -539,7 +590,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             const currentTime = video.currentTime;
                             const isPaused = video.paused;
                             
-                            video.src = `/video/${media.id}?q=${q}`;
+                            video.src = `/video/${encodeURIComponent(media.id)}?q=${q}`;
                             video.currentTime = currentTime;
                             if (!isPaused) video.play();
                         }
@@ -759,13 +810,22 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         server.post["/upload"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             
-            let encodedFilename = request.headers["x-filename"] ?? "uploaded_media"
-            let filename = encodedFilename.removingPercentEncoding ?? encodedFilename
+            // サイズ上限の確認（Swifter はボディを全展開済みなので、ここではディスク書き込みを防ぐ）
+            guard request.body.count <= self.maxUploadBytes else {
+                return .raw(413, "Payload Too Large", ["Content-Type": "text/plain"], { try? $0.write(Array("File too large".utf8)) })
+            }
+
+            // X-Filename をサニタイズ（パストラバーサル・不正拡張子を排除）
+            let encodedFilename = request.headers["x-filename"] ?? ""
+            let rawFilename = encodedFilename.removingPercentEncoding ?? encodedFilename
+            guard let filename = UploadFilename.sanitize(rawFilename) else {
+                return .badRequest(.text("Invalid filename"))
+            }
             let albumIdStr = request.headers["x-album-id"] ?? ""
-            
+
             let tempDir = FileManager.default.temporaryDirectory
             let tempURL = tempDir.appendingPathComponent(UUID().uuidString + "_" + filename)
-            
+
             let data = Data(request.body)
             do {
                 try data.write(to: tempURL)
@@ -976,6 +1036,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             self.serverStartTime = nil
             self.timerCancellable?.cancel()
             self.uptimeString = "00:00:00"
+            self.serverURL = nil
             self.statusMessage = "🛑 サーバー停止"
         }
     }
@@ -1112,6 +1173,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
     func netServiceDidPublish(_ sender: NetService) {
         let ipAddress = getIPAddress() ?? "N/A"
+        self.serverURL = "http://\(ipAddress):\(sender.port)"
         self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
     }
 
@@ -1127,7 +1189,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             guard let size = attr[.size] as? UInt64 else { return .internalServerError }
             let mime = MimeType.forPath(url.path)
             
-            if let rangeHeader = request.headers["range"], let range = parseRangeHeader(rangeHeader, totalSize: size) {
+            if let rangeHeader = request.headers["range"], let range = RangeHeader.parse(rangeHeader, totalSize: size) {
                 let (start, end) = range
                 let length = end - start + 1
                 let file = try FileHandle(forReadingFrom: url)
@@ -1179,14 +1241,6 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return address
     }
     
-    private func parseRangeHeader(_ header: String, totalSize: UInt64) -> (UInt64, UInt64)? {
-        guard header.hasPrefix("bytes="), totalSize > 0 else { return nil }
-        let components = header.dropFirst(6).split(separator: "-")
-        guard let startStr = components.first, let start = UInt64(startStr) else { return nil }
-        let end = (components.count > 1 && !components[1].isEmpty) ? min(UInt64(components[1]) ?? 0, totalSize - 1) : totalSize - 1
-        return start <= end ? (start, end) : nil
-    }
-
     private enum ThumbQuality { case high, low }
     
     private func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality) async -> Data? {
@@ -1272,10 +1326,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     }
 }
 
-// MARK: - Shared Data Models & MimeType
-struct RemoteAlbumInfo: Codable { let id: String; let name: String; let videoCount: Int; let type: String? }
+// MARK: - Mac 専用モデル & MimeType
+// RemoteAlbumInfo / RemoteVideoInfo は MediaServerKit へ集約（iOS と共有）
 struct AccessLogEntry: Identifiable, Hashable { let id = UUID(); let date: Date; let ip: String; let method: String; let path: String; let authorized: Bool }
-struct RemoteVideoInfo: Codable { let id: String; let filename: String; let duration: TimeInterval; let importDate: Date; let creationDate: Date?; let mediaType: String? }
 private struct MimeType {
     static func forPath(_ path: String) -> String {
         let ext = (path as NSString).pathExtension.lowercased()

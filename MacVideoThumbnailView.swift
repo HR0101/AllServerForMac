@@ -8,38 +8,39 @@ struct MacVideoThumbnailView: View {
     @State private var thumbnail: NSImage?
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Color.black
-
-            if let thumbnail = thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                Rectangle()
-                    .fill(Color.black.opacity(0.2))
-                    .overlay(ProgressView())
-            }
-
-            if videoItem.mediaType == .video {
-                Text(videoItem.originalFilename)
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let thumbnail = thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                        .transition(.opacity)
+                } else {
+                    ZStack {
                         LinearGradient(
-                            gradient: Gradient(colors: [.black.opacity(0.6), .clear]),
-                            startPoint: .bottom, endPoint: .top
+                            colors: [Color.primary.opacity(0.08), Color.primary.opacity(0.16)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
                         )
-                    )
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
             }
-        }
-        .clipped()
-        .aspectRatio(1, contentMode: .fit)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
-        .task { await generateThumbnail() }
+            .overlay {
+                if videoItem.mediaType == .video && thumbnail != nil {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .background(Circle().fill(.black.opacity(0.45)))
+                        .overlay(Circle().strokeBorder(.white.opacity(0.55), lineWidth: 1))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
+            .animation(.easeOut(duration: 0.25), value: thumbnail != nil)
+            .task { await generateThumbnail() }
     }
 
     private func generateThumbnail() async {
@@ -74,7 +75,7 @@ struct MacVideoThumbnailView: View {
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return }
-        let nsImage = NSImage(cgImage: cgImage, size: .zero)
+        let nsImage = squareCropped(NSImage(cgImage: cgImage, size: .zero))
         saveToCache(nsImage, url: cacheURL)
         thumbnail = nsImage
     }
@@ -106,10 +107,27 @@ struct MacVideoThumbnailView: View {
         }
 
         if let cgImage = bestImage ?? fallbackImage {
-            let nsImage = NSImage(cgImage: cgImage, size: .zero)
+            let nsImage = squareCropped(NSImage(cgImage: cgImage, size: .zero))
             saveToCache(nsImage, url: cacheURL)
             thumbnail = nsImage
         }
+    }
+
+    /// 中央を正方形に切り抜いて指定サイズへリサイズする。
+    /// Web サーバー（WebServerManager.cropAndResize）と共有のキャッシュへ書き込むため、
+    /// クライアントに配信される .jpg が常に正方形になるよう揃える。
+    private func squareCropped(_ nsImage: NSImage, side: CGFloat = 400) -> NSImage {
+        let targetSize = CGSize(width: side, height: side)
+        let newImage = NSImage(size: targetSize)
+        newImage.lockFocus()
+        let originalSize = nsImage.size
+        let dim = min(originalSize.width, originalSize.height)
+        let x = (originalSize.width - dim) / 2
+        let y = (originalSize.height - dim) / 2
+        let cropRect = CGRect(x: x, y: y, width: dim, height: dim)
+        nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: cropRect, operation: .copy, fraction: 1.0)
+        newImage.unlockFocus()
+        return newImage
     }
 
     private func saveToCache(_ image: NSImage, url: URL) {
