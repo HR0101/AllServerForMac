@@ -1038,13 +1038,21 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 if let album = dataManager.albums.first(where: { $0.id == albumID }) {
                     found = true
                     let videoItems = dataManager.videos.filter { album.videoIDs.contains($0.id) && !$0.isInTrash }
-                    videoInfos = videoItems.map {
-                        RemoteVideoInfo(id: $0.id.uuidString,
-                                        filename: $0.originalFilename,
-                                        duration: $0.duration,
-                                        importDate: $0.importDate,
-                                        creationDate: $0.creationDate,
-                                        mediaType: $0.mediaType.rawValue)
+                    videoInfos = videoItems.map { video in
+                        let customAlbum = dataManager.albums.first { a in
+                            a.name != VideoDataManager.allVideosAlbumName &&
+                            a.name != VideoDataManager.allPhotosAlbumName &&
+                            a.videoIDs.contains(video.id)
+                        }
+                        return RemoteVideoInfo(
+                            id: video.id.uuidString,
+                            filename: video.originalFilename,
+                            duration: video.duration,
+                            importDate: video.importDate,
+                            creationDate: video.creationDate,
+                            mediaType: video.mediaType.rawValue,
+                            parentAlbumID: customAlbum?.id.uuidString
+                        )
                     }
                 }
             }
@@ -1253,7 +1261,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
             
-            let thumbnailURL = dataManager.thumbnailStorageURL.appendingPathComponent(videoIDString).appendingPathExtension("jpg")
+            let isOriginal = request.queryParams.contains(where: { $0.0 == "original" && $0.1 == "true" })
+            let fileName = isOriginal ? "\(videoIDString)_original.jpg" : "\(videoIDString).jpg"
+            let thumbnailURL = dataManager.thumbnailStorageURL.appendingPathComponent(fileName)
 
             if let cachedData = try? Data(contentsOf: thumbnailURL) {
                 return .ok(.data(cachedData, contentType: "image/jpeg"))
@@ -1273,7 +1283,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             var generatedData: Data? = nil
 
             Task {
-                if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high) {
+                if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high, isOriginal: isOriginal) {
                     try? data.write(to: thumbnailURL)
                     generatedData = data
                 }
@@ -1597,18 +1607,18 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     
     private enum ThumbQuality { case high, low }
     
-    private func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality) async -> Data? {
+    private func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false) async -> Data? {
         let size: CGSize = quality == .high ? CGSize(width: 400, height: 400) : CGSize(width: 50, height: 50)
         let compression = quality == .high ? 0.8 : 0.1
         
         if type == .photo {
-            return generateImageThumbnail(url: url, targetSize: size, compression: compression)
+            return generateImageThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
         } else {
-            return await generateVideoThumbnail(url: url, targetSize: size, compression: compression)
+            return await generateVideoThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
         }
     }
     
-    private func generateImageThumbnail(url: URL, targetSize: CGSize, compression: Double) -> Data? {
+    private func generateImageThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool) -> Data? {
         guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: max(targetSize.width, targetSize.height),
@@ -1617,10 +1627,10 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         ]
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return nil }
         let nsImage = NSImage(cgImage: cgImage, size: .zero)
-        return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
+        return isOriginal ? resizeToFit(nsImage: nsImage, maxSize: targetSize, compression: compression) : cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
     }
 
-    private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double) async -> Data? {
+    private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool) async -> Data? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -1654,7 +1664,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         
         if let cgImage = bestCGImage ?? fallbackImage {
             let nsImage = NSImage(cgImage: cgImage, size: .zero)
-            return cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
+            return isOriginal ? resizeToFit(nsImage: nsImage, maxSize: targetSize, compression: compression) : cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
         }
         return nil
     }
@@ -1668,6 +1678,20 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         let y = (originalSize.height - dim) / 2
         let cropRect = CGRect(x: x, y: y, width: dim, height: dim)
         nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: cropRect, operation: .copy, fraction: 1.0)
+        newImage.unlockFocus()
+        
+        guard let tiff = newImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: compression])
+    }
+    
+    private func resizeToFit(nsImage: NSImage, maxSize: CGSize, compression: Double) -> Data? {
+        let originalSize = nsImage.size
+        let ratio = min(maxSize.width / originalSize.width, maxSize.height / originalSize.height)
+        let targetSize = CGSize(width: originalSize.width * ratio, height: originalSize.height * ratio)
+        
+        let newImage = NSImage(size: targetSize)
+        newImage.lockFocus()
+        nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: CGRect(origin: .zero, size: originalSize), operation: .copy, fraction: 1.0)
         newImage.unlockFocus()
         
         guard let tiff = newImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
