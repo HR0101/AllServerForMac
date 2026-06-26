@@ -1262,7 +1262,15 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
             
             let isOriginal = request.queryParams.contains(where: { $0.0 == "original" && $0.1 == "true" })
-            let fileName = isOriginal ? "\(videoIDString)_original.jpg" : "\(videoIDString).jpg"
+            let timeString = request.queryParams.first(where: { $0.0 == "time" })?.1
+            let timeParam = timeString.flatMap { Double($0) }
+            
+            let fileName: String
+            if let t = timeParam {
+                fileName = "\(videoIDString)_t\(Int(t)).jpg"
+            } else {
+                fileName = isOriginal ? "\(videoIDString)_original.jpg" : "\(videoIDString).jpg"
+            }
             let thumbnailURL = dataManager.thumbnailStorageURL.appendingPathComponent(fileName)
 
             if let cachedData = try? Data(contentsOf: thumbnailURL) {
@@ -1283,7 +1291,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             var generatedData: Data? = nil
 
             Task {
-                if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high, isOriginal: isOriginal) {
+                if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high, isOriginal: isOriginal, requestedTime: timeParam) {
                     try? data.write(to: thumbnailURL)
                     generatedData = data
                 }
@@ -1607,14 +1615,14 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     
     private enum ThumbQuality { case high, low }
     
-    private func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false) async -> Data? {
+    private func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false, requestedTime: Double? = nil) async -> Data? {
         let size: CGSize = quality == .high ? CGSize(width: 400, height: 400) : CGSize(width: 50, height: 50)
         let compression = quality == .high ? 0.8 : 0.1
         
         if type == .photo {
             return generateImageThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
         } else {
-            return await generateVideoThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
+            return await generateVideoThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal, requestedTime: requestedTime)
         }
     }
     
@@ -1630,7 +1638,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return isOriginal ? resizeToFit(nsImage: nsImage, maxSize: targetSize, compression: compression) : cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
     }
 
-    private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool) async -> Data? {
+    private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool, requestedTime: Double?) async -> Data? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -1639,25 +1647,32 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         
         let duration = (try? await asset.load(.duration).seconds) ?? 0
         
-        var attempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0]
-        
-        if duration < 5 {
-            attempts.insert(0.0, at: 0)
-        }
-        
-        let validAttempts = attempts.filter { $0 < duration }
-        
         var bestCGImage: CGImage? = nil
         var fallbackImage: CGImage? = nil
         
-        for seconds in validAttempts {
-            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        if let requestedTime = requestedTime, requestedTime >= 0, requestedTime <= duration {
+            let time = CMTime(seconds: requestedTime, preferredTimescale: 600)
             if let cgImage = try? await generator.image(at: time).image {
-                if fallbackImage == nil { fallbackImage = cgImage }
-                
-                if !isImagePredominantlyBlack(image: cgImage) {
-                    bestCGImage = cgImage
-                    break
+                bestCGImage = cgImage
+            }
+        } else {
+            var attempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0]
+            
+            if duration < 5 {
+                attempts.insert(0.0, at: 0)
+            }
+            
+            let validAttempts = attempts.filter { $0 < duration }
+            
+            for seconds in validAttempts {
+                let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                if let cgImage = try? await generator.image(at: time).image {
+                    if fallbackImage == nil { fallbackImage = cgImage }
+                    
+                    if !isImagePredominantlyBlack(image: cgImage) {
+                        bestCGImage = cgImage
+                        break
+                    }
                 }
             }
         }
