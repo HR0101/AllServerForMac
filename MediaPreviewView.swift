@@ -119,22 +119,3 @@ struct MediaPreviewView: View {
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 }
-
-// SwiftUI の VideoPlayer は _AVKit_SwiftUI のみ参照され AVKit 本体がリンクされず
-// 実行時クラッシュするため、AVPlayerView を直接ラップして使う
-private struct PlayerContainerView: NSViewRepresentable {
-    let player: AVPlayer?
-
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.controlsStyle = .floating
-        view.showsFullScreenToggleButton = true
-        view.allowsPictureInPicturePlayback = true
-        view.player = player
-        return view
-    }
-
-    func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        nsView.player = player
-    }
-}

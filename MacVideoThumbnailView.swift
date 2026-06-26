@@ -5,6 +5,7 @@ import AppKit
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
     let dataManager: VideoDataManager
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var thumbnail: NSImage?
 
     var body: some View {
@@ -40,22 +41,31 @@ struct MacVideoThumbnailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
             .animation(.easeOut(duration: 0.25), value: thumbnail != nil)
-            .task { await generateThumbnail() }
+            .task { await generateThumbnail(forceRegenerate: false) }
+            .onChange(of: appSettings.thumbnailOption) { _, _ in
+                guard videoItem.mediaType == .video else { return }
+                Task { await generateThumbnail(forceRegenerate: true) }
+            }
+            .onChange(of: appSettings.customThumbnailTime) { _, _ in
+                guard videoItem.mediaType == .video, appSettings.thumbnailOption == .custom else { return }
+                Task { await generateThumbnail(forceRegenerate: true) }
+            }
     }
 
-    private func generateThumbnail() async {
+    private func generateThumbnail(forceRegenerate: Bool) async {
         let cacheURL = dataManager.thumbnailStorageURL
             .appendingPathComponent(videoItem.id.uuidString)
             .appendingPathExtension("jpg")
 
-        let cached: NSImage? = await Task.detached(priority: .userInitiated) {
-            guard let data = try? Data(contentsOf: cacheURL) else { return nil }
-            return NSImage(data: data)
-        }.value
-
-        if let img = cached {
-            thumbnail = img
-            return
+        if !forceRegenerate {
+            let cached: NSImage? = await Task.detached(priority: .userInitiated) {
+                guard let data = try? Data(contentsOf: cacheURL) else { return nil }
+                return NSImage(data: data)
+            }.value
+            if let img = cached {
+                thumbnail = img
+                return
+            }
         }
 
         guard let fileURL = dataManager.fileURL(for: videoItem) else { return }
@@ -88,9 +98,17 @@ struct MacVideoThumbnailView: View {
         generator.requestedTimeToleranceAfter = .zero
 
         let duration = (try? await asset.load(.duration).seconds) ?? 0
-        var attempts = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0].filter { $0 < duration }
-        if duration < 5 { attempts.insert(0.0, at: 0) }
-        if attempts.isEmpty { attempts.append(0.0) }
+
+        // 設定で選ばれた抽出位置を先頭に、黒フレーム時のフォールバックを後ろに並べる
+        let preferred = appSettings.thumbnailOption.seconds(
+            forDuration: duration,
+            customTime: appSettings.customThumbnailTime
+        )
+        var attempts = [preferred]
+        attempts.append(contentsOf: [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0].filter { $0 < duration && $0 != preferred })
+        if duration < 5 { attempts.append(0.0) }
+        attempts = attempts.map { min(max(0, $0), max(0, duration - 0.05)) }
+        if attempts.isEmpty { attempts = [0.0] }
 
         var bestImage: CGImage?
         var fallbackImage: CGImage?

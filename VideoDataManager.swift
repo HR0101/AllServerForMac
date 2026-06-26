@@ -58,10 +58,13 @@ struct VideoItem: Identifiable, Codable, Hashable {
     let creationDate: Date?
     let fileHash: String
     var mediaType: MediaType = .video
-    
+
     var externalFilePath: String?
-    
-    init(id: UUID, originalFilename: String, internalFilename: String, duration: TimeInterval, importDate: Date, creationDate: Date?, fileHash: String, mediaType: MediaType = .video, externalFilePath: String? = nil) {
+
+    var isFavorite: Bool = false
+    var isInTrash: Bool = false
+
+    init(id: UUID, originalFilename: String, internalFilename: String, duration: TimeInterval, importDate: Date, creationDate: Date?, fileHash: String, mediaType: MediaType = .video, externalFilePath: String? = nil, isFavorite: Bool = false, isInTrash: Bool = false) {
         self.id = id
         self.originalFilename = originalFilename
         self.internalFilename = internalFilename
@@ -71,8 +74,10 @@ struct VideoItem: Identifiable, Codable, Hashable {
         self.fileHash = fileHash
         self.mediaType = mediaType
         self.externalFilePath = externalFilePath
+        self.isFavorite = isFavorite
+        self.isInTrash = isInTrash
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(UUID.self, forKey: .id)
@@ -84,6 +89,8 @@ struct VideoItem: Identifiable, Codable, Hashable {
         self.fileHash = try container.decode(String.self, forKey: .fileHash)
         self.mediaType = try container.decodeIfPresent(MediaType.self, forKey: .mediaType) ?? .video
         self.externalFilePath = try container.decodeIfPresent(String.self, forKey: .externalFilePath)
+        self.isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        self.isInTrash = try container.decodeIfPresent(Bool.self, forKey: .isInTrash) ?? false
     }
 }
 
@@ -648,9 +655,57 @@ class VideoDataManager: ObservableObject {
     }
     
     func removeVideosFromAlbum(videoIDs: [UUID], albumID: UUID) { if let index = albums.firstIndex(where: { $0.id == albumID }) { let name = albums[index].name; if name == VideoDataManager.allVideosAlbumName || name == VideoDataManager.allPhotosAlbumName { deleteVideos(videoIDs: videoIDs) } else { albums[index].videoIDs.removeAll { videoIDs.contains($0) }; saveData() } } }
-    func createAlbum(name: String, type: AlbumType) { guard name != VideoDataManager.allVideosAlbumName && name != VideoDataManager.allPhotosAlbumName else { return }; albums.append(Album(id: UUID(), name: name, videoIDs: [], type: type)); saveData() }
+    @discardableResult
+    func createAlbum(name: String, type: AlbumType) -> UUID? { guard name != VideoDataManager.allVideosAlbumName && name != VideoDataManager.allPhotosAlbumName else { return nil }; let id = UUID(); albums.append(Album(id: id, name: name, videoIDs: [], type: type)); saveData(); return id }
+
+    /// 指定アルバムに動画を追加する（重複は無視）
+    func addVideosToAlbum(videoIDs: [UUID], albumID: UUID) {
+        guard let index = albums.firstIndex(where: { $0.id == albumID }) else { return }
+        let existing = Set(albums[index].videoIDs)
+        albums[index].videoIDs.append(contentsOf: videoIDs.filter { !existing.contains($0) })
+        saveData()
+    }
     func deleteAlbum(albumID: UUID) { guard let album = albums.first(where: { $0.id == albumID }), album.name != VideoDataManager.allVideosAlbumName, album.name != VideoDataManager.allPhotosAlbumName else { return }; albums.removeAll { $0.id == albumID }; saveData() }
     func moveVideos(videoIDs: [UUID], from sourceAlbumID: UUID, to targetAlbumID: UUID) { guard albums.contains(where: { $0.id == targetAlbumID }) else { return }; if let sourceIndex = albums.firstIndex(where: { $0.id == sourceAlbumID }), albums[sourceIndex].name != VideoDataManager.allVideosAlbumName, albums[sourceIndex].name != VideoDataManager.allPhotosAlbumName { albums[sourceIndex].videoIDs.removeAll { videoIDs.contains($0) } }; if let targetIndex = albums.firstIndex(where: { $0.id == targetAlbumID }) { let existingIDs = Set(albums[targetIndex].videoIDs); let newIDs = videoIDs.filter { !existingIDs.contains($0) }; albums[targetIndex].videoIDs.append(contentsOf: newIDs) }; saveData() }
+
+    // MARK: - Favorites & Trash
+
+    /// ゴミ箱を除いたお気に入り
+    var favoriteVideos: [VideoItem] { videos.filter { $0.isFavorite && !$0.isInTrash } }
+    /// ゴミ箱内のアイテム
+    var trashedVideos: [VideoItem] { videos.filter { $0.isInTrash } }
+
+    /// 指定アイテムのお気に入りを切り替える（1つでも未登録があれば全て登録、なければ全て解除）
+    func toggleFavorite(videoIDs: [UUID]) {
+        let ids = Set(videoIDs)
+        let shouldFavorite = videos.contains { ids.contains($0.id) && !$0.isFavorite }
+        for i in videos.indices where ids.contains(videos[i].id) {
+            videos[i].isFavorite = shouldFavorite
+        }
+        saveData()
+    }
+
+    func moveToTrash(videoIDs: [UUID]) {
+        let ids = Set(videoIDs)
+        for i in videos.indices where ids.contains(videos[i].id) {
+            videos[i].isInTrash = true
+            videos[i].isFavorite = false
+        }
+        saveData()
+    }
+
+    func restoreFromTrash(videoIDs: [UUID]) {
+        let ids = Set(videoIDs)
+        for i in videos.indices where ids.contains(videos[i].id) {
+            videos[i].isInTrash = false
+        }
+        saveData()
+    }
+
+    /// ゴミ箱を空にする（ファイルごと完全削除）
+    func emptyTrash() {
+        deleteVideos(videoIDs: trashedVideos.map { $0.id })
+    }
 
     private func saveData() { do { let data = try JSONEncoder().encode(DataContainer(videos: videos, albums: albums)); try data.write(to: dataFileURL, options: .atomic) } catch {} }
     private func loadData() { do { guard FileManager.default.fileExists(atPath: dataFileURL.path), let data = try? Data(contentsOf: dataFileURL), !data.isEmpty else { setupInitialAlbums(); saveData(); return }; let container = try JSONDecoder().decode(DataContainer.self, from: data); self.videos = container.videos; self.albums = container.albums; setupInitialAlbums() } catch { setupInitialAlbums(); saveData() } }

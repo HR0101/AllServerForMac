@@ -8,7 +8,11 @@ import Combine
 
 enum NavigationSelection: Hashable {
     case home
+    case favorites
+    case trash
     case album(UUID)
+    case year(Int)
+    case month(Int, Int)
 }
 
 struct CPUDataPoint: Identifiable {
@@ -136,6 +140,9 @@ struct ContentView: View {
 
     @State private var isShowingStorageManager = false
 
+    @StateObject private var coordinator = PlaybackCoordinator()
+    @StateObject private var appSettings = AppSettings()
+
     init() {
         let manager = VideoDataManager()
         _dataManager = StateObject(wrappedValue: manager)
@@ -143,6 +150,36 @@ struct ContentView: View {
     }
 
     var body: some View {
+        Group {
+            // 再生中はライブラリ画面（サイドバー/ツールバー含む）ごとプレイヤーに差し替え、
+            // 他のUIが前面に残らない完全な全画面にする（元アプリと同じ方式）。
+            if let mode = coordinator.mode {
+                playerOverlay(for: mode)
+                    .ignoresSafeArea()
+            } else {
+                libraryView
+            }
+        }
+        .environmentObject(coordinator)
+        .environmentObject(appSettings)
+    }
+
+    /// 再生中はウィンドウ全体を占有するプレイヤー
+    @ViewBuilder
+    private func playerOverlay(for mode: PlaybackCoordinator.Mode) -> some View {
+        switch mode {
+        case .single(let playlist, let current):
+            VideoPlayerView(videos: playlist, currentVideo: current, dataManager: dataManager)
+        case .multi(let videos):
+            MultiVideoPlayerView(videos: videos, dataManager: dataManager)
+        case .slideshow(let videos):
+            SlideshowPlayerView(videos: videos, dataManager: dataManager)
+        case .splitPlay(let video, let splitCount):
+            SplitVideoPlayerView(video: video, splitCount: splitCount, dataManager: dataManager)
+        }
+    }
+
+    private var libraryView: some View {
         NavigationSplitView {
             ZStack {
                 sidebarList
@@ -174,6 +211,18 @@ struct ContentView: View {
                 case .home:
                     HomeView(dataManager: dataManager, webServerManager: webServerManager)
                         .navigationTitle("ホーム")
+                case .favorites:
+                    LibraryCategoryView(kind: .favorites, dataManager: dataManager)
+                        .navigationTitle("お気に入り")
+                case .trash:
+                    LibraryCategoryView(kind: .trash, dataManager: dataManager)
+                        .navigationTitle("ゴミ箱")
+                case .year(let year):
+                    LibraryCategoryView(kind: .year(year), dataManager: dataManager)
+                        .navigationTitle("\(String(year))年")
+                case .month(let year, let month):
+                    LibraryCategoryView(kind: .month(year, month), dataManager: dataManager)
+                        .navigationTitle("\(String(year))年\(month)月")
                 case .album(let albumID):
                     if let album = dataManager.albums.first(where: { $0.id == albumID }) {
                         AlbumDetailView(album: album, dataManager: dataManager)
@@ -217,13 +266,19 @@ struct ContentView: View {
             Section(header: Text("ライブラリ")) {
                 if let allVideos = dataManager.albums.first(where: { $0.name == VideoDataManager.allVideosAlbumName }) {
                     NavigationLink(value: NavigationSelection.album(allVideos.id)) {
-                        sidebarRowLabel("すべての動画", systemImage: "film.stack", count: allVideos.videoIDs.count)
+                        sidebarRowLabel("すべての動画", systemImage: "film.stack", count: nonTrashedCount(in: allVideos))
                     }
                 }
                 if let allPhotos = dataManager.albums.first(where: { $0.name == VideoDataManager.allPhotosAlbumName }) {
                     NavigationLink(value: NavigationSelection.album(allPhotos.id)) {
-                        sidebarRowLabel("すべての画像", systemImage: "photo.stack", count: allPhotos.videoIDs.count)
+                        sidebarRowLabel("すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
                     }
+                }
+                NavigationLink(value: NavigationSelection.favorites) {
+                    sidebarRowLabel("お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
+                }
+                NavigationLink(value: NavigationSelection.trash) {
+                    sidebarRowLabel("ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
                 }
             }
 
@@ -240,11 +295,29 @@ struct ContentView: View {
             ) {
                 ForEach(dataManager.albums.filter { $0.name != VideoDataManager.allVideosAlbumName && $0.name != VideoDataManager.allPhotosAlbumName }) { album in
                     NavigationLink(value: NavigationSelection.album(album.id)) {
-                        sidebarRowLabel(album.name, systemImage: album.type == .photo ? "photo.on.rectangle.angled" : "folder.fill", count: album.videoIDs.count)
+                        sidebarRowLabel(album.name, systemImage: album.type == .photo ? "photo.on.rectangle.angled" : "folder.fill", count: nonTrashedCount(in: album))
                     }
                     .contextMenu {
                         Button("削除", role: .destructive) {
                             albumToDelete = album
+                        }
+                    }
+                }
+            }
+
+            if !dateSections.isEmpty {
+                Section(header: Text("日付")) {
+                    ForEach(dateSections, id: \.year) { section in
+                        DisclosureGroup {
+                            ForEach(section.months, id: \.self) { month in
+                                NavigationLink(value: NavigationSelection.month(section.year, month)) {
+                                    Label("\(month)月", systemImage: "calendar")
+                                }
+                            }
+                        } label: {
+                            NavigationLink(value: NavigationSelection.year(section.year)) {
+                                Label("\(String(section.year))年", systemImage: "calendar")
+                            }
                         }
                     }
                 }
@@ -279,6 +352,23 @@ struct ContentView: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// ゴミ箱を除いたアルバム内アイテム数
+    private func nonTrashedCount(in album: Album) -> Int {
+        let trashed = Set(dataManager.trashedVideos.map { $0.id })
+        return album.videoIDs.filter { !trashed.contains($0) }.count
+    }
+
+    /// 作成日（なければ取込日）から年>月の階層を作る（ゴミ箱を除く・新しい順）
+    private var dateSections: [(year: Int, months: [Int])] {
+        let cal = Calendar.current
+        let active = dataManager.videos.filter { !$0.isInTrash }
+        let byYear = Dictionary(grouping: active) { cal.component(.year, from: $0.creationDate ?? $0.importDate) }
+        return byYear.keys.sorted(by: >).map { year in
+            let months = Set((byYear[year] ?? []).map { cal.component(.month, from: $0.creationDate ?? $0.importDate) })
+            return (year, months.sorted(by: >))
         }
     }
 
@@ -365,6 +455,7 @@ struct HomeView: View {
 
     @State private var isShowingAccessLog = false
     @State private var isShowingStorageManager = false
+    @State private var logFilter: Int = 0 // 0: 全て, 1: 動画本体, 2: サムネ, 3: その他
 
     private let cardColumns = [GridItem(.adaptive(minimum: 320, maximum: 600), spacing: DS.cardSpacing, alignment: .top)]
 
@@ -379,6 +470,7 @@ struct HomeView: View {
                     scheduleCard
                     resourcesCard
                     storageCard
+                    logsCard
                 }
             }
             .frame(maxWidth: 760)
@@ -635,6 +727,86 @@ struct HomeView: View {
         }
         .dashboardCard()
     }
+
+    // MARK: リアルタイム通信ログカード
+    private var logsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                CardHeader(icon: "network.badge.shield.half.filled", tint: .teal, title: "リアルタイム通信ログ", subtitle: "直近のアクセス状況")
+                Spacer()
+                Button("すべて見る") { isShowingAccessLog = true }
+                    .font(.system(size: 11, weight: .semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+            }
+            
+            Picker("", selection: $logFilter) {
+                Text("すべて").tag(0)
+                Text("動画本体").tag(1)
+                Text("サムネ").tag(2)
+                Text("その他").tag(3)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.bottom, 4)
+            
+            let filteredLogs = webServerManager.accessLogs.filter { entry in
+                switch logFilter {
+                case 1: return entry.path.hasPrefix("/video/")
+                case 2: return entry.path.hasPrefix("/thumbnail/")
+                case 3: return !entry.path.hasPrefix("/video/") && !entry.path.hasPrefix("/thumbnail/")
+                default: return true
+                }
+            }
+            
+            if filteredLogs.isEmpty {
+                Text("まだアクセスがありません")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 20)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(filteredLogs.prefix(15)) { entry in
+                        HStack(spacing: 8) {
+                            Text(entry.date.formatted(.dateTime.hour().minute().second()))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 58, alignment: .leading)
+                            
+                            Image(systemName: entry.authorized ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                                .foregroundStyle(entry.authorized ? .green : .red)
+                                .font(.system(size: 10))
+                            
+                            Text(entry.method)
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(entry.method == "GET" ? .blue : .purple)
+                                .frame(width: 36, alignment: .leading)
+                            
+                            Text(entry.path)
+                                .font(.system(size: 10))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(entry.path)
+                            
+                            Spacer(minLength: 5)
+                            
+                            Text(entry.ip)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .background(Color(NSColor.textBackgroundColor).opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                .frame(maxHeight: 240, alignment: .top)
+                .clipped()
+            }
+        }
+        .dashboardCard()
+    }
 }
 
 // MARK: - サーバー状態ヒーローカード
@@ -747,62 +919,119 @@ struct AlbumDetailView: View {
     @State private var mixedContentInfo = ""
     @State private var lastSelectedVideoID: UUID?
     @State private var previewItem: VideoItem?
+    @State private var searchText = ""
+    @State private var showMoveToNewAlbumAlert = false
+    @State private var newAlbumNameForMove = ""
+    @State private var pendingMoveVideoIDs: [UUID] = []
+    @FocusState private var focusedVideoID: UUID?
 
-    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)]
+    // 分割再生用
+    @State private var showSplitSheet = false
+    @State private var splitCount: Int = 4
+    @State private var splitTargetVideo: VideoItem?
+
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var appSettings: AppSettings
+
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: max(2, Int(appSettings.columnCount)))
+    }
+
+    /// 検索・並べ替えを適用した表示アイテム（動画＋画像、ゴミ箱を除く）
+    private var displayedItems: [VideoItem] {
+        dataManager.videos
+            .filter { album.videoIDs.contains($0.id) && !$0.isInTrash }
+            .filtered(bySearch: searchText)
+            .sorted(by: appSettings.sortOrder)
+    }
+
+    /// このアルバムの動画のみ（表示順）
+    private var albumVideoItems: [VideoItem] {
+        displayedItems.filter { $0.mediaType == .video }
+    }
+
+    /// 現在の選択のうち動画のみ（表示順）
+    private var selectedVideoItems: [VideoItem] {
+        displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
+    }
 
     var body: some View {
-        ZStack {
-            let albumVideos = dataManager.videos.filter { album.videoIDs.contains($0.id) }
+        VStack(spacing: 0) {
+            ZStack {
+                let items = displayedItems
 
-            // 背景タップで選択解除（カードタップ時は内側のジェスチャーが優先される）
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedVideoIDs.removeAll()
-                    lastSelectedVideoID = nil
-                }
-
-            if albumVideos.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(albumVideos) { video in
-                            MediaGridItem(
-                                video: video,
-                                dataManager: dataManager,
-                                isSelected: selectedVideoIDs.contains(video.id),
-                                showRemoveFromAlbum: album.name != VideoDataManager.allVideosAlbumName && album.name != VideoDataManager.allPhotosAlbumName,
-                                onSingleTap: { flags in
-                                    handleGridSelection(for: video, in: albumVideos, flags: flags)
-                                },
-                                onDoubleTap: { openFile(video) },
-                                onOpen: { openFile(video) },
-                                onOpenExternal: { openFileExternal(video) },
-                                onReveal: { revealInFinder(video) },
-                                onRemoveFromAlbum: {
-                                    dataManager.removeVideosFromAlbum(videoIDs: [video.id], albumID: album.id)
-                                },
-                                onDelete: {
-                                    dataManager.deleteVideos(videoIDs: [video.id])
-                                }
-                            )
-                        }
+                // 背景タップで選択解除（カードタップ時は内側のジェスチャーが優先される）
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedVideoIDs.removeAll()
+                        lastSelectedVideoID = nil
                     }
-                    .padding(16)
+
+                if items.isEmpty {
+                    if searchText.isEmpty { emptyState } else { noResultsState }
+                } else {
+                    grid(items)
+                }
+
+                if isTargeted {
+                    dropOverlay
                 }
             }
 
-            if isTargeted {
-                dropOverlay
-            }
+            Divider()
+            MediaGridControlBar()
         }
+        .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
+            // ランダム再生（選択不要・このアルバムの動画をシャッフルして連続再生）
+            ToolbarItem(placement: .primaryAction) {
+                if !albumVideoItems.isEmpty {
+                    Button {
+                        coordinator.playRandom(from: albumVideoItems)
+                    } label: {
+                        Label("ランダム再生", systemImage: "shuffle")
+                    }
+                    .help("このアルバムの動画をシャッフルして再生")
+                }
+            }
+
             if !selectedVideoIDs.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Text("\(selectedVideoIDs.count)項目を選択中")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedVideoItems.count >= 2 {
+                        Button {
+                            coordinator.playMulti(selectedVideoItems)
+                        } label: {
+                            Label("同時再生", systemImage: "square.grid.2x2.fill")
+                        }
+                        .help("選択した動画を同期再生（最大9本）")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedVideoItems.count >= 2 {
+                        Button {
+                            coordinator.startSlideshow(selectedVideoItems)
+                        } label: {
+                            Label("スライドショー", systemImage: "play.square.stack")
+                        }
+                        .help("選択した動画をスライドショー再生")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedVideoItems.count == 1, let video = selectedVideoItems.first {
+                        Button {
+                            splitTargetVideo = video
+                            showSplitSheet = true
+                        } label: {
+                            Label("分割再生", systemImage: "rectangle.split.2x2")
+                        }
+                        .help("選択した動画を指定数で分割して同時再生")
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button(role: .destructive, action: deleteSelectedVideos) {
@@ -828,6 +1057,181 @@ struct AlbumDetailView: View {
         .sheet(item: $previewItem) { item in
             MediaPreviewView(item: item, dataManager: dataManager)
         }
+        .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
+            TextField("アルバム名", text: $newAlbumNameForMove)
+            Button("作成して移動") {
+                let name = newAlbumNameForMove.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty, !pendingMoveVideoIDs.isEmpty,
+                      let newID = dataManager.createAlbum(name: name, type: album.type) else { return }
+                dataManager.moveVideos(videoIDs: pendingMoveVideoIDs, from: album.id, to: newID)
+                pendingMoveVideoIDs = []
+                selectedVideoIDs.removeAll()
+                lastSelectedVideoID = nil
+            }
+            Button("キャンセル", role: .cancel) { pendingMoveVideoIDs = [] }
+        } message: {
+            Text("移動先の新しいアルバム名を入力してください。")
+        }
+        .sheet(isPresented: $showSplitSheet) {
+            VStack(spacing: 20) {
+                Text("分割再生")
+                    .font(.headline)
+                if let video = splitTargetVideo {
+                    Text(video.originalFilename)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Stepper("分割数: \(splitCount)", value: $splitCount, in: 2...9)
+                    .frame(width: 200)
+                Text("動画を\(splitCount)等分して\(splitCount)画面で同時再生します")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Button("キャンセル") { showSplitSheet = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button("再生") {
+                        showSplitSheet = false
+                        if let video = splitTargetVideo {
+                            coordinator.playSplit(video: video, splitCount: splitCount)
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(30)
+            .frame(minWidth: 320)
+        }
+    }
+
+    // MARK: - Grid + keyboard navigation
+
+    private func grid(_ items: [VideoItem]) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: gridColumns, spacing: 12) {
+                    ForEach(items) { video in
+                        MediaGridItem(
+                            video: video,
+                            dataManager: dataManager,
+                            isSelected: selectedVideoIDs.contains(video.id),
+                            showTitle: appSettings.showTitles,
+                            showRemoveFromAlbum: album.name != VideoDataManager.allVideosAlbumName && album.name != VideoDataManager.allPhotosAlbumName,
+                            onSingleTap: { flags in
+                                handleGridSelection(for: video, in: items, flags: flags)
+                                focusedVideoID = video.id
+                            },
+                            onDoubleTap: { openFile(video) },
+                            onOpen: { openFile(video) },
+                            onOpenExternal: { openFileExternal(video) },
+                            onReveal: { revealInFinder(video) },
+                            onRemoveFromAlbum: {
+                                dataManager.removeVideosFromAlbum(videoIDs: [video.id], albumID: album.id)
+                            },
+                            onDelete: {
+                                dataManager.deleteVideos(videoIDs: [video.id])
+                            },
+                            onToggleFavorite: {
+                                dataManager.toggleFavorite(videoIDs: effectiveTargetIDs(for: video))
+                            },
+                            onMoveToTrash: {
+                                dataManager.moveToTrash(videoIDs: effectiveTargetIDs(for: video))
+                                selectedVideoIDs.removeAll()
+                                lastSelectedVideoID = nil
+                            },
+                            currentAlbumID: album.id,
+                            onMoveToAlbum: { targetID in
+                                dataManager.moveVideos(videoIDs: effectiveTargetIDs(for: video), from: album.id, to: targetID)
+                                selectedVideoIDs.removeAll()
+                                lastSelectedVideoID = nil
+                            },
+                            onMoveToNewAlbum: {
+                                pendingMoveVideoIDs = effectiveTargetIDs(for: video)
+                                newAlbumNameForMove = ""
+                                showMoveToNewAlbumAlert = true
+                            }
+                        )
+                        .id(video.id)
+                        .focusable()
+                        .focusEffectDisabled()
+                        .focused($focusedVideoID, equals: video.id)
+                    }
+                }
+                .padding(16)
+            }
+            .onKeyPress(phases: .down) { press in
+                handleGridKey(press, items: items, proxy: proxy)
+            }
+            .onAppear {
+                // グリッドにフォーカスを持たせて onKeyPress を有効化する
+                if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
+            }
+        }
+    }
+
+    /// 矢印キーでフォーカス移動、Enter/Option+Spaceで再生
+    private func handleGridKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard !items.isEmpty else { return .ignored }
+
+        // 再生キー（Enter / Option+Space）はフォーカス未確定でも動作させる
+        switch press.key {
+        case .return:
+            playFromGrid(items: items); return .handled
+        case .space where press.modifiers.contains(.option):
+            playFromGrid(items: items); return .handled
+        default:
+            break
+        }
+
+        let cols = max(2, Int(appSettings.columnCount))
+        guard let focused = focusedVideoID, let index = items.firstIndex(where: { $0.id == focused }) else {
+            let first = items[0].id
+            focusedVideoID = first
+            selectedVideoIDs = [first]
+            lastSelectedVideoID = first
+            return .handled
+        }
+
+        var nextIndex: Int?
+        switch press.key {
+        case .upArrow: if index - cols >= 0 { nextIndex = index - cols }
+        case .downArrow: if index + cols < items.count { nextIndex = index + cols }
+        case .leftArrow: if index > 0 { nextIndex = index - 1 }
+        case .rightArrow: if index < items.count - 1 { nextIndex = index + 1 }
+        default: return .ignored
+        }
+
+        if let nextIndex, items.indices.contains(nextIndex) {
+            let id = items[nextIndex].id
+            focusedVideoID = id
+            selectedVideoIDs = [id]
+            lastSelectedVideoID = id
+            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
+            return .handled
+        }
+        return .ignored
+    }
+
+    /// 選択が複数なら同時再生、単一/フォーカス対象を通常再生
+    private func playFromGrid(items: [VideoItem]) {
+        let selectedVideos = selectedVideoItems
+        if selectedVideos.count > 1 {
+            coordinator.playMulti(selectedVideos)
+        } else if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
+            openFile(item)
+        } else if let first = items.first {
+            openFile(first)
+        }
+    }
+
+    private var noResultsState: some View {
+        ContentUnavailableView(
+            "該当する項目がありません",
+            systemImage: "magnifyingglass",
+            description: Text("「\(searchText)」に一致するタイトルは見つかりませんでした")
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyState: some View {
@@ -872,9 +1276,13 @@ struct AlbumDetailView: View {
 
     // MARK: - Actions
 
-    // アプリ内プレイヤーで開く
+    // アプリ内プレイヤーで開く（動画は全画面プレイヤー、画像はプレビュー）
     private func openFile(_ video: VideoItem) {
-        previewItem = video
+        if video.mediaType == .video {
+            coordinator.playSingle(playlist: albumVideoItems, current: video)
+        } else {
+            previewItem = video
+        }
     }
 
     // QuickTime Player など外部のデフォルトアプリで開く
@@ -922,6 +1330,14 @@ struct AlbumDetailView: View {
         lastSelectedVideoID = nil
     }
 
+    /// コンテキストメニュー操作の対象（右クリック対象が複数選択に含まれていれば選択全体）
+    private func effectiveTargetIDs(for video: VideoItem) -> [UUID] {
+        if selectedVideoIDs.contains(video.id) && selectedVideoIDs.count > 1 {
+            return Array(selectedVideoIDs)
+        }
+        return [video.id]
+    }
+
     private func handleGridSelection(for video: VideoItem, in videos: [VideoItem], flags: NSEvent.ModifierFlags) {
         if flags.contains(.shift), let lastID = lastSelectedVideoID {
             guard let lastIndex = videos.firstIndex(where: { $0.id == lastID }), let currentIndex = videos.firstIndex(where: { $0.id == video.id }) else { return }
@@ -941,6 +1357,7 @@ struct MediaGridItem: View {
     let video: VideoItem
     let dataManager: VideoDataManager
     let isSelected: Bool
+    var showTitle: Bool = true
     let showRemoveFromAlbum: Bool
     let onSingleTap: (NSEvent.ModifierFlags) -> Void
     let onDoubleTap: () -> Void
@@ -949,8 +1366,27 @@ struct MediaGridItem: View {
     let onReveal: () -> Void
     let onRemoveFromAlbum: () -> Void
     let onDelete: () -> Void
+    var isTrashView: Bool = false
+    var onToggleFavorite: () -> Void = {}
+    var onMoveToTrash: () -> Void = {}
+    var onRestore: () -> Void = {}
+    var currentAlbumID: UUID? = nil
+    var onMoveToAlbum: (UUID) -> Void = { _ in }
+    var onMoveToNewAlbum: () -> Void = {}
 
     @State private var isHovering = false
+
+    /// 移動先候補（システムアルバム・現在のアルバムを除き、メディアタイプが互換のもの）
+    private var moveTargetAlbums: [Album] {
+        dataManager.albums.filter { album in
+            album.name != VideoDataManager.allVideosAlbumName &&
+            album.name != VideoDataManager.allPhotosAlbumName &&
+            album.id != currentAlbumID &&
+            (album.type == .mixed
+             || (video.mediaType == .video && album.type == .video)
+             || (video.mediaType == .photo && album.type == .photo))
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -969,25 +1405,41 @@ struct MediaGridItem: View {
                             .padding(7)
                     }
                 }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(video.originalFilename)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                HStack {
-                    Text(MediaGridItem.itemFormatter.string(from: video.importDate))
-                    Spacer()
-                    if video.mediaType == .video {
+                .overlay(alignment: .bottomTrailing) {
+                    if video.mediaType == .video, video.duration > 0 {
                         Text(formatDuration(video.duration))
+                            .font(.caption2.weight(.semibold))
                             .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(.black.opacity(0.65)))
+                            .padding(7)
                     }
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .overlay(alignment: .topLeading) {
+                    if video.isFavorite {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.red)
+                            .shadow(color: .black.opacity(0.35), radius: 2)
+                            .padding(7)
+                    }
+                }
+
+            if showTitle {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(video.originalFilename)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Text(MediaGridItem.itemFormatter.string(from: video.importDate))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
             }
-            .padding(.horizontal, 4)
         }
         .padding(6)
         .background(
@@ -1009,10 +1461,24 @@ struct MediaGridItem: View {
             Button("外部プレイヤーで開く") { onOpenExternal() }
             Button("Finderで表示") { onReveal() }
             Divider()
-            if showRemoveFromAlbum {
-                Button("アルバムから外す") { onRemoveFromAlbum() }
+            if isTrashView {
+                Button("元に戻す") { onRestore() }
+                Button("完全に削除", role: .destructive) { onDelete() }
+            } else {
+                Button(video.isFavorite ? "お気に入りから外す" : "お気に入りに追加") { onToggleFavorite() }
+                Menu("アルバムに移動") {
+                    ForEach(moveTargetAlbums) { album in
+                        Button(album.name) { onMoveToAlbum(album.id) }
+                    }
+                    if !moveTargetAlbums.isEmpty { Divider() }
+                    Button("新規アルバム…") { onMoveToNewAlbum() }
+                }
+                if showRemoveFromAlbum {
+                    Button("アルバムから外す") { onRemoveFromAlbum() }
+                }
+                Divider()
+                Button("ゴミ箱に入れる", role: .destructive) { onMoveToTrash() }
             }
-            Button("完全に削除", role: .destructive) { onDelete() }
         }
     }
 
@@ -1029,10 +1495,384 @@ struct MediaGridItem: View {
     }
 }
 
+// MARK: - 共有グリッド設定バー（ソート/サムネ位置/タイトル/列数）
+struct MediaGridControlBar: View {
+    @EnvironmentObject private var appSettings: AppSettings
+
+    private static let secondsFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.minimum = 0
+        f.maximum = 3600
+        return f
+    }()
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Menu {
+                ForEach(SortOrder.allCases) { order in
+                    Button(order.rawValue) { appSettings.sortOrder = order }
+                }
+            } label: {
+                Label(appSettings.sortOrder.rawValue, systemImage: "arrow.up.arrow.down")
+            }
+            .fixedSize()
+
+            Menu {
+                ForEach(ThumbnailOption.allCases) { option in
+                    Button(option.rawValue) { appSettings.thumbnailOption = option }
+                }
+            } label: {
+                Label("サムネ: \(appSettings.thumbnailOption.rawValue)", systemImage: "photo.on.rectangle.angled")
+            }
+            .fixedSize()
+
+            if appSettings.thumbnailOption == .custom {
+                HStack(spacing: 4) {
+                    Stepper("", value: $appSettings.customThumbnailTime, in: 0...3600, step: 1)
+                        .labelsHidden()
+                    TextField("秒", value: $appSettings.customThumbnailTime, formatter: MediaGridControlBar.secondsFormatter)
+                        .frame(width: 46)
+                        .multilineTextAlignment(.trailing)
+                    Text("秒").font(.caption)
+                }
+            }
+
+            Spacer()
+
+            Button { appSettings.showTitles.toggle() } label: {
+                Image(systemName: appSettings.showTitles ? "text.below.photo.fill" : "text.below.photo")
+            }
+            .help(appSettings.showTitles ? "タイトルを非表示" : "タイトルを表示")
+
+            HStack(spacing: 6) {
+                Image(systemName: "square.grid.2x2")
+                Slider(value: $appSettings.columnCount, in: 2...12, step: 1)
+                    .frame(width: 140)
+                Image(systemName: "square.grid.4x3.fill")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+    }
+}
+
+// MARK: - お気に入り / ゴミ箱 カテゴリビュー
+struct LibraryCategoryView: View {
+    enum Kind: Hashable {
+        case favorites
+        case trash
+        case year(Int)
+        case month(Int, Int)
+    }
+    let kind: Kind
+    @ObservedObject var dataManager: VideoDataManager
+
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var appSettings: AppSettings
+
+    @State private var selectedVideoIDs = Set<UUID>()
+    @State private var lastSelectedVideoID: UUID?
+    @State private var searchText = ""
+    @State private var previewItem: VideoItem?
+    @State private var showEmptyTrashAlert = false
+    @State private var showMoveToNewAlbumAlert = false
+    @State private var newAlbumNameForMove = ""
+    @State private var pendingMoveVideoIDs: [UUID] = []
+    @FocusState private var focusedVideoID: UUID?
+
+    // 分割再生用
+    @State private var showSplitSheet = false
+    @State private var splitCount: Int = 4
+    @State private var splitTargetVideo: VideoItem?
+
+    private var isTrash: Bool { kind == .trash }
+
+    private var sourceItems: [VideoItem] {
+        let cal = Calendar.current
+        switch kind {
+        case .favorites:
+            return dataManager.favoriteVideos
+        case .trash:
+            return dataManager.trashedVideos
+        case .year(let y):
+            return dataManager.videos.filter { !$0.isInTrash && cal.component(.year, from: $0.creationDate ?? $0.importDate) == y }
+        case .month(let y, let m):
+            return dataManager.videos.filter {
+                guard !$0.isInTrash else { return false }
+                let d = $0.creationDate ?? $0.importDate
+                return cal.component(.year, from: d) == y && cal.component(.month, from: d) == m
+            }
+        }
+    }
+    private var displayedItems: [VideoItem] {
+        sourceItems.filtered(bySearch: searchText).sorted(by: appSettings.sortOrder)
+    }
+    private var selectedVideoItems: [VideoItem] {
+        displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
+    }
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: max(2, Int(appSettings.columnCount)))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                let items = displayedItems
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedVideoIDs.removeAll(); lastSelectedVideoID = nil }
+
+                if items.isEmpty {
+                    emptyState
+                } else {
+                    grid(items)
+                }
+            }
+            Divider()
+            MediaGridControlBar()
+        }
+        .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
+        .toolbar {
+            if isTrash {
+                ToolbarItem(placement: .primaryAction) {
+                    if !dataManager.trashedVideos.isEmpty {
+                        Button(role: .destructive) { showEmptyTrashAlert = true } label: {
+                            Label("ゴミ箱を空にする", systemImage: "trash.slash")
+                        }
+                    }
+                }
+                if !selectedVideoIDs.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { dataManager.restoreFromTrash(videoIDs: Array(selectedVideoIDs)); selectedVideoIDs.removeAll() } label: {
+                            Label("元に戻す", systemImage: "arrow.uturn.backward")
+                        }
+                    }
+                }
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    if !displayedItems.filter({ $0.mediaType == .video }).isEmpty {
+                        Button { coordinator.playRandom(from: displayedItems.filter { $0.mediaType == .video }) } label: {
+                            Label("ランダム再生", systemImage: "shuffle")
+                        }
+                    }
+                }
+                if selectedVideoItems.count >= 2 {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { coordinator.playMulti(selectedVideoItems) } label: {
+                            Label("同時再生", systemImage: "square.grid.2x2.fill")
+                        }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { coordinator.startSlideshow(selectedVideoItems) } label: {
+                            Label("スライドショー", systemImage: "play.square.stack")
+                        }
+                    }
+                }
+                if selectedVideoItems.count == 1, let video = selectedVideoItems.first {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            splitTargetVideo = video
+                            showSplitSheet = true
+                        } label: {
+                            Label("分割再生", systemImage: "rectangle.split.2x2")
+                        }
+                        .help("選択した動画を指定数で分割して同時再生")
+                    }
+                }
+            }
+        }
+        .sheet(item: $previewItem) { MediaPreviewView(item: $0, dataManager: dataManager) }
+        .alert("ゴミ箱を空にしますか？", isPresented: $showEmptyTrashAlert) {
+            Button("空にする", role: .destructive) { dataManager.emptyTrash() }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("この操作は取り消せません。ファイルが完全に削除されます。")
+        }
+        .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
+            TextField("アルバム名", text: $newAlbumNameForMove)
+            Button("作成して追加") {
+                let name = newAlbumNameForMove.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty, !pendingMoveVideoIDs.isEmpty,
+                      let newID = dataManager.createAlbum(name: name, type: .mixed) else { return }
+                dataManager.addVideosToAlbum(videoIDs: pendingMoveVideoIDs, albumID: newID)
+                pendingMoveVideoIDs = []
+                selectedVideoIDs.removeAll()
+            }
+            Button("キャンセル", role: .cancel) { pendingMoveVideoIDs = [] }
+        } message: {
+            Text("作成する新しいアルバム名を入力してください。")
+        }
+        .sheet(isPresented: $showSplitSheet) {
+            VStack(spacing: 20) {
+                Text("分割再生")
+                    .font(.headline)
+                if let video = splitTargetVideo {
+                    Text(video.originalFilename)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Stepper("分割数: \(splitCount)", value: $splitCount, in: 2...9)
+                    .frame(width: 200)
+                Text("動画を\(splitCount)等分して\(splitCount)画面で同時再生します")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Button("キャンセル") { showSplitSheet = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button("再生") {
+                        showSplitSheet = false
+                        if let video = splitTargetVideo {
+                            coordinator.playSplit(video: video, splitCount: splitCount)
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(30)
+            .frame(minWidth: 320)
+        }
+    }
+
+    private func grid(_ items: [VideoItem]) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: gridColumns, spacing: 12) {
+                    ForEach(items) { video in
+                        MediaGridItem(
+                            video: video,
+                            dataManager: dataManager,
+                            isSelected: selectedVideoIDs.contains(video.id),
+                            showTitle: appSettings.showTitles,
+                            showRemoveFromAlbum: false,
+                            onSingleTap: { flags in handleSelection(for: video, in: items, flags: flags); focusedVideoID = video.id },
+                            onDoubleTap: { open(video) },
+                            onOpen: { open(video) },
+                            onOpenExternal: { if let url = dataManager.fileURL(for: video) { NSWorkspace.shared.open(url) } },
+                            onReveal: { NSWorkspace.shared.activateFileViewerSelecting([dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)]) },
+                            onRemoveFromAlbum: {},
+                            onDelete: { dataManager.deleteVideos(videoIDs: targetIDs(for: video)) },
+                            isTrashView: isTrash,
+                            onToggleFavorite: { dataManager.toggleFavorite(videoIDs: targetIDs(for: video)) },
+                            onMoveToTrash: { dataManager.moveToTrash(videoIDs: targetIDs(for: video)); selectedVideoIDs.removeAll() },
+                            onRestore: { dataManager.restoreFromTrash(videoIDs: targetIDs(for: video)); selectedVideoIDs.removeAll() },
+                            currentAlbumID: nil,
+                            onMoveToAlbum: { targetID in
+                                dataManager.addVideosToAlbum(videoIDs: targetIDs(for: video), albumID: targetID)
+                                selectedVideoIDs.removeAll()
+                            },
+                            onMoveToNewAlbum: {
+                                pendingMoveVideoIDs = targetIDs(for: video)
+                                newAlbumNameForMove = ""
+                                showMoveToNewAlbumAlert = true
+                            }
+                        )
+                        .id(video.id)
+                        .focusable()
+                        .focusEffectDisabled()
+                        .focused($focusedVideoID, equals: video.id)
+                    }
+                }
+                .padding(16)
+            }
+            .onKeyPress(phases: .down) { press in handleKey(press, items: items, proxy: proxy) }
+            .onAppear {
+                if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
+            }
+        }
+    }
+
+    private func open(_ video: VideoItem) {
+        if video.mediaType == .video {
+            coordinator.playSingle(playlist: displayedItems.filter { $0.mediaType == .video }, current: video)
+        } else {
+            previewItem = video
+        }
+    }
+
+    private func targetIDs(for video: VideoItem) -> [UUID] {
+        if selectedVideoIDs.contains(video.id) && selectedVideoIDs.count > 1 { return Array(selectedVideoIDs) }
+        return [video.id]
+    }
+
+    private func handleSelection(for video: VideoItem, in videos: [VideoItem], flags: NSEvent.ModifierFlags) {
+        if flags.contains(.shift), let lastID = lastSelectedVideoID,
+           let lastIndex = videos.firstIndex(where: { $0.id == lastID }),
+           let currentIndex = videos.firstIndex(where: { $0.id == video.id }) {
+            let range = min(lastIndex, currentIndex)...max(lastIndex, currentIndex)
+            for id in videos[range].map({ $0.id }) { selectedVideoIDs.insert(id) }
+        } else if flags.contains(.command) {
+            if selectedVideoIDs.contains(video.id) { selectedVideoIDs.remove(video.id) } else { selectedVideoIDs.insert(video.id); lastSelectedVideoID = video.id }
+        } else {
+            selectedVideoIDs = [video.id]; lastSelectedVideoID = video.id
+        }
+    }
+
+    private func handleKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard !items.isEmpty else { return .ignored }
+
+        // 再生キー（Enter / Option+Space）はフォーカス未確定でも動作させる
+        switch press.key {
+        case .return:
+            playFocused(items: items); return .handled
+        case .space where press.modifiers.contains(.option):
+            playFocused(items: items); return .handled
+        default:
+            break
+        }
+
+        let cols = max(2, Int(appSettings.columnCount))
+        guard let focused = focusedVideoID, let index = items.firstIndex(where: { $0.id == focused }) else {
+            let first = items[0].id
+            focusedVideoID = first; selectedVideoIDs = [first]; lastSelectedVideoID = first
+            return .handled
+        }
+        var nextIndex: Int?
+        switch press.key {
+        case .upArrow: if index - cols >= 0 { nextIndex = index - cols }
+        case .downArrow: if index + cols < items.count { nextIndex = index + cols }
+        case .leftArrow: if index > 0 { nextIndex = index - 1 }
+        case .rightArrow: if index < items.count - 1 { nextIndex = index + 1 }
+        default: return .ignored
+        }
+        if let nextIndex, items.indices.contains(nextIndex) {
+            let id = items[nextIndex].id
+            focusedVideoID = id; selectedVideoIDs = [id]; lastSelectedVideoID = id
+            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func playFocused(items: [VideoItem]) {
+        let selected = selectedVideoItems
+        if selected.count > 1 {
+            coordinator.playMulti(selected)
+        } else if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
+            open(item)
+        } else if let first = items.first {
+            open(first)
+        }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView(
+            isTrash ? "ゴミ箱は空です" : "お気に入りはありません",
+            systemImage: isTrash ? "trash" : "heart",
+            description: Text(isTrash ? "削除した項目はここに移動します" : "グリッドの右クリックメニューからお気に入りに追加できます")
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 // MARK: - AccessLogView
 struct AccessLogView: View {
     @ObservedObject var webServerManager: WebServerManager
     @Environment(\.dismiss) var dismiss
+    @State private var logFilter: Int = 0 // 0: 全て, 1: 動画本体, 2: サムネ, 3: その他
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -1051,6 +1891,16 @@ struct AccessLogView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Picker("", selection: $logFilter) {
+                    Text("すべて").tag(0)
+                    Text("動画本体").tag(1)
+                    Text("サムネ").tag(2)
+                    Text("その他").tag(3)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 250)
+                
                 Button("クリア") { webServerManager.accessLogs.removeAll() }
                     .disabled(webServerManager.accessLogs.isEmpty)
                 Button("閉じる") { dismiss() }
@@ -1061,14 +1911,23 @@ struct AccessLogView: View {
 
             Divider()
 
-            if webServerManager.accessLogs.isEmpty {
+            let filteredLogs = webServerManager.accessLogs.filter { entry in
+                switch logFilter {
+                case 1: return entry.path.hasPrefix("/video/")
+                case 2: return entry.path.hasPrefix("/thumbnail/")
+                case 3: return !entry.path.hasPrefix("/video/") && !entry.path.hasPrefix("/thumbnail/")
+                default: return true
+                }
+            }
+
+            if filteredLogs.isEmpty {
                 ContentUnavailableView(
                     "まだアクセスがありません",
                     systemImage: "antenna.radiowaves.left.and.right.slash",
-                    description: Text("サーバーへのリクエストがここに記録されます")
+                    description: Text("選択した条件に一致するリクエストはありません")
                 )
             } else {
-                Table(webServerManager.accessLogs) {
+                Table(filteredLogs) {
                     TableColumn("時刻") { entry in
                         Text(AccessLogView.timeFormatter.string(from: entry.date))
                             .font(.system(.caption, design: .monospaced))

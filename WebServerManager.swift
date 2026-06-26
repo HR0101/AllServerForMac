@@ -292,6 +292,54 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         .nav-btn { display: none; } /* モバイルでは矢印を非表示（タップ領域と被るため）*/
                     }
 
+                    /* YouTube風 縦向きレイアウト（上部で再生・下で他の動画を探す） */
+                    .up-next { display: none; }
+                    @media (orientation: portrait) {
+                        #player-modal.mode-video { background: var(--bg-color); }
+                        #player-modal.mode-video .media-container {
+                            flex: none; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #000;
+                        }
+                        #player-modal.mode-video video { height: 100%; max-height: none; }
+                        #player-modal.mode-video .up-next {
+                            display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto;
+                            -webkit-overflow-scrolling: touch; background: var(--bg-color); padding-bottom: 60px;
+                        }
+                    }
+                    .un-head { color: var(--text-secondary); font-size: 13px; font-weight: 600; padding: 12px 16px 6px; letter-spacing: 0.5px; }
+                    .un-item { display: flex; gap: 10px; padding: 8px 12px; cursor: pointer; align-items: flex-start; }
+                    .un-item:active { background: rgba(255,255,255,0.06); }
+                    .un-item.current { background: rgba(217,186,115,0.14); }
+                    .un-thumb-wrap { position: relative; width: 150px; flex: none; }
+                    .un-thumb { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #000; display: block; }
+                    .un-dur { position: absolute; bottom: 5px; right: 5px; background: rgba(0,0,0,0.8); color: #fff; font-size: 11px; font-weight: bold; padding: 1px 5px; border-radius: 4px; }
+                    .un-info { flex: 1; min-width: 0; padding-top: 2px; }
+                    .un-title { color: #fff; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+                    .un-meta { color: var(--text-secondary); font-size: 11px; margin-top: 4px; }
+                    .un-item.current .un-title { color: var(--accent-color); }
+
+                    /* Selection mode */
+                    .tool-btn { background: rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); color:#fff; padding:0 16px; border-radius:12px; font-size:14px; cursor:pointer; white-space:nowrap; }
+                    .tool-btn.active { background: var(--accent-color); color:#000; font-weight:bold; }
+                    .card .check { position:absolute; top:8px; left:8px; width:24px; height:24px; border-radius:50%; background:var(--accent-color); color:#000; display:none; justify-content:center; align-items:center; font-weight:bold; z-index:3; box-shadow:0 2px 6px rgba(0,0,0,0.4); }
+                    .card.selected { outline:3px solid var(--accent-color); outline-offset:-3px; }
+                    .card.selected .check { display:flex; }
+                    .select-actions { display:none; gap:12px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+                    .select-actions .act { background: var(--accent-color); color:#000; border:none; padding:10px 16px; border-radius:12px; font-weight:bold; cursor:pointer; }
+                    .select-actions .act.ghost { background: rgba(255,255,255,0.1); color:#fff; }
+                    .select-actions .ss-clip { width:56px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); color:#fff; padding:8px; border-radius:8px; text-align:center; }
+
+                    /* Multi & Slideshow modals */
+                    #multi-modal, #slideshow-modal { display:none; position:fixed; inset:0; background:#000; z-index:1000; flex-direction:column; }
+                    .multi-grid { flex:1; display:grid; gap:4px; padding:4px; padding-bottom:72px; min-height:0; }
+                    .multi-grid.cols-1 { grid-template-columns: 1fr; }
+                    .multi-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+                    .multi-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+                    .multi-video { width:100%; height:100%; object-fit:contain; background:#000; border-radius:6px; min-height:0; min-width:0; }
+                    .multi-controls, .ss-controls { position:absolute; bottom:0; left:0; width:100%; display:flex; gap:10px; align-items:center; padding:12px 16px; background:linear-gradient(to top, rgba(0,0,0,0.85), transparent); z-index:1001; }
+                    .multi-controls button, .ss-controls button { background:rgba(255,255,255,0.18); color:#fff; border:none; width:44px; height:44px; border-radius:22px; font-size:16px; cursor:pointer; flex:none; }
+                    .multi-controls input[type=range] { flex:1; }
+                    .ss-title { position:absolute; top:0; left:0; width:100%; padding:16px 20px; padding-right:60px; color:#fff; font-weight:bold; text-shadow:0 2px 4px #000; z-index:1001; background:linear-gradient(to bottom, rgba(0,0,0,0.8), transparent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
                     /* Login Overlay */
                     #login-modal { display: none; position: fixed; inset: 0; background: rgba(13,13,20,0.96); z-index: 2000; justify-content: center; align-items: center; backdrop-filter: blur(8px); }
                     .login-card { background: var(--bg-secondary); border: 1px solid rgba(217,186,115,0.25); border-radius: 24px; padding: 36px 28px; width: 90%; max-width: 320px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
@@ -328,6 +376,14 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             <option value="durationDesc">長さが長い順</option>
                             <option value="durationAsc">長さが短い順</option>
                         </select>
+                        <button class="tool-btn" id="select-btn" onclick="toggleSelectMode()">選択</button>
+                    </div>
+                    <div class="select-actions" id="select-actions">
+                        <span><b id="select-count">0</b> 本選択中</span>
+                        <button class="act" onclick="startMulti()">⊞ 同時再生</button>
+                        <label style="color:var(--text-secondary);font-size:13px;">秒/枚 <input class="ss-clip" id="ss-clip" type="number" min="1" max="60" value="15"></label>
+                        <button class="act" onclick="startSlideshow()">▷ スライドショー</button>
+                        <button class="act ghost" onclick="clearSelection()">選択解除</button>
                     </div>
                     <div class="grid" id="videos-grid"></div>
                 </div>
@@ -359,6 +415,31 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         <div class="nav-btn nav-prev" onclick="prevMedia()">&#10094;</div>
                         <div class="nav-btn nav-next" onclick="nextMedia()">&#10095;</div>
                     </div>
+                    <div class="up-next" id="up-next"></div>
+                </div>
+
+                <div id="multi-modal">
+                    <div class="multi-grid" id="multi-grid"></div>
+                    <div class="multi-controls">
+                        <button onclick="multiTogglePlay()" title="再生/一時停止">⏯</button>
+                        <button onclick="multiSeek(-10)" title="10秒戻る">⏪</button>
+                        <button onclick="multiSeek(10)" title="10秒進む">⏩</button>
+                        <button onclick="multiRandom()" title="ランダム位置">🔀</button>
+                        <input type="range" id="multi-slider" min="0" max="1000" value="0" oninput="multiSliderInput(this.value)">
+                        <button onclick="multiToggleMute()" title="ミュート切替">🔊</button>
+                        <button onclick="closeMulti()" title="閉じる">✕</button>
+                    </div>
+                </div>
+
+                <div id="slideshow-modal">
+                    <div class="ss-title" id="ss-title"></div>
+                    <video id="ss-video" playsinline style="width:100%;height:100%;object-fit:contain;background:#000;"></video>
+                    <div class="ss-controls">
+                        <button onclick="ssPrev()" title="前のクリップ">⏮</button>
+                        <button onclick="ssTogglePlay()" title="再生/一時停止">⏯</button>
+                        <button onclick="ssNext()" title="次のクリップ">⏭</button>
+                        <button onclick="closeSlideshow()" title="閉じる">✕</button>
+                    </div>
                 </div>
 
                 <script>
@@ -368,6 +449,13 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     let currentAlbumName = "";
                     let currentMediaIndex = 0;
                     let selectedQuality = "1080p";
+
+                    // 同時再生・スライドショー用
+                    let selectMode = false;
+                    let selectedIds = new Set();
+                    let multiPlayers = [];
+                    let multiTimer = null;
+                    let ssVids = [], ssIndex = 0, ssTimer = null, ssClip = 15;
 
                     // XSS対策: innerHTML に差し込む前にユーザー入力（ファイル名・アルバム名）をエスケープする
                     function esc(s) {
@@ -396,7 +484,10 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         return m + ":" + (s < 10 ? "0" : "") + s;
                     }
 
-                    function showAlbumsView() {
+                    function showAlbumsView(skipPushState = false) {
+                        if (!skipPushState) {
+                            history.pushState({ view: 'albums' }, '', window.location.pathname);
+                        }
                         document.getElementById('albums-view').style.display = 'block';
                         document.getElementById('videos-view').style.display = 'none';
                         document.getElementById('back-btn').style.display = 'none';
@@ -431,10 +522,13 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             let hasVid = false, hasPho = false;
 
                             albums.forEach((album, index) => {
+                                const thumbHtml = album.coverVideoID
+                                    ? `<img class="thumb" src="/thumbnail/${encodeURIComponent(album.coverVideoID)}" loading="lazy" style="position:absolute; width:100%; height:100%; object-fit:cover;">`
+                                    : `<div class="icon-center">${album.type === 'photo' ? '🖼️' : '📁'}</div>`;
                                 const cardHtml = `
                                     <div class="card" onclick="loadVideos(${index})">
                                         <div class="thumb-container">
-                                            <div class="icon-center">${album.type === 'photo' ? '🖼️' : '📁'}</div>
+                                            ${thumbHtml}
                                             <div class="badge-count">${album.videoCount}</div>
                                         </div>
                                         <div class="title" style="color: ${album.type === 'photo' ? '#ff9f0a' : '#fff'}">${esc(album.name)}</div>
@@ -460,9 +554,12 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         }
                     }
 
-                    async function loadVideos(albumIndex) {
+                    async function loadVideos(albumIndex, skipPushState = false) {
                         const album = currentAlbums[albumIndex];
                         if (!album) return;
+                        if (!skipPushState) {
+                            history.pushState({ view: 'videos', albumIndex: albumIndex }, '', '#' + album.id);
+                        }
                         const albumId = album.id;
                         currentAlbumName = album.name;
                         document.getElementById('albums-view').style.display = 'none';
@@ -470,6 +567,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         document.getElementById('back-btn').style.display = 'block';
                         document.getElementById('page-title').innerText = album.name;
                         document.getElementById('search-input').value = "";
+                        resetSelection();
 
                         const grid = document.getElementById('videos-grid');
                         grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#888;">読み込み中...</p>';
@@ -524,7 +622,8 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             const durBadge = !isPhoto && video.duration > 0 ? `<div class="badge-duration">${formatDuration(video.duration)}</div>` : '';
                             
                             html += `
-                                <div class="card" onclick="openMedia(${index})">
+                                <div class="card" data-id="${video.id}" onclick="cardClick(${index})">
+                                    <div class="check">✓</div>
                                     <div class="thumb-container">
                                         <img class="thumb" src="/thumbnail/${encodeURIComponent(video.id)}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\'><rect width=\\'100%\\' height=\\'100%\\' fill=\\'%23111\\'/></svg>'">
                                         ${durBadge}
@@ -535,14 +634,20 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             `;
                         });
                         grid.innerHTML = html;
+                        updateSelectionUI();
                     }
 
                     function openMedia(index) {
                         if (index < 0 || index >= currentFilteredVideos.length) return;
+                        const modal = document.getElementById('player-modal');
+                        const wasOpen = modal.style.display === 'flex';
                         currentMediaIndex = index;
                         const media = currentFilteredVideos[index];
                         const isPhoto = media.mediaType === 'photo';
-                        
+
+                        modal.classList.toggle('mode-photo', isPhoto);
+                        modal.classList.toggle('mode-video', !isPhoto);
+
                         document.getElementById('player-filename').innerText = media.filename;
                         const container = document.getElementById('media-container');
                         
@@ -579,7 +684,49 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                             video.play().catch(e => console.log("自動再生がブロックされました"));
                         }
                         
-                        document.getElementById('player-modal').style.display = 'flex';
+                        modal.style.display = 'flex';
+
+                        // YouTube風: 縦向きのとき下部に他の動画リストを表示
+                        if (!wasOpen || !document.getElementById('up-next').hasChildNodes()) {
+                            renderUpNext();
+                        } else {
+                            updateUpNextHighlight();
+                        }
+                    }
+
+                    function renderUpNext() {
+                        const list = document.getElementById('up-next');
+                        let html = '<div class="un-head">再生中・他のメディア</div>';
+                        currentFilteredVideos.forEach((v, i) => {
+                            const isPhoto = v.mediaType === 'photo';
+                            const dur = !isPhoto && v.duration > 0 ? `<div class="un-dur">${formatDuration(v.duration)}</div>` : '';
+                            const cur = i === currentMediaIndex ? ' current' : '';
+                            html += `
+                                <div class="un-item${cur}" data-idx="${i}" onclick="openMedia(${i})">
+                                    <div class="un-thumb-wrap">
+                                        <img class="un-thumb" src="/thumbnail/${encodeURIComponent(v.id)}" loading="lazy" onerror="this.style.visibility='hidden'">
+                                        ${dur}
+                                    </div>
+                                    <div class="un-info">
+                                        <div class="un-title">${esc(v.filename)}</div>
+                                        <div class="un-meta">${isPhoto ? '📷 写真' : '🎥 動画'}</div>
+                                    </div>
+                                </div>`;
+                        });
+                        list.innerHTML = html;
+                        scrollCurrentIntoView();
+                    }
+
+                    function updateUpNextHighlight() {
+                        document.querySelectorAll('#up-next .un-item').forEach(el => {
+                            el.classList.toggle('current', Number(el.dataset.idx) === currentMediaIndex);
+                        });
+                        scrollCurrentIntoView();
+                    }
+
+                    function scrollCurrentIntoView() {
+                        const el = document.querySelector('#up-next .un-item.current');
+                        if (el) el.scrollIntoView({ block: 'nearest' });
                     }
 
                     function changeQuality(q) {
@@ -688,7 +835,173 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         }
                     });
 
-                    showAlbumsView();
+                    // ===== 選択モード =====
+                    function toggleSelectMode() {
+                        selectMode = !selectMode;
+                        document.getElementById('select-btn').classList.toggle('active', selectMode);
+                        document.getElementById('select-actions').style.display = selectMode ? 'flex' : 'none';
+                        if (!selectMode) { selectedIds.clear(); updateSelectionUI(); }
+                    }
+                    function resetSelection() {
+                        selectMode = false;
+                        selectedIds.clear();
+                        const btn = document.getElementById('select-btn');
+                        if (btn) btn.classList.remove('active');
+                        const act = document.getElementById('select-actions');
+                        if (act) act.style.display = 'none';
+                    }
+                    function cardClick(index) {
+                        if (selectMode) toggleSelect(index); else openMedia(index);
+                    }
+                    function toggleSelect(index) {
+                        const v = currentFilteredVideos[index];
+                        if (!v || v.mediaType === 'photo') return; // 動画のみ
+                        if (selectedIds.has(v.id)) selectedIds.delete(v.id); else selectedIds.add(v.id);
+                        updateSelectionUI();
+                    }
+                    function clearSelection() { selectedIds.clear(); updateSelectionUI(); }
+                    function updateSelectionUI() {
+                        document.querySelectorAll('.card').forEach(c => {
+                            const id = c.getAttribute('data-id');
+                            if (id && selectedIds.has(id)) c.classList.add('selected'); else c.classList.remove('selected');
+                        });
+                        const cnt = document.getElementById('select-count');
+                        if (cnt) cnt.innerText = selectedIds.size;
+                    }
+                    function selectedVideoList() {
+                        return currentFilteredVideos.filter(v => selectedIds.has(v.id) && v.mediaType !== 'photo');
+                    }
+
+                    // ===== 同時再生（同期グリッド） =====
+                    function startMulti() {
+                        const vids = selectedVideoList().slice(0, 9);
+                        if (vids.length < 2) { alert('動画を2本以上選択してください'); return; }
+                        openMulti(vids);
+                    }
+                    function columnsFor(n) { return n <= 1 ? 1 : (n <= 4 ? 2 : 3); }
+                    function openMulti(vids) {
+                        clearInterval(multiTimer);
+                        const grid = document.getElementById('multi-grid');
+                        grid.className = 'multi-grid cols-' + columnsFor(vids.length);
+                        grid.innerHTML = vids.map(v => `<video class="multi-video" src="/video/${encodeURIComponent(v.id)}?q=${selectedQuality}" playsinline muted></video>`).join('');
+                        document.getElementById('multi-modal').style.display = 'flex';
+                        multiPlayers = Array.from(grid.querySelectorAll('video'));
+                        multiPlayers.forEach(p => p.play().catch(() => {}));
+                        const slider = document.getElementById('multi-slider');
+                        multiTimer = setInterval(() => {
+                            const lead = multiLead();
+                            if (lead && lead.duration) slider.value = Math.round((lead.currentTime / lead.duration) * 1000);
+                        }, 300);
+                    }
+                    function multiLead() {
+                        let lead = null, max = -1;
+                        multiPlayers.forEach(p => { const d = p.duration || 0; if (d > max) { max = d; lead = p; } });
+                        return lead || multiPlayers[0];
+                    }
+                    function multiTogglePlay() {
+                        const playing = multiPlayers.some(p => !p.paused);
+                        multiPlayers.forEach(p => playing ? p.pause() : p.play().catch(() => {}));
+                    }
+                    function multiSeek(s) {
+                        multiPlayers.forEach(p => { p.currentTime = Math.max(0, Math.min(p.duration || 0, p.currentTime + s)); });
+                    }
+                    function multiSeekPct(pct) {
+                        multiPlayers.forEach(p => { if (p.duration) p.currentTime = p.duration * pct; });
+                    }
+                    function multiSliderInput(v) { multiSeekPct(v / 1000); }
+                    function multiRandom() {
+                        let shortest = Infinity;
+                        multiPlayers.forEach(p => { if (p.duration && p.duration < shortest) shortest = p.duration; });
+                        if (!isFinite(shortest)) return;
+                        const t = Math.random() * shortest;
+                        multiPlayers.forEach(p => p.currentTime = t);
+                    }
+                    function multiToggleMute() {
+                        const anyUnmuted = multiPlayers.some(p => !p.muted);
+                        multiPlayers.forEach(p => p.muted = anyUnmuted);
+                    }
+                    function closeMulti() {
+                        clearInterval(multiTimer);
+                        multiPlayers.forEach(p => { p.pause(); p.removeAttribute('src'); p.load(); });
+                        multiPlayers = [];
+                        document.getElementById('multi-modal').style.display = 'none';
+                    }
+
+                    // ===== スライドショー =====
+                    function startSlideshow() {
+                        const vids = selectedVideoList();
+                        if (vids.length < 2) { alert('動画を2本以上選択してください'); return; }
+                        ssClip = Math.max(1, Math.min(60, parseInt(document.getElementById('ss-clip').value) || 15));
+                        ssVids = vids; ssIndex = 0;
+                        document.getElementById('slideshow-modal').style.display = 'flex';
+                        ssPlayClip();
+                    }
+                    function ssPlayClip() {
+                        clearTimeout(ssTimer);
+                        if (ssIndex < 0) ssIndex = ssVids.length - 1;
+                        if (ssIndex >= ssVids.length) ssIndex = 0;
+                        const v = ssVids[ssIndex];
+                        const video = document.getElementById('ss-video');
+                        document.getElementById('ss-title').innerText = (ssIndex + 1) + ' / ' + ssVids.length + '   ' + v.filename;
+                        video.src = `/video/${encodeURIComponent(v.id)}?q=${selectedQuality}`;
+                        video.onloadedmetadata = () => {
+                            const dur = video.duration || 0;
+                            video.currentTime = (dur > ssClip) ? Math.random() * (dur - ssClip) : 0;
+                            video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+                            clearTimeout(ssTimer);
+                            ssTimer = setTimeout(ssNext, ssClip * 1000);
+                        };
+                        video.onended = ssNext;
+                    }
+                    function ssNext() { ssIndex++; ssPlayClip(); }
+                    function ssPrev() { ssIndex--; ssPlayClip(); }
+                    function ssTogglePlay() {
+                        const video = document.getElementById('ss-video');
+                        if (video.paused) { video.play().catch(() => {}); ssTimer = setTimeout(ssNext, ssClip * 1000); }
+                        else { video.pause(); clearTimeout(ssTimer); }
+                    }
+                    function closeSlideshow() {
+                        clearTimeout(ssTimer);
+                        const video = document.getElementById('ss-video');
+                        video.pause(); video.removeAttribute('src'); video.load();
+                        document.getElementById('slideshow-modal').style.display = 'none';
+                    }
+
+                    // 同時再生・スライドショーのキーボード操作
+                    document.addEventListener('keydown', (e) => {
+                        const multiOpen = document.getElementById('multi-modal').style.display === 'flex';
+                        const ssOpen = document.getElementById('slideshow-modal').style.display === 'flex';
+                        if (!multiOpen && !ssOpen) return;
+                        if (document.activeElement.tagName === 'INPUT') return;
+                        if (e.key === 'Escape') { e.preventDefault(); multiOpen ? closeMulti() : closeSlideshow(); return; }
+                        if (multiOpen) {
+                            if (e.key >= '0' && e.key <= '9') { e.preventDefault(); multiSeekPct(parseInt(e.key) / 10); return; }
+                            switch (e.key.toLowerCase()) {
+                                case ' ': case 'k': e.preventDefault(); multiTogglePlay(); break;
+                                case 'j': e.preventDefault(); multiSeek(-5); break;
+                                case 'l': e.preventDefault(); multiSeek(5); break;
+                                case 'h': e.preventDefault(); multiSeek(-10); break;
+                                case ';': e.preventDefault(); multiSeek(10); break;
+                                case 'r': e.preventDefault(); multiRandom(); break;
+                            }
+                        } else if (ssOpen) {
+                            switch (e.key) {
+                                case 'ArrowRight': e.preventDefault(); ssNext(); break;
+                                case 'ArrowLeft': e.preventDefault(); ssPrev(); break;
+                                case ' ': case 'k': case 'K': e.preventDefault(); ssTogglePlay(); break;
+                            }
+                        }
+                    });
+
+                    window.addEventListener('popstate', (e) => {
+                        if (e.state && e.state.view === 'videos') {
+                            loadVideos(e.state.albumIndex, true);
+                        } else {
+                            showAlbumsView(true);
+                        }
+                    });
+
+                    showAlbumsView(true);
                 </script>
             </body>
             </html>
@@ -700,8 +1013,10 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             var albumInfos: [RemoteAlbumInfo] = []
             DispatchQueue.main.sync {
-                albumInfos = dataManager.albums.map {
-                    RemoteAlbumInfo(id: $0.id.uuidString, name: $0.name, videoCount: $0.videoIDs.count, type: $0.type.rawValue)
+                let trashedIDs = Set(dataManager.videos.filter { $0.isInTrash }.map { $0.id })
+                albumInfos = dataManager.albums.map { album in
+                    let validVideos = album.videoIDs.filter { !trashedIDs.contains($0) }
+                    return RemoteAlbumInfo(id: album.id.uuidString, name: album.name, videoCount: validVideos.count, type: album.type.rawValue, coverVideoID: validVideos.first?.uuidString)
                 }
             }
             let encoder = JSONEncoder()
@@ -722,7 +1037,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             DispatchQueue.main.sync {
                 if let album = dataManager.albums.first(where: { $0.id == albumID }) {
                     found = true
-                    let videoItems = dataManager.videos.filter { album.videoIDs.contains($0.id) }
+                    let videoItems = dataManager.videos.filter { album.videoIDs.contains($0.id) && !$0.isInTrash }
                     videoInfos = videoItems.map {
                         RemoteVideoInfo(id: $0.id.uuidString,
                                         filename: $0.originalFilename,
@@ -859,23 +1174,44 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             
             let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "original"
             
-            var videoURL: URL?
+            var extPath: String?
+            var internalFilename = ""
+            var videoStorageURL: URL?
+            var downloadStorageURL: URL?
+            var proxyStorageURL: URL?
+            
             DispatchQueue.main.sync {
                 if let videoItem = dataManager.videos.first(where: { $0.id == videoID }) {
-                    if quality == "1080p" {
-                        let proxyURL = dataManager.proxyStorageURL.appendingPathComponent("\(videoIDString)_1080p.mp4")
-                        if FileManager.default.fileExists(atPath: proxyURL.path) {
-                            videoURL = proxyURL
-                        }
-                    } else if quality == "540p" {
-                        let proxyURL = dataManager.proxyStorageURL.appendingPathComponent("\(videoIDString)_540p.mp4")
-                        if FileManager.default.fileExists(atPath: proxyURL.path) {
-                            videoURL = proxyURL
-                        }
-                    }
-                    
-                    if videoURL == nil {
-                        videoURL = dataManager.fileURL(for: videoItem)
+                    extPath = videoItem.externalFilePath
+                    internalFilename = videoItem.internalFilename
+                    videoStorageURL = dataManager.videoStorageURL
+                    downloadStorageURL = dataManager.downloadStorageURL
+                    proxyStorageURL = dataManager.proxyStorageURL
+                }
+            }
+            
+            guard let vURL = videoStorageURL, let dURL = downloadStorageURL, let pURL = proxyStorageURL else { return .notFound }
+            
+            var videoURL: URL?
+            if quality == "1080p" {
+                let proxyURL = pURL.appendingPathComponent("\(videoIDString)_1080p.mp4")
+                if FileManager.default.fileExists(atPath: proxyURL.path) { videoURL = proxyURL }
+            } else if quality == "540p" {
+                let proxyURL = pURL.appendingPathComponent("\(videoIDString)_540p.mp4")
+                if FileManager.default.fileExists(atPath: proxyURL.path) { videoURL = proxyURL }
+            }
+            
+            if videoURL == nil {
+                if let path = extPath {
+                    let extURL = URL(fileURLWithPath: path)
+                    if FileManager.default.fileExists(atPath: extURL.path) { videoURL = extURL }
+                }
+                if videoURL == nil && !internalFilename.isEmpty {
+                    let hiddenURL = vURL.appendingPathComponent(internalFilename)
+                    if FileManager.default.fileExists(atPath: hiddenURL.path) { videoURL = hiddenURL }
+                    else {
+                        let downloadURL = dURL.appendingPathComponent(internalFilename)
+                        if FileManager.default.fileExists(atPath: downloadURL.path) { videoURL = downloadURL }
                     }
                 }
             }
@@ -932,10 +1268,10 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 }
             }
             guard let item = targetItem, let fileUrl = videoFileUrl else { return .notFound }
-            
+
             let semaphore = DispatchSemaphore(value: 0)
             var generatedData: Data? = nil
-            
+
             Task {
                 if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high) {
                     try? data.write(to: thumbnailURL)
@@ -943,9 +1279,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                 }
                 semaphore.signal()
             }
-            
+
             let result = semaphore.wait(timeout: .now() + 5.0)
-            
+
             if result == .success, let data = generatedData {
                 return .ok(.data(data, contentType: "image/jpeg"))
             } else {
@@ -968,7 +1304,12 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             do {
-                try self.server.start(portToUse, forceIPv4: true)
+                // priority のデフォルトは .background。これだと接続処理スレッドが
+                // 強くスロットリングされ、サムネイル生成などでワーカースレッドが埋まると
+                // 動画ストリーミングのリクエストにスレッドが割り当てられず固まってしまう
+                // （アルバムを開いた直後に同時再生が始まらない原因）。
+                // .userInitiated に上げてワーカースレッドを十分確保する。
+                try self.server.start(portToUse, forceIPv4: true, priority: .userInitiated)
                 let actualPort = try self.server.port()
                 DispatchQueue.main.async {
                     self.targetPort = Int(actualPort)
@@ -1192,14 +1533,27 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             if let rangeHeader = request.headers["range"], let range = RangeHeader.parse(rangeHeader, totalSize: size) {
                 let (start, end) = range
                 let length = end - start + 1
-                let file = try FileHandle(forReadingFrom: url)
-                defer { file.closeFile() }
-                try file.seek(toOffset: start)
-                let data = file.readData(ofLength: Int(length))
                 return .raw(206, "Partial Content", [
                     "Content-Type": mime, "Content-Length": String(length),
                     "Content-Range": "bytes \(start)-\(end)/\(size)", "Accept-Ranges": "bytes"
-                ], { writer in try? writer.write(data) })
+                ], { writer in
+                    guard let file = try? FileHandle(forReadingFrom: url) else { return }
+                    defer { file.closeFile() }
+                    try? file.seek(toOffset: start)
+                    var remaining = length
+                    let chunkSize = 512 * 1024
+                    while remaining > 0 {
+                        let toRead = Int(min(UInt64(chunkSize), remaining))
+                        let data = file.readData(ofLength: toRead)
+                        if data.isEmpty { break }
+                        do {
+                            try writer.write(data)
+                            remaining -= UInt64(data.count)
+                        } catch {
+                            break // ソケットが閉じられたら終了
+                        }
+                    }
+                })
             } else {
                 let file = try FileHandle(forReadingFrom: url)
                 return .raw(200, "OK", [
