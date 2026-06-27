@@ -71,6 +71,13 @@ struct StorageManagerView: View {
                     Text("タイトルが違っても内容が完全に一致する動画を自動で整理します。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                        
+                    Button(action: runFaceAnalysis) {
+                        Label("全動画の顔解析を実行 (プロトタイプ)", systemImage: "face.dashed")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
 
                     HStack(spacing: 10) {
                         Button(action: { dataManager.openAppRootFolderInFinder() }) {
@@ -167,6 +174,31 @@ struct StorageManagerView: View {
                 calculateSizes()
                 isOptimizing = false
                 resultMessage = "\(removedCount) 件の重複動画を検知し、削除しました。\n(関連するゴミファイルも同時に一掃しました)"
+                showingResultAlert = true
+            }
+        }
+    }
+
+    private func runFaceAnalysis() {
+        isOptimizing = true
+        optimizationMessage = "全動画の顔を解析しています... (動画が多いと時間がかかります)"
+        FaceDatabase.shared.clear()
+        
+        Task {
+            let videos = dataManager.videos.filter { $0.mediaType == .video && !$0.isInTrash }
+            for (index, video) in videos.enumerated() {
+                if let url = dataManager.fileURL(for: video) {
+                    await MainActor.run {
+                        optimizationMessage = "解析中... (\(index + 1)/\(videos.count))\n\(video.originalFilename)"
+                    }
+                    await FaceAnalyzer.analyze(videoID: video.id, url: url)
+                }
+            }
+            
+            await MainActor.run {
+                isOptimizing = false
+                let faceAlbumsCount = FaceDatabase.shared.getAlbums().count
+                resultMessage = "顔解析が完了しました！\n\(faceAlbumsCount) 人の人物を検知しました。"
                 showingResultAlert = true
             }
         }
