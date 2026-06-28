@@ -114,6 +114,42 @@ extension WebServerManager {
             DispatchQueue.main.async { dataManager.deleteAlbum(albumID: id) }
             return .ok(.text("Deleted"))
         }
+        
+        server.post["/albums/:id/analyzeFaces"] = protected { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager,
+                  let idStr = request.params[":id"], let albumID = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
+            
+            DispatchQueue.main.async {
+                let allAlbums = dataManager.albums + FaceDatabase.shared.getAlbums()
+                guard let album = allAlbums.first(where: { $0.id == albumID }) else { return }
+                
+                let unanalyzed = dataManager.videos.filter { album.videoIDs.contains($0.id) && !$0.isInTrash && !FaceDatabase.shared.isAnalyzed(videoID: $0.id) }
+                
+                Task {
+                    for video in unanalyzed {
+                        if let url = dataManager.fileURL(for: video) {
+                            await FaceAnalyzer.analyze(videoID: video.id, url: url)
+                        }
+                    }
+                }
+            }
+            return .ok(.text("Analysis started"))
+        }
+
+        server.post["/faces/:id/rename"] = protected { request -> HttpResponse in
+            guard let idStr = request.params[":id"], let clusterID = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
+            struct RenameReq: Codable { let name: String }
+            do {
+                let req = try JSONDecoder().decode(RenameReq.self, from: Data(request.body))
+                DispatchQueue.main.async {
+                    if let cluster = FaceDatabase.shared.clusters.first(where: { $0.id == clusterID }) {
+                        cluster.name = req.name
+                        FaceDatabase.shared.save()
+                    }
+                }
+                return .ok(.text("Renamed"))
+            } catch { return .badRequest(.text("Invalid request")) }
+        }
 
         server.post["/move"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }

@@ -24,6 +24,13 @@ struct AlbumDetailView: View {
     @State private var showSplitSheet = false
     @State private var splitCount: Int = 4
     @State private var splitTargetVideo: VideoItem?
+    
+    // 顔認識用
+    @State private var isAnalyzingFaces = false
+    @State private var analyzeProgress: Double = 0
+    @State private var analyzeCurrent: Int = 0
+    @State private var analyzeTotal: Int = 0
+    @State private var showNoUnanalyzedVideosAlert = false
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
@@ -72,6 +79,31 @@ struct AlbumDetailView: View {
                 if isTargeted {
                     dropOverlay
                 }
+                
+                if isAnalyzingFaces {
+                    Color.black.opacity(0.6).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView("顔を解析中...", value: analyzeProgress, total: 1.0)
+                            .progressViewStyle(.linear)
+                            .frame(width: 200)
+                            .tint(.accentColor)
+                            .foregroundColor(.white)
+                        Text("\(analyzeCurrent) / \(analyzeTotal) (\(Int(analyzeProgress * 100))%)")
+                            .foregroundColor(.white)
+                            .font(.subheadline)
+                        
+                        Button("キャンセル") {
+                            isAnalyzingFaces = false
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(.red)
+                        .padding(.top, 8)
+                    }
+                    .padding()
+                    .background(.thickMaterial)
+                    .cornerRadius(12)
+                }
             }
 
             Divider()
@@ -88,6 +120,42 @@ struct AlbumDetailView: View {
                         Label("ランダム再生", systemImage: "shuffle")
                     }
                     .help("このアルバムの動画をシャッフルして再生")
+                }
+            }
+            
+            ToolbarItem(placement: .primaryAction) {
+                if !albumVideoItems.isEmpty {
+                    Button {
+                        let unanalyzed = albumVideoItems.filter { !FaceDatabase.shared.isAnalyzed(videoID: $0.id) }
+                        if unanalyzed.isEmpty {
+                            showNoUnanalyzedVideosAlert = true
+                            return
+                        }
+                        
+                        Task {
+                            isAnalyzingFaces = true
+                            analyzeProgress = 0
+                            analyzeCurrent = 0
+                            analyzeTotal = unanalyzed.count
+                            
+                            var count = 0
+                            let total = unanalyzed.count
+                            for video in unanalyzed {
+                                if !isAnalyzingFaces { break } // キャンセルされたら中断
+                                if let url = dataManager.fileURL(for: video) {
+                                    await FaceAnalyzer.analyze(videoID: video.id, url: url)
+                                }
+                                count += 1
+                                analyzeCurrent = count
+                                analyzeProgress = Double(count) / Double(total)
+                            }
+                            isAnalyzingFaces = false
+                        }
+                    } label: {
+                        Label("顔解析", systemImage: "person.crop.circle.badge.plus")
+                    }
+                    .help("未解析の動画から顔を抽出")
+                    .disabled(isAnalyzingFaces)
                 }
             }
 
@@ -148,6 +216,11 @@ struct AlbumDetailView: View {
             Button("キャンセル", role: .cancel) { pendingFolderURL = nil }
         } message: {
             Text("\(mixedContentInfo)\n指定したタイプ (\(album.type.displayName)) 以外のファイルは無視されます。")
+        }
+        .alert("解析済み", isPresented: $showNoUnanalyzedVideosAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("このアルバム内のすべての動画はすでに顔解析が完了しています。")
         }
         .sheet(item: $previewItem) { item in
             MediaPreviewView(item: item, dataManager: dataManager)
@@ -960,5 +1033,195 @@ struct LibraryCategoryView: View {
             description: Text(isTrash ? "削除した項目はここに移動します" : "グリッドの右クリックメニューからお気に入りに追加できます")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+import SwiftUI
+import AVFoundation
+
+struct FaceGalleryView: View {
+    @ObservedObject var dataManager: VideoDataManager
+    @ObservedObject var faceDB = FaceDatabase.shared
+    
+    @State private var selectedCluster: PersonCluster?
+    
+    let columns = [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 16)]
+    
+    var body: some View {
+        ScrollView {
+            if faceDB.clusters.isEmpty {
+                ContentUnavailableView("顔データがありません", systemImage: "person.crop.rectangle", description: Text("アルバム画面から動画の顔解析を実行してください。"))
+                    .padding(.top, 100)
+            } else {
+                LazyVGrid(columns: columns, spacing: 20) {
+                    ForEach(faceDB.clusters) { cluster in
+                        Button {
+                            selectedCluster = cluster
+                        } label: {
+                            FaceClusterCard(cluster: cluster, dataManager: dataManager)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding()
+            }
+        }
+        .navigationTitle("顔認識グループ")
+        .sheet(item: $selectedCluster) { cluster in
+            FaceClusterDetailView(cluster: cluster, dataManager: dataManager)
+        }
+    }
+}
+
+struct FaceClusterCard: View {
+    let cluster: PersonCluster
+    let dataManager: VideoDataManager
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.windowBackgroundColor))
+                    .aspectRatio(1, contentMode: .fit)
+                
+                if let firstApp = cluster.appearances.first,
+                   let video = dataManager.videos.first(where: { $0.id == firstApp.videoID }) {
+                    FaceCropImageView(video: video, boundingBox: firstApp.boundingBox, dataManager: dataManager)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
+                    Image(systemName: "person.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .padding(30)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 1)
+            
+            Text(cluster.name)
+                .font(.headline)
+                .lineLimit(1)
+            
+            Text("\(cluster.appearances.count) 個の動画")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+struct FaceCropImageView: View {
+    let video: VideoItem
+    let boundingBox: CGRect
+    let dataManager: VideoDataManager
+    
+    @State private var image: NSImage?
+    
+    var body: some View {
+        GeometryReader { geo in
+            if let img = image {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+            } else {
+                Color.gray.opacity(0.2)
+                    .task {
+                        await loadImage()
+                    }
+            }
+        }
+    }
+    
+    private func loadImage() async {
+        guard let url = dataManager.fileURL(for: video) else { return }
+        
+        let thumbURL = dataManager.thumbnailStorageURL.appendingPathComponent("\(video.id.uuidString)_original.jpg")
+        
+        var nsImage: NSImage?
+        if let data = try? Data(contentsOf: thumbURL) {
+             nsImage = NSImage(data: data)
+        } else {
+            let asset = AVURLAsset(url: url)
+            let gen = AVAssetImageGenerator(asset: asset)
+            gen.appliesPreferredTrackTransform = true
+            if let cgImage = try? await gen.image(at: .zero).image {
+                nsImage = NSImage(cgImage: cgImage, size: .zero)
+            }
+        }
+        
+        guard let sourceImage = nsImage else { return }
+        
+        let imageSize = sourceImage.size
+        let rect = CGRect(
+            x: boundingBox.origin.x * imageSize.width,
+            y: (1 - boundingBox.origin.y - boundingBox.height) * imageSize.height,
+            width: boundingBox.width * imageSize.width,
+            height: boundingBox.height * imageSize.height
+        )
+        
+        if let cgImage = sourceImage.cgImage(forProposedRect: nil, context: nil, hints: nil),
+           let cropped = cgImage.cropping(to: rect) {
+            let result = NSImage(cgImage: cropped, size: rect.size)
+            await MainActor.run {
+                self.image = result
+            }
+        }
+    }
+}
+
+struct FaceClusterDetailView: View {
+    let cluster: PersonCluster
+    let dataManager: VideoDataManager
+    
+    @Environment(\.dismiss) var dismiss
+    
+    @State private var newName: String = ""
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("グループの動画 (\(cluster.appearances.count))")
+                    .font(.headline)
+                Spacer()
+                Button("閉じる") { dismiss() }
+            }
+            .padding()
+            
+            Divider()
+            
+            HStack {
+                Text("名前:")
+                TextField("名前", text: $newName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                    .onSubmit {
+                        cluster.name = newName
+                        FaceDatabase.shared.save()
+                    }
+                Button("保存") {
+                    cluster.name = newName
+                    FaceDatabase.shared.save()
+                }
+                Spacer()
+            }
+            .padding()
+            
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 16)], spacing: 16) {
+                    let uniqueVideoIDs = Array(Set(cluster.appearances.map { $0.videoID }))
+                    ForEach(uniqueVideoIDs, id: \.self) { videoID in
+                        if let video = dataManager.videos.first(where: { $0.id == videoID }) {
+                            MacVideoThumbnailView(videoItem: video, dataManager: dataManager)
+                                .frame(height: 120)
+                        }
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(width: 600, height: 500)
+        .onAppear {
+            newName = cluster.name
+        }
     }
 }

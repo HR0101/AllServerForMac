@@ -8,6 +8,7 @@ enum NavigationSelection: Hashable {
     case album(UUID)
     case year(Int)
     case month(Int, Int)
+    case faces
 }
 
 // MARK: - メインビュー
@@ -84,6 +85,8 @@ struct ContentView: View {
                     } else {
                         ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
                     }
+                case .faces:
+                    FaceGalleryView(dataManager: dataManager)
                 case .none:
                     ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                 }

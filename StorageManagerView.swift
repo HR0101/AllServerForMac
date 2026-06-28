@@ -181,12 +181,12 @@ struct StorageManagerView: View {
 
     private func runFaceAnalysis() {
         isOptimizing = true
-        optimizationMessage = "全動画の顔を解析しています... (動画が多いと時間がかかります)"
-        FaceDatabase.shared.clear()
+        optimizationMessage = "未解析の動画の顔を解析しています... (動画が多いと時間がかかります)"
         
         Task {
             let videos = dataManager.videos.filter { $0.mediaType == .video && !$0.isInTrash }
             for (index, video) in videos.enumerated() {
+                if FaceDatabase.shared.isAnalyzed(videoID: video.id) { continue }
                 if let url = dataManager.fileURL(for: video) {
                     await MainActor.run {
                         optimizationMessage = "解析中... (\(index + 1)/\(videos.count))\n\(video.originalFilename)"

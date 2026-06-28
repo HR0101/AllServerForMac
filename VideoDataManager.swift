@@ -4,6 +4,7 @@ import AVFoundation
 import CryptoKit
 import Combine
 import UniformTypeIdentifiers
+import Vision
 
 
 
@@ -729,7 +730,7 @@ class VideoDataManager: ObservableObject {
     }
 }
 
-// MARK: - Face Recognition Prototype
+// MARK: - Face Recognition
 
 struct FaceAppearance: Codable, Hashable {
     let videoID: UUID
@@ -747,7 +748,7 @@ struct FaceColor: Codable {
     }
     
     func distance(to other: FaceColor) -> Float {
-        guard grid.count == other.grid.count, grid.count > 0 else { return 0 }
+        guard grid.count == other.grid.count, grid.count > 0 else { return .infinity }
         var sum: Float = 0
         for i in 0..<grid.count {
             let diff = grid[i] - other.grid[i]
@@ -763,33 +764,87 @@ class PersonCluster: Codable, Identifiable {
     var appearances: [FaceAppearance]
     var featurePrintData: Data
     var averageColor: FaceColor?
+    var featurePrintSamples: [Data]
     
-    init(name: String, appearances: [FaceAppearance], featurePrintData: Data, averageColor: FaceColor?) {
+    init(name: String, appearances: [FaceAppearance], featurePrintData: Data, averageColor: FaceColor?, featurePrintSamples: [Data]? = nil) {
         self.name = name
         self.appearances = appearances
         self.featurePrintData = featurePrintData
         self.averageColor = averageColor
+        self.featurePrintSamples = featurePrintSamples ?? [featurePrintData]
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case appearances
+        case featurePrintData
+        case averageColor
+        case featurePrintSamples
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        appearances = try container.decode([FaceAppearance].self, forKey: .appearances)
+        featurePrintData = try container.decode(Data.self, forKey: .featurePrintData)
+        averageColor = try container.decodeIfPresent(FaceColor.self, forKey: .averageColor)
+        featurePrintSamples = try container.decodeIfPresent([Data].self, forKey: .featurePrintSamples) ?? [featurePrintData]
+    }
+}
+
+struct FaceSample {
+    let videoID: UUID
+    let boundingBox: CGRect
+    let featurePrint: VNFeaturePrintObservation
+    let featurePrintData: Data
+    let faceColor: FaceColor?
+    let quality: Float
 }
 
 class FaceDatabase: ObservableObject {
     static let shared = FaceDatabase()
     
     @Published var clusters: [PersonCluster] = []
+    @Published var analyzedVideoIDs: Set<UUID> = []
     
     private let saveURL: URL
+    private let analyzedSaveURL: URL
+    private let algorithmVersionURL: URL
+
+    private let currentAlgorithmVersion = 2
+    private let clusterAcceptThreshold: Float = 5.8
+    private let clusterAmbiguousMargin: Float = 0.35
+    private let strongFeatureMatchThreshold: Float = 3.0
+    private let colorWeight: Float = 1.0
+    private let maxRepresentativeSamples = 8
     
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         saveURL = docs.appendingPathComponent("FaceDatabase.json")
+        analyzedSaveURL = docs.appendingPathComponent("AnalyzedVideos.json")
+        algorithmVersionURL = docs.appendingPathComponent("FaceAlgorithmVersion.json")
         load()
     }
     
     func load() {
+        if savedAlgorithmVersion() != currentAlgorithmVersion {
+            try? FileManager.default.removeItem(at: saveURL)
+            try? FileManager.default.removeItem(at: analyzedSaveURL)
+            saveAlgorithmVersion()
+        }
+
         if let data = try? Data(contentsOf: saveURL),
            let decoded = try? JSONDecoder().decode([PersonCluster].self, from: data) {
             DispatchQueue.main.async {
                 self.clusters = decoded
+            }
+        }
+        if let data = try? Data(contentsOf: analyzedSaveURL),
+           let decoded = try? JSONDecoder().decode(Set<UUID>.self, from: data) {
+            DispatchQueue.main.async {
+                self.analyzedVideoIDs = decoded
             }
         }
     }
@@ -798,70 +853,137 @@ class FaceDatabase: ObservableObject {
         if let data = try? JSONEncoder().encode(clusters) {
             try? data.write(to: saveURL)
         }
+        if let data = try? JSONEncoder().encode(analyzedVideoIDs) {
+            try? data.write(to: analyzedSaveURL)
+        }
+        saveAlgorithmVersion()
     }
     
     func clear() {
         DispatchQueue.main.async {
             self.clusters = []
+            self.analyzedVideoIDs = []
             self.save()
         }
     }
-    
-    func addFace(videoID: UUID, boundingBox: CGRect, featurePrint: VNFeaturePrintObservation, faceColor: FaceColor?) {
-        guard let data = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) else { return }
-        
-        let appearance = FaceAppearance(videoID: videoID, boundingBox: boundingBox)
-        
-        var bestCluster: PersonCluster? = nil
-        var bestDistance: Float = .infinity
-        
-        for cluster in clusters {
-            if let clusterPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: cluster.featurePrintData) {
-                var distance: Float = 0
-                do {
-                    try featurePrint.computeDistance(&distance, to: clusterPrint)
-                    
-                    // 空間的色情報(8x8グリッド)の差をペナルティとして加算
-                    if let c1 = faceColor, let c2 = cluster.averageColor {
-                        let colorDist = c1.distance(to: c2)
-                        // 正規化された色距離(最大2.0) × 4.0 = 最大8.0のペナルティ
-                        distance += colorDist * 4.0
-                    }
-                    
-                    if distance < bestDistance {
-                        bestDistance = distance
-                        bestCluster = cluster
-                    }
-                } catch {
-                    print("Distance computation error: \(error)")
-                }
-            }
+
+    private func savedAlgorithmVersion() -> Int? {
+        guard let data = try? Data(contentsOf: algorithmVersionURL) else { return nil }
+        return try? JSONDecoder().decode(Int.self, from: data)
+    }
+
+    private func saveAlgorithmVersion() {
+        if let data = try? JSONEncoder().encode(currentAlgorithmVersion) {
+            try? data.write(to: algorithmVersionURL)
         }
-        
-        // 同一人物が別人に分かれてしまうのを防ぐため、しきい値を少し緩和(1.5 -> 7.0)
-        // 色ペナルティ（最大8.0）が加算されるため、これでも十分別人は分かれます
-        let distanceThreshold: Float = 7.0
-        
-        if let best = bestCluster, bestDistance < distanceThreshold {
-            best.appearances.append(appearance)
-            
-            // 色の平均を更新
-            if let newC = faceColor, let oldC = best.averageColor, newC.grid.count == oldC.grid.count {
-                let n = Float(best.appearances.count)
-                var blendedGrid = [Float]()
-                for i in 0..<newC.grid.count {
-                    blendedGrid.append(((oldC.grid[i] * (n - 1)) + newC.grid[i]) / n)
-                }
-                best.averageColor = FaceColor(grid: blendedGrid)
-            } else if best.averageColor == nil {
-                best.averageColor = faceColor
-            }
-            
-        } else {
-            let newCluster = PersonCluster(name: "人物 \(clusters.count + 1)", appearances: [appearance], featurePrintData: data, averageColor: faceColor)
-            clusters.append(newCluster)
+    }
+    
+    func isAnalyzed(videoID: UUID) -> Bool {
+        return analyzedVideoIDs.contains(videoID)
+    }
+
+    func markAsAnalyzed(videoID: UUID) {
+        DispatchQueue.main.async {
+            self.analyzedVideoIDs.insert(videoID)
+            self.save()
+        }
+    }
+
+    func addFaces(_ samples: [FaceSample]) {
+        for sample in samples.sorted(by: { $0.quality > $1.quality }) {
+            addFaceSample(sample)
         }
         save()
+    }
+
+    private func addFaceSample(_ sample: FaceSample) {
+        let appearance = FaceAppearance(videoID: sample.videoID, boundingBox: sample.boundingBox)
+        let candidates = rankedClusters(for: sample)
+
+        if let best = candidates.first,
+           best.score <= clusterAcceptThreshold,
+           isConfidentMatch(best: best, second: candidates.dropFirst().first) {
+            if !best.cluster.appearances.contains(where: { $0.videoID == sample.videoID }) {
+                best.cluster.appearances.append(appearance)
+            }
+            updateCluster(best.cluster, with: sample)
+        } else {
+            let newCluster = PersonCluster(
+                name: "人物 \(clusters.count + 1)",
+                appearances: [appearance],
+                featurePrintData: sample.featurePrintData,
+                averageColor: sample.faceColor,
+                featurePrintSamples: [sample.featurePrintData]
+            )
+            clusters.append(newCluster)
+        }
+    }
+
+    private func rankedClusters(for sample: FaceSample) -> [(cluster: PersonCluster, score: Float, featureDistance: Float)] {
+        clusters.compactMap { cluster in
+            guard let featureDistance = bestFeatureDistance(from: sample.featurePrint, to: cluster) else { return nil }
+            let colorDistance = colorDistance(from: sample.faceColor, to: cluster.averageColor)
+            return (cluster, featureDistance + colorDistance * colorWeight, featureDistance)
+        }
+        .sorted { $0.score < $1.score }
+    }
+
+    private func bestFeatureDistance(from samplePrint: VNFeaturePrintObservation, to cluster: PersonCluster) -> Float? {
+        var bestDistance: Float?
+        let samples = cluster.featurePrintSamples.isEmpty ? [cluster.featurePrintData] : cluster.featurePrintSamples
+
+        for data in samples {
+            guard let clusterPrint = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: data) else { continue }
+            var distance: Float = 0
+            do {
+                try samplePrint.computeDistance(&distance, to: clusterPrint)
+                if bestDistance == nil || distance < bestDistance! {
+                    bestDistance = distance
+                }
+            } catch {
+                print("Face distance computation error: \(error)")
+            }
+        }
+        return bestDistance
+    }
+
+    private func colorDistance(from lhs: FaceColor?, to rhs: FaceColor?) -> Float {
+        guard let lhs, let rhs else { return 0 }
+        return lhs.distance(to: rhs)
+    }
+
+    private func isConfidentMatch(best: (cluster: PersonCluster, score: Float, featureDistance: Float), second: (cluster: PersonCluster, score: Float, featureDistance: Float)?) -> Bool {
+        if best.featureDistance <= strongFeatureMatchThreshold { return true }
+        guard let second else { return true }
+        return second.score - best.score >= clusterAmbiguousMargin
+    }
+
+    private func updateCluster(_ cluster: PersonCluster, with sample: FaceSample) {
+        updateAverageColor(for: cluster, with: sample.faceColor)
+
+        if cluster.featurePrintSamples.count < maxRepresentativeSamples {
+            cluster.featurePrintSamples.append(sample.featurePrintData)
+            return
+        }
+
+        guard let minDistance = bestFeatureDistance(from: sample.featurePrint, to: cluster), minDistance > strongFeatureMatchThreshold else { return }
+        cluster.featurePrintSamples.removeFirst()
+        cluster.featurePrintSamples.append(sample.featurePrintData)
+        cluster.featurePrintData = cluster.featurePrintSamples.first ?? cluster.featurePrintData
+    }
+
+    private func updateAverageColor(for cluster: PersonCluster, with newColor: FaceColor?) {
+        guard let newColor else { return }
+        guard let oldColor = cluster.averageColor, oldColor.grid.count == newColor.grid.count else {
+            cluster.averageColor = newColor
+            return
+        }
+
+        let n = Float(max(cluster.appearances.count, 1))
+        let blendedGrid = zip(oldColor.grid, newColor.grid).map { old, new in
+            ((old * (n - 1)) + new) / n
+        }
+        cluster.averageColor = FaceColor(grid: blendedGrid)
     }
     
     func getAlbums() -> [Album] {
@@ -872,27 +994,29 @@ class FaceDatabase: ObservableObject {
     }
 }
 
-import Vision
-
 class FaceAnalyzer {
+    private static let minFaceAreaRatio: CGFloat = 0.012
+    private static let maxSamplesPerVideo = 8
+    private static let maxFramesPerVideo = 36
+    private static let localDuplicateThreshold: Float = 4.2
+
     static func analyze(videoID: UUID, url: URL) async {
+        if FaceDatabase.shared.isAnalyzed(videoID: videoID) { return }
+        
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 800, height: 800)
+        generator.maximumSize = CGSize(width: 1_080, height: 1_080)
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.2, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.2, preferredTimescale: 600)
         
         do {
             let duration = try await asset.load(.duration)
             let totalSeconds = duration.isValid && duration.isNumeric ? duration.seconds : 0.0
-            // 複数人対応のため、最低でも100箇所以上サンプリングする。動画が長い場合は1秒に1回など更に増やす。
-            var fractions: [Double] = [0.0]
-            if totalSeconds > 0 {
-                let count = max(100, Int(totalSeconds))
-                fractions = (0..<count).map { Double($0) / Double(count) }
-            }
+            let times = sampleTimes(totalSeconds: totalSeconds)
+            var samples: [FaceSample] = []
             
-            for fraction in fractions {
-                let seconds = totalSeconds * fraction
+            for seconds in times {
                 let time = CMTime(seconds: seconds, preferredTimescale: 600)
                 let cgImage: CGImage
                 do {
@@ -903,59 +1027,123 @@ class FaceAnalyzer {
                 }
                 
                 autoreleasepool {
-                    let request = VNDetectFaceRectanglesRequest()
-                    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                    try? handler.perform([request])
-                    
-                    guard let results = request.results else { return }
-                    
-                    for face in results {
-                        let boundingBox = face.boundingBox
-                        let width = boundingBox.width * CGFloat(cgImage.width)
-                        let height = boundingBox.height * CGFloat(cgImage.height)
-                        let x = boundingBox.origin.x * CGFloat(cgImage.width)
-                        let y = (1.0 - boundingBox.origin.y - boundingBox.height) * CGFloat(cgImage.height)
-                        let rect = CGRect(x: x, y: y, width: width, height: height)
-                        
-                        guard let faceImage = cgImage.cropping(to: rect) else { continue }
-                        
-                        let printRequest = VNGenerateImageFeaturePrintRequest()
-                        let printHandler = VNImageRequestHandler(cgImage: faceImage, options: [:])
-                        try? printHandler.perform([printRequest])
-                        
-                        if let prints = printRequest.results, let firstPrint = prints.first as? VNFeaturePrintObservation {
-                            
-                            // 顔画像の空間的色特徴（8x8グリッド）を取得（3Dキャラ判別用、高解像度化）
-                            var faceColor: FaceColor? = nil
-                            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
-                            if let context = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: bitmapInfo) {
-                                context.interpolationQuality = .high
-                                context.draw(faceImage, in: CGRect(x: 0, y: 0, width: 8, height: 8))
-                                if let data = context.data {
-                                    let pointer = data.bindMemory(to: UInt8.self, capacity: 256)
-                                    var grid = [Float]()
-                                    for i in 0..<64 {
-                                        let offset = i * 4
-                                        grid.append(Float(pointer[offset]) / 255.0)     // R
-                                        grid.append(Float(pointer[offset+1]) / 255.0)   // G
-                                        grid.append(Float(pointer[offset+2]) / 255.0)   // B
-                                    }
-                                    faceColor = FaceColor(grid: grid)
-                                }
-                            }
-                            
-                            DispatchQueue.main.async {
-                                FaceDatabase.shared.addFace(videoID: videoID, boundingBox: boundingBox, featurePrint: firstPrint, faceColor: faceColor)
-                            }
+                    let request = VNDetectFaceRectanglesRequest { request, _ in
+                        guard let results = request.results as? [VNFaceObservation] else { return }
+                        for face in results {
+                            guard let sample = makeFaceSample(videoID: videoID, face: face, image: cgImage) else { continue }
+                            samples.append(sample)
                         }
                     }
+                    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                    try? handler.perform([request])
                 }
                 
                 // 他の処理をブロックしないようにタスクを譲る
                 await Task.yield()
             }
+
+            let dedupedSamples = deduplicate(samples: samples).prefix(maxSamplesPerVideo)
+            await MainActor.run {
+                FaceDatabase.shared.addFaces(Array(dedupedSamples))
+            }
         } catch {
             print("Face analysis error: \(error)")
         }
+        FaceDatabase.shared.markAsAnalyzed(videoID: videoID)
+    }
+
+    private static func sampleTimes(totalSeconds: Double) -> [Double] {
+        guard totalSeconds.isFinite, totalSeconds > 0 else { return [0] }
+
+        let fixedFractions = [0.05, 0.12, 0.2, 0.33, 0.5, 0.67, 0.8, 0.92]
+        let fixedTimes = fixedFractions.map { min(max(0, totalSeconds * $0), max(0, totalSeconds - 0.1)) }
+        let sampleInterval = max(1.5, totalSeconds / Double(maxFramesPerVideo))
+        let intervalTimes = stride(from: 0, through: totalSeconds, by: sampleInterval).map { min($0, max(0, totalSeconds - 0.1)) }
+        return Array(Set(fixedTimes + intervalTimes)).sorted()
+    }
+
+    private static func makeFaceSample(videoID: UUID, face: VNFaceObservation, image: CGImage) -> FaceSample? {
+        let boundingBox = face.boundingBox
+        guard boundingBox.width * boundingBox.height >= minFaceAreaRatio else { return nil }
+        guard let faceImage = cropFace(from: image, boundingBox: boundingBox) else { return nil }
+
+        let printRequest = VNGenerateImageFeaturePrintRequest()
+        let printHandler = VNImageRequestHandler(cgImage: faceImage, options: [:])
+        try? printHandler.perform([printRequest])
+        guard let featurePrint = printRequest.results?.first as? VNFeaturePrintObservation,
+              let featureData = try? NSKeyedArchiver.archivedData(withRootObject: featurePrint, requiringSecureCoding: true) else { return nil }
+
+        let quality = faceQuality(face: face, image: image)
+        return FaceSample(
+            videoID: videoID,
+            boundingBox: boundingBox,
+            featurePrint: featurePrint,
+            featurePrintData: featureData,
+            faceColor: faceColor(from: faceImage),
+            quality: quality
+        )
+    }
+
+    private static func cropFace(from image: CGImage, boundingBox: CGRect) -> CGImage? {
+        let imageWidth = CGFloat(image.width)
+        let imageHeight = CGFloat(image.height)
+        let rawRect = CGRect(
+            x: boundingBox.origin.x * imageWidth,
+            y: (1.0 - boundingBox.origin.y - boundingBox.height) * imageHeight,
+            width: boundingBox.width * imageWidth,
+            height: boundingBox.height * imageHeight
+        )
+        let marginX = rawRect.width * 0.35
+        let marginY = rawRect.height * 0.45
+        let expanded = rawRect.insetBy(dx: -marginX, dy: -marginY)
+        let imageRect = CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
+        return image.cropping(to: expanded.intersection(imageRect).integral)
+    }
+
+    private static func faceQuality(face: VNFaceObservation, image: CGImage) -> Float {
+        let area = face.boundingBox.width * face.boundingBox.height
+        let sizeScore = min(Float(area / 0.08), 1.0)
+        let center = CGPoint(x: face.boundingBox.midX, y: face.boundingBox.midY)
+        let centerDistance = hypot(center.x - 0.5, center.y - 0.5)
+        let centerScore = max(0, 1.0 - Float(centerDistance))
+        return sizeScore * 0.75 + centerScore * 0.25
+    }
+
+    private static func faceColor(from faceImage: CGImage) -> FaceColor? {
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let context = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: bitmapInfo) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(faceImage, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+        guard let data = context.data else { return nil }
+
+        let pointer = data.bindMemory(to: UInt8.self, capacity: 256)
+        var grid: [Float] = []
+        grid.reserveCapacity(192)
+        for index in 0..<64 {
+            let offset = index * 4
+            grid.append(Float(pointer[offset]) / 255.0)
+            grid.append(Float(pointer[offset + 1]) / 255.0)
+            grid.append(Float(pointer[offset + 2]) / 255.0)
+        }
+        return FaceColor(grid: grid)
+    }
+
+    private static func deduplicate(samples: [FaceSample]) -> [FaceSample] {
+        var uniqueSamples: [FaceSample] = []
+        for sample in samples.sorted(by: { $0.quality > $1.quality }) {
+            let isDuplicate = uniqueSamples.contains { existing in
+                faceDistance(sample.featurePrint, existing.featurePrint) <= localDuplicateThreshold
+            }
+            if !isDuplicate {
+                uniqueSamples.append(sample)
+            }
+        }
+        return uniqueSamples
+    }
+
+    private static func faceDistance(_ lhs: VNFeaturePrintObservation, _ rhs: VNFeaturePrintObservation) -> Float {
+        var distance: Float = .infinity
+        try? lhs.computeDistance(&distance, to: rhs)
+        return distance
     }
 }

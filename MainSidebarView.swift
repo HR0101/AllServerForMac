@@ -87,6 +87,9 @@ struct MainSidebarView: View {
                 NavigationLink(value: NavigationSelection.trash) {
                     sidebarRowLabel("ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
                 }
+                NavigationLink(value: NavigationSelection.faces) {
+                    sidebarRowLabel("顔認識グループ", systemImage: "person.crop.rectangle.stack", count: FaceDatabase.shared.clusters.count)
+                }
             }
 
             Section(header:

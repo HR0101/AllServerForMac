@@ -21,36 +21,50 @@ extension WebServerManager {
                     "Content-Type": mime, "Content-Length": String(length),
                     "Content-Range": "bytes \(start)-\(end)/\(size)", "Accept-Ranges": "bytes"
                 ], { writer in
-                    guard let file = try? FileHandle(forReadingFrom: url) else { return }
-                    defer { file.closeFile() }
-                    try? file.seek(toOffset: start)
+                    let fd = open(url.path, O_RDONLY)
+                    guard fd != -1 else { return }
+                    defer { close(fd) }
+                    lseek(fd, off_t(start), SEEK_SET)
+                    
                     var remaining = length
-                    let chunkSize = 512 * 1024
+                    let chunkSize = 1024 * 1024 * 2 // 2MB chunks
+                    var buffer = [UInt8](repeating: 0, count: chunkSize)
+                    
                     while remaining > 0 {
-                        let toRead = Int(min(UInt64(chunkSize), remaining))
-                        let data = file.readData(ofLength: toRead)
-                        if data.isEmpty { break }
+                        let toRead = min(Int(chunkSize), Int(remaining))
+                        let bytesRead = read(fd, &buffer, toRead)
+                        if bytesRead <= 0 { break }
+                        let data = Data(bytes: &buffer, count: bytesRead)
                         do {
                             try writer.write(data)
-                            remaining -= UInt64(data.count)
+                            remaining -= UInt64(bytesRead)
                         } catch {
                             break
                         }
                     }
                 })
             } else {
-                let file = try FileHandle(forReadingFrom: url)
                 return .raw(200, "OK", [
                     "Content-Type": mime,
                     "Content-Length": String(size),
                     "Accept-Ranges": "bytes"
                 ], { writer in
-                    defer { file.closeFile() }
-                    let chunkSize = 512 * 1024
+                    let fd = open(url.path, O_RDONLY)
+                    guard fd != -1 else { return }
+                    defer { close(fd) }
+                    
+                    let chunkSize = 1024 * 1024 * 2 // 2MB chunks
+                    var buffer = [UInt8](repeating: 0, count: chunkSize)
+                    
                     while true {
-                        let chunk = file.readData(ofLength: chunkSize)
-                        if chunk.isEmpty { break }
-                        try? writer.write(chunk)
+                        let bytesRead = read(fd, &buffer, chunkSize)
+                        if bytesRead <= 0 { break }
+                        let data = Data(bytes: &buffer, count: bytesRead)
+                        do {
+                            try writer.write(data)
+                        } catch {
+                            break
+                        }
                     }
                 })
             }
