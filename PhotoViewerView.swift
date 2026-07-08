@@ -1,0 +1,639 @@
+import SwiftUI
+import AppKit
+import ImageIO
+
+enum PhotoImageLoader {
+    nonisolated static func loadDisplayImage(from url: URL, maxPixelSize: CGFloat = 2400) -> NSImage? {
+        let sourceOptions: [CFString: Any] = [
+            kCGImageSourceShouldCache: false
+        ]
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary) else {
+            return NSImage(contentsOf: url)
+        }
+
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize)
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, thumbnailOptions as CFDictionary) else {
+            return NSImage(contentsOf: url)
+        }
+        return NSImage(cgImage: cgImage, size: .zero)
+    }
+}
+
+// 画像をウィンドウ全体に表示するフルスクリーンビューア。
+// 動画の全画面再生（PlaybackCoordinator）と同じ仕組みで、再生中はライブラリ画面ごと差し替わる。
+// クリックの左右ゾーン・矢印キーで前後の画像へ移動でき、漫画モードでは送り方向が反転する。
+struct PhotoViewerView: View {
+    private enum EdgePreviewSide {
+        case previous
+        case next
+    }
+
+    let photos: [VideoItem]
+    @State var current: VideoItem
+    let dataManager: VideoDataManager
+
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @AppStorage("isMangaMode") private var isMangaMode = false
+    @FocusState private var isFocused: Bool
+
+    @State private var image: NSImage?
+    @State private var fileMissing = false
+    @State private var controlsVisible = true
+    @State private var edgePreviewSide: EdgePreviewSide?
+    @State private var imageCache: [UUID: NSImage] = [:]
+    @State private var thumbnailCache: [UUID: NSImage] = [:]
+    @State private var loadingTask: Task<Void, Never>?
+    @State private var preloadTask: Task<Void, Never>?
+    @State private var thumbnailTask: Task<Void, Never>?
+    @State private var hideControlsTask: Task<Void, Never>?
+    @State private var hideFilmstripTask: Task<Void, Never>?
+    @State private var filmstripVisible = false
+
+    private let preloadRadius = 3
+    private let controlsAutoHideDelay: UInt64 = 2_000_000_000
+    private let filmstripThumbnailPixelSize: CGFloat = 220
+    private let filmstripAutoHideDelay: UInt64 = 2_000_000_000
+    private let filmstripPreviewWidth: CGFloat = 420
+    private let filmstripPreviewHeight: CGFloat = 270
+    private let filmstripThumbSize: CGFloat = 138
+    private let filmstripBarHeight: CGFloat = 198
+
+
+    private var currentIndex: Int? {
+        photos.firstIndex(where: { $0.id == current.id })
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+
+            imageLayer
+
+            if controlsVisible {
+                topBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if !controlsVisible {
+                topHoverZone
+            }
+
+        }
+        .overlay(alignment: .bottom) {
+            if filmstripVisible {
+                bottomFilmstrip
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .focusable()
+        .focused($isFocused)
+        .onAppear {
+            isFocused = true
+            coordinator.rememberReturnTarget(mediaID: current.id)
+            load()
+            hideControls()
+        }
+        .onChange(of: current.id) { _, _ in
+            coordinator.rememberReturnTarget(mediaID: current.id)
+            load()
+        }
+        .onDisappear {
+            loadingTask?.cancel()
+            preloadTask?.cancel()
+            thumbnailTask?.cancel()
+            hideControlsTask?.cancel()
+            hideFilmstripTask?.cancel()
+        }
+        .onKeyPress(phases: .down, action: handleKeyPress)
+    }
+
+    private var topHoverZone: some View {
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: 96)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active:
+                        showControls()
+                    case .ended:
+                        hideControlsAfterDelay()
+                    }
+                }
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var imageLayer: some View {
+        if fileMissing {
+            ContentUnavailableView(
+                "ファイルが見つかりません",
+                systemImage: "questionmark.app.dashed",
+                description: Text("メディアファイルが移動または削除された可能性があります")
+            )
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let image {
+            GeometryReader { geo in
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { location in
+                        let w = geo.size.width
+                        if location.x < w * 0.3 {
+                            changeItem(offset: isMangaMode ? 1 : -1)
+                        } else if location.x > w * 0.7 {
+                            changeItem(offset: isMangaMode ? -1 : 1)
+                        }
+                    }
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            updateHoverAffordances(for: location, in: geo.size)
+                        case .ended:
+                            edgePreviewSide = nil
+                            hideFilmstripAfterDelay()
+                        }
+                    }
+
+                edgePreviewOverlay
+            }
+        } else {
+            ProgressView()
+                .controlSize(.large)
+                .tint(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            Text(current.originalFilename)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if photos.count > 1, let idx = currentIndex {
+                Text("\(idx + 1) / \(photos.count)")
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+
+            Spacer()
+
+            if photos.count > 1 {
+                Button { isMangaMode.toggle() } label: {
+                    Text(isMangaMode ? "漫画モード" : "通常モード")
+                        .font(.system(size: 12))
+                        .foregroundColor(isMangaMode ? .accentColor : .white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.12))
+                        .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                deleteCurrentPhoto()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+            .help("完全に削除")
+            
+            Button {
+                if let url = dataManager.fileURL(for: current) {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.plain)
+            .help("外部アプリで開く")
+
+            Button { coordinator.close() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 22))
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .help("閉じる")
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.6), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+
+    @ViewBuilder
+    private var edgePreviewOverlay: some View {
+        if let side = edgePreviewSide, photos.count > 1 {
+            HStack {
+                if side == .previous {
+                    edgePreviewPanel(side: .previous)
+                    Spacer(minLength: 0)
+                } else {
+                    Spacer(minLength: 0)
+                    edgePreviewPanel(side: .next)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .padding(.horizontal, 18)
+            .allowsHitTesting(false)
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .animation(.easeInOut(duration: 0.12), value: edgePreviewSide)
+        }
+    }
+
+    @ViewBuilder
+    private var bottomFilmstrip: some View {
+        if photos.count > 1 {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(photos) { photo in
+                            Button {
+                                current = photo
+                            } label: {
+                                filmstripCell(for: photo)
+                            }
+                            .buttonStyle(.plain)
+                            .id(photo.id)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                }
+                .frame(height: filmstripBarHeight)
+                .background(
+                    LinearGradient(
+                        colors: [.black.opacity(0.86), .black.opacity(0.72)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(.white.opacity(0.08))
+                        .frame(height: 1)
+                }
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active:
+                        showFilmstrip()
+                    case .ended:
+                        hideFilmstripAfterDelay()
+                    }
+                }
+                .task(id: current.id) {
+                    await Task.yield()
+                    scrollFilmstripToCurrent(proxy)
+                }
+                .onAppear {
+                    scrollFilmstripToCurrent(proxy)
+                    preloadFilmstripThumbnails()
+                }
+            }
+        }
+    }
+
+    private func edgePreviewPanel(side: EdgePreviewSide) -> some View {
+        let targetIndex = side == .previous
+            ? currentIndex.map { $0 + (isMangaMode ? 1 : -1) }
+            : currentIndex.map { $0 + (isMangaMode ? -1 : 1) }
+        let targetItem = targetIndex.flatMap { photos.indices.contains($0) ? photos[$0] : nil }
+
+        return VStack(spacing: 0) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.black.opacity(0.24))
+
+                if let targetItem, let thumbnail = thumbnailCache[targetItem.id] {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(10)
+                } else if targetItem != nil {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                } else {
+                    Image(systemName: side == .previous ? "chevron.left" : "chevron.right")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+            .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
+            .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 4)
+        }
+        .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
+    }
+
+    private func filmstripCell(for photo: VideoItem) -> some View {
+        let isCurrent = photo.id == current.id
+
+        return VStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.white.opacity(0.06))
+
+                if let thumbnail = thumbnailCache[photo.id] {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(4)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white.opacity(0.8))
+                }
+            }
+            .frame(width: filmstripThumbSize, height: filmstripThumbSize)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isCurrent ? Color.accentColor : .white.opacity(0.15), lineWidth: isCurrent ? 2.5 : 1)
+            )
+            .overlay(alignment: .topTrailing) {
+                if isCurrent {
+                    Text("現在")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                        .padding(6)
+                }
+            }
+
+            Text(photo.originalFilename)
+                .font(.system(size: 10))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(.white.opacity(0.82))
+                .frame(width: 108)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func deleteCurrentPhoto() {
+        let idToDelete = current.id
+        let currentIdx = currentIndex ?? 0
+        
+        // 次の画像へ移動（最後の画像なら前の画像、それもなければ閉じる）
+        if currentIdx < photos.count - 1 {
+            current = photos[currentIdx + 1]
+        } else if currentIdx > 0 {
+            current = photos[currentIdx - 1]
+        } else {
+            coordinator.close()
+        }
+        
+        // 完全に削除（ゴミ箱へ移動等）
+        dataManager.deleteVideos(videoIDs: [idToDelete])
+    }
+
+    private func changeItem(offset: Int) {
+        guard let idx = currentIndex else { return }
+        let nextIdx = idx + offset
+        if nextIdx >= 0 && nextIdx < photos.count {
+            current = photos[nextIdx]
+        }
+    }
+
+    private func updateEdgePreview(for location: CGPoint, width: CGFloat) {
+        guard photos.count > 1, width > 0 else {
+            edgePreviewSide = nil
+            return
+        }
+
+        let leftThreshold = width * 0.06
+        let rightThreshold = width * 0.94
+
+        if location.x <= leftThreshold {
+            edgePreviewSide = .previous
+        } else if location.x >= rightThreshold {
+            edgePreviewSide = .next
+        } else {
+            edgePreviewSide = nil
+        }
+    }
+
+    private func updateHoverAffordances(for location: CGPoint, in size: CGSize) {
+        guard photos.count > 1, size.width > 0, size.height > 0 else {
+            edgePreviewSide = nil
+            return
+        }
+
+        let bottomThreshold = max(92, min(140, size.height * 0.16))
+        if location.y >= size.height - bottomThreshold {
+            edgePreviewSide = nil
+            showFilmstrip()
+            return
+        }
+
+        let previousSide = edgePreviewSide
+        updateEdgePreview(for: location, width: size.width)
+        if previousSide != nil || filmstripVisible {
+            hideFilmstrip()
+        }
+    }
+
+    private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .leftArrow:
+            changeItem(offset: isMangaMode ? 1 : -1)
+            return .handled
+        case .rightArrow:
+            changeItem(offset: isMangaMode ? -1 : 1)
+            return .handled
+        case "f", "F":
+            coordinator.close()
+            return .handled
+        case "\u{7F}", "\u{F728}": // Backspace (delete) and Delete (forward delete)
+            deleteCurrentPhoto()
+            return .handled
+        case .escape:
+            coordinator.close()
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    private func load() {
+        loadingTask?.cancel()
+        fileMissing = false
+
+        if let cached = imageCache[current.id] {
+            image = cached
+            preloadNearbyImages()
+            return
+        }
+
+        image = nil
+        guard let url = dataManager.fileURL(for: current) else {
+            fileMissing = true
+            return
+        }
+        let targetID = current.id
+        loadingTask = Task.detached(priority: .userInitiated) {
+            let loaded = PhotoImageLoader.loadDisplayImage(from: url)
+            await MainActor.run {
+                // 読み込み中に別の画像へ移動していた場合は破棄する
+                guard current.id == targetID else { return }
+                if let loaded {
+                    imageCache[targetID] = loaded
+                    image = loaded
+                    trimImageCache()
+                    preloadNearbyImages()
+                } else {
+                    fileMissing = true
+                }
+            }
+        }
+    }
+
+    private func showControls() {
+        hideControlsTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            controlsVisible = true
+        }
+    }
+
+    private func hideControls() {
+        hideControlsTask?.cancel()
+        controlsVisible = false
+    }
+
+    private func hideControlsAfterDelay() {
+        hideControlsTask?.cancel()
+        hideControlsTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: controlsAutoHideDelay)
+            guard !Task.isCancelled else { return }
+            hideControls()
+        }
+    }
+
+    private func showFilmstrip() {
+        hideFilmstripTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            filmstripVisible = true
+        }
+        preloadFilmstripThumbnails()
+    }
+
+    private func hideFilmstrip() {
+        hideFilmstripTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            filmstripVisible = false
+        }
+    }
+
+    private func hideFilmstripAfterDelay() {
+        hideFilmstripTask?.cancel()
+        hideFilmstripTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: filmstripAutoHideDelay)
+            guard !Task.isCancelled else { return }
+            hideFilmstrip()
+        }
+    }
+
+    private func scrollFilmstripToCurrent(_ proxy: ScrollViewProxy) {
+        guard photos.contains(where: { $0.id == current.id }) else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            proxy.scrollTo(current.id, anchor: .center)
+        }
+    }
+
+    private func preloadFilmstripThumbnails() {
+        guard thumbnailTask == nil else { return }
+        let targets = photos
+            .filter { thumbnailCache[$0.id] == nil }
+            .compactMap { item -> (UUID, URL)? in
+                guard let url = dataManager.fileURL(for: item) else { return nil }
+                return (item.id, url)
+            }
+
+        guard !targets.isEmpty else { return }
+
+        thumbnailTask = Task.detached(priority: .utility) {
+            defer {
+                Task { @MainActor in
+                    thumbnailTask = nil
+                }
+            }
+
+            for (id, url) in targets {
+                guard !Task.isCancelled else { return }
+                guard let loaded = PhotoImageLoader.loadDisplayImage(from: url, maxPixelSize: filmstripThumbnailPixelSize) else { continue }
+                await MainActor.run {
+                    guard thumbnailCache[id] == nil else { return }
+                    thumbnailCache[id] = loaded
+                }
+            }
+        }
+    }
+
+    private func preloadNearbyImages() {
+        guard let index = currentIndex else { return }
+        preloadTask?.cancel()
+        let targets = nearbyPhotos(around: index)
+            .filter { imageCache[$0.id] == nil }
+            .compactMap { item -> (UUID, URL)? in
+                guard let url = dataManager.fileURL(for: item) else { return nil }
+                return (item.id, url)
+            }
+
+        guard !targets.isEmpty else { return }
+
+        preloadTask = Task.detached(priority: .utility) {
+            for (id, url) in targets {
+                guard !Task.isCancelled else { return }
+                guard let loaded = PhotoImageLoader.loadDisplayImage(from: url) else { continue }
+                await MainActor.run {
+                    guard imageCache[id] == nil else { return }
+                    imageCache[id] = loaded
+                    trimImageCache()
+                }
+            }
+        }
+    }
+
+    private func nearbyPhotos(around index: Int) -> [VideoItem] {
+        let lower = max(0, index - preloadRadius)
+        let upper = min(photos.count - 1, index + preloadRadius)
+        guard lower <= upper else { return [] }
+        return (lower...upper)
+            .filter { $0 != index }
+            .map { photos[$0] }
+    }
+
+    private func trimImageCache() {
+        guard let index = currentIndex else { return }
+        let keepIDs = Set((max(0, index - preloadRadius)...min(photos.count - 1, index + preloadRadius)).map { photos[$0].id })
+        imageCache = imageCache.filter { keepIDs.contains($0.key) }
+    }
+}

@@ -61,6 +61,24 @@ struct StorageManagerView: View {
                 .frame(maxWidth: .infinity, minHeight: 130)
             } else {
                 VStack(spacing: 10) {
+                    Button(action: {
+                        let count = dataManager.cleanupMissingFiles()
+                        optimizationMessage = "ファイルが見つからないメディアを \(count) 件削除しました。"
+                        isOptimizing = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            isOptimizing = false
+                        }
+                    }) {
+                        Label("リンク切れメディアを整理", systemImage: "link.badge.minus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Text("Mac上の元ファイルが削除されて「見つかりません」になったデータを一括整理します。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+
                     Button(action: removeDuplicates) {
                         Label("重複動画を検出して削除", systemImage: "sparkles")
                             .frame(maxWidth: .infinity)
@@ -71,13 +89,6 @@ struct StorageManagerView: View {
                     Text("タイトルが違っても内容が完全に一致する動画を自動で整理します。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                        
-                    Button(action: runFaceAnalysis) {
-                        Label("全動画の顔解析を実行 (プロトタイプ)", systemImage: "face.dashed")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
 
                     HStack(spacing: 10) {
                         Button(action: { dataManager.openAppRootFolderInFinder() }) {
@@ -163,46 +174,20 @@ struct StorageManagerView: View {
 
     private func removeDuplicates() {
         isOptimizing = true
-        optimizationMessage = "重複している動画を解析し、削除しています..."
+        optimizationMessage = "重複しているメディアを解析し、ゴミ箱へ移動しています..."
 
         Task {
-            let removedCount = await MainActor.run {
-                dataManager.removeDuplicateVideos()
-            }
+            let removedCount = await dataManager.removeDuplicateVideos()
 
             await MainActor.run {
                 calculateSizes()
                 isOptimizing = false
-                resultMessage = "\(removedCount) 件の重複動画を検知し、削除しました。\n(関連するゴミファイルも同時に一掃しました)"
+                resultMessage = "\(removedCount) 件の重複メディアを検知し、ゴミ箱へ移動しました。"
                 showingResultAlert = true
             }
         }
     }
 
-    private func runFaceAnalysis() {
-        isOptimizing = true
-        optimizationMessage = "未解析の動画の顔を解析しています... (動画が多いと時間がかかります)"
-        
-        Task {
-            let videos = dataManager.videos.filter { $0.mediaType == .video && !$0.isInTrash }
-            for (index, video) in videos.enumerated() {
-                if FaceDatabase.shared.isAnalyzed(videoID: video.id) { continue }
-                if let url = dataManager.fileURL(for: video) {
-                    await MainActor.run {
-                        optimizationMessage = "解析中... (\(index + 1)/\(videos.count))\n\(video.originalFilename)"
-                    }
-                    await FaceAnalyzer.analyze(videoID: video.id, url: url)
-                }
-            }
-            
-            await MainActor.run {
-                isOptimizing = false
-                let faceAlbumsCount = FaceDatabase.shared.getAlbums().count
-                resultMessage = "顔解析が完了しました！\n\(faceAlbumsCount) 人の人物を検知しました。"
-                showingResultAlert = true
-            }
-        }
-    }
 
     private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()

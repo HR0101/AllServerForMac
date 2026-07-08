@@ -148,12 +148,24 @@ struct VideoPlayerView: View {
 
     @FocusState private var isViewFocused: Bool
     @State private var isSidebarVisible = false
+    @State private var showShortcutHelp = false
     private let sidebarWidth: CGFloat = 240
     private let triggerWidth: CGFloat = 10
 
     init(videos: [VideoItem], currentVideo: VideoItem, dataManager: VideoDataManager) {
         _viewModel = StateObject(wrappedValue: VideoPlayerViewModel(videos: videos, currentVideo: currentVideo, dataManager: dataManager))
     }
+
+    private static let shortcutList: [(key: String, action: String)] = [
+        ("Space / k", "再生・一時停止"),
+        ("← / →", "前・次の動画へ"),
+        ("0〜9", "動画の 0%〜90% の位置へジャンプ"),
+        ("g / h / j", "15秒 / 10秒 / 5秒 戻る"),
+        ("l / ; / '", "5秒 / 10秒 / 15秒 進む"),
+        ("r", "ランダムな位置へジャンプ"),
+        ("画面右端にマウス", "チャプター一覧を表示"),
+        ("Esc", "プレイヤーを閉じる"),
+    ]
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -162,6 +174,23 @@ struct VideoPlayerView: View {
                 PlayerContainerView(player: viewModel.player)
             }
             sidebar
+
+            // サイドバーは右端ホバーで出るため、ボタンは左上に置いて干渉を避ける
+            VStack {
+                HStack {
+                    PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                        coordinator.close()
+                    }
+                    Spacer()
+                }
+                Spacer()
+            }
+
+            if showShortcutHelp {
+                ShortcutHelpPanel(title: "通常再生のショートカット", shortcuts: Self.shortcutList) {
+                    showShortcutHelp = false
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
@@ -209,7 +238,10 @@ struct VideoPlayerView: View {
 
         switch press.key {
         case .escape:
-            coordinator.close()
+            if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
+            return .handled
+        case "?":
+            showShortcutHelp.toggle()
             return .handled
         case .space:
             if press.modifiers.contains(.option) { coordinator.close() } else { viewModel.playPause() }

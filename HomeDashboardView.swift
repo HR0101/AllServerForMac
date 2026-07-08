@@ -6,6 +6,7 @@ import SwiftUI
 struct HomeView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
+    @ObservedObject private var duplicateCheckStatus: DuplicateCheckStatus
     @StateObject private var systemMonitor = SystemMonitor()
 
     @State private var isShowingAccessLog = false
@@ -13,6 +14,12 @@ struct HomeView: View {
     @State private var logFilter: Int = 0 // 0: 全て, 1: 動画本体, 2: サムネ, 3: その他
 
     private let cardColumns = [GridItem(.adaptive(minimum: 320, maximum: 600), spacing: DS.cardSpacing, alignment: .top)]
+
+    init(dataManager: VideoDataManager, webServerManager: WebServerManager) {
+        self.dataManager = dataManager
+        self.webServerManager = webServerManager
+        self.duplicateCheckStatus = dataManager.duplicateCheckStatus
+    }
 
     var body: some View {
         ScrollView {
@@ -24,6 +31,7 @@ struct HomeView: View {
                     securityCard
                     scheduleCard
                     resourcesCard
+                    duplicateCheckCard
                     storageCard
                     logsCard
                 }
@@ -39,6 +47,91 @@ struct HomeView: View {
         }
         .sheet(isPresented: $isShowingStorageManager) {
             StorageManagerView(dataManager: dataManager)
+        }
+    }
+
+    // MARK: 重複チェックカード
+    private var duplicateCheckCard: some View {
+        let checkedAlbums = duplicateCheckStatus.checkedAlbums
+        let uncheckedAlbums = duplicateCheckStatus.uncheckedAlbums
+        let totalCount = checkedAlbums.count + uncheckedAlbums.count
+
+        return VStack(alignment: .leading, spacing: 12) {
+            CardHeader(icon: "checkmark.seal.fill", tint: .mint, title: "重複チェック", subtitle: "アルバムごとの確認状況")
+
+            Toggle(isOn: $dataManager.isAutoDuplicateCheckEnabled) {
+                Text("バックグラウンドで自動チェック")
+                    .font(.system(size: 12))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("オフにすると、インポート後などにバックグラウンドで自動実行される重複チェックを停止します。アルバム内の「重複チェック」ボタンによる手動実行には影響しません。")
+
+            HStack(spacing: 10) {
+                DuplicateCheckCountBadge(title: "チェック済み", count: checkedAlbums.count, tint: .green)
+                DuplicateCheckCountBadge(title: "未チェック", count: uncheckedAlbums.count, tint: .orange)
+            }
+
+            if totalCount == 0 {
+                Text("対象アルバムはありません。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 12)
+            } else if duplicateCheckStatus.isAutoChecking {
+                VStack(alignment: .leading, spacing: 8) {
+                    ProgressView(value: duplicateCheckStatus.progress, total: 1.0)
+                        .progressViewStyle(.linear)
+                        .tint(.mint)
+                    Text(duplicateCheckStatus.statusMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            } else {
+                Text(duplicateCheckStatus.statusMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            duplicateAlbumList(title: "未チェック", albums: uncheckedAlbums, emptyMessage: "未チェックのアルバムはありません。")
+            duplicateAlbumList(title: "チェック済み", albums: checkedAlbums, emptyMessage: "チェック済みのアルバムはありません。")
+        }
+        .dashboardCard()
+    }
+
+    private func duplicateAlbumList(title: String, albums: [Album], emptyMessage: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            if albums.isEmpty {
+                Text(emptyMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(albums.prefix(5)) { album in
+                    HStack(spacing: 8) {
+                        Text(album.name)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text("\(album.videoIDs.count)件")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if albums.count > 5 {
+                    Text("ほか\(albums.count - 5)件")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 
@@ -267,7 +360,7 @@ struct HomeView: View {
                     .monospacedDigit()
             }
             SettingRow(label: "使用容量") {
-                Text(dataManager.calculateTotalStorageSize())
+                Text(dataManager.totalStorageSizeText)
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
@@ -432,6 +525,31 @@ struct ServerHeroCard: View {
     private var remainingTimeString: String {
         let remaining = max(0, (webServerManager.autoStopIntervalMinutes * 60) - Int(Date().timeIntervalSince(webServerManager.serverStartTime ?? Date())))
         return String(format: "%d分 %02d秒", remaining / 60, remaining % 60)
+    }
+}
+
+// MARK: - 重複チェック件数バッジ
+struct DuplicateCheckCountBadge: View {
+    let title: String
+    let count: Int
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tint.opacity(0.12))
+        )
     }
 }
 

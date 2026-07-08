@@ -137,7 +137,6 @@ enum WebClientHTML {
                     <div id="library-section"></div>
                     <div id="video-albums-section"></div>
                     <div id="photo-albums-section"></div>
-                    <div id="face-albums-section"></div>
                 </div>
 
                 <div class="container" id="videos-view" style="display: none;">
@@ -151,8 +150,6 @@ enum WebClientHTML {
                             <option value="durationDesc">長さが長い順</option>
                             <option value="durationAsc">長さが短い順</option>
                         </select>
-                        <button class="tool-btn" id="analyze-btn" onclick="analyzeAlbumFaces()">顔解析</button>
-                        <button class="tool-btn" id="rename-face-btn" onclick="renameFaceGroup()" style="display:none;">名前変更</button>
                         <button class="tool-btn" id="shorts-btn" onclick="startShorts()">🎞 ショート再生</button>
                     </div>
                     <div class="grid" id="videos-grid"></div>
@@ -173,6 +170,8 @@ enum WebClientHTML {
                     <div class="player-header">
                         <div class="filename-display" id="player-filename"></div>
                         <div class="controls-right">
+                            <button id="delete-media-btn" style="background: rgba(255,50,50,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); padding: 6px 12px; border-radius: 16px; font-size: 13px; backdrop-filter: blur(8px); outline: none; cursor: pointer; margin-right: 8px;" onclick="deleteCurrentMedia()">削除</button>
+                            <button id="manga-mode-toggle" style="display:none; background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.4); padding: 6px 12px; border-radius: 16px; font-size: 13px; backdrop-filter: blur(8px); outline: none; cursor: pointer;" onclick="toggleMangaMode()">通常モード</button>
                             <select class="quality-select" id="quality-select" onchange="changeQuality(this.value)">
                                 <option value="original">Original</option>
                                 <option value="1080p" selected>1080p (軽量)</option>
@@ -182,8 +181,8 @@ enum WebClientHTML {
                         </div>
                     </div>
                     <div class="media-container" id="media-container">
-                        <div class="nav-btn nav-prev" onclick="prevMedia()">&#10094;</div>
-                        <div class="nav-btn nav-next" onclick="nextMedia()">&#10095;</div>
+                        <div class="nav-btn nav-prev" onclick="handleNavClick(-1)">&#10094;</div>
+                        <div class="nav-btn nav-next" onclick="handleNavClick(1)">&#10095;</div>
                     </div>
                     <div class="up-next" id="up-next"></div>
                 </div>
@@ -225,6 +224,16 @@ enum WebClientHTML {
                     let shortsIndex = 0;
                     let shortsClipStartTime = 0;
                     const SHORTS_CLIP_DURATION = 60;
+                    
+                    let isMangaMode = localStorage.getItem('isMangaMode') === 'true';
+
+                    function toggleMangaMode() {
+                        isMangaMode = !isMangaMode;
+                        localStorage.setItem('isMangaMode', isMangaMode);
+                        const btn = document.getElementById('manga-mode-toggle');
+                        btn.innerText = isMangaMode ? "漫画モード" : "通常モード";
+                        btn.style.color = isMangaMode ? "var(--accent-color)" : "white";
+                    }
 
                     // XSS対策: innerHTML に差し込む前にユーザー入力（ファイル名・アルバム名）をエスケープする
                     function esc(s) {
@@ -288,9 +297,8 @@ enum WebClientHTML {
                             let libHtml = '<div class="section-title">ライブラリ</div><div class="grid">';
                             let vidHtml = '<div class="section-title">動画アルバム</div><div class="grid">';
                             let phoHtml = '<div class="section-title">写真アルバム</div><div class="grid">';
-                            let faceHtml = '<div class="section-title">顔認識グループ</div><div class="grid">';
-                            
-                            let hasVid = false, hasPho = false, hasFace = false;
+
+                            let hasVid = false, hasPho = false;
 
                             albums.forEach((album, index) => {
                                 const thumbHtml = album.coverVideoID
@@ -305,10 +313,7 @@ enum WebClientHTML {
                                         <div class="title" style="color: ${album.type === 'photo' ? '#ff9f0a' : '#fff'}">${esc(album.name)}</div>
                                     </div>
                                 `;
-                                if (album.name.startsWith("👤 ")) {
-                                    faceHtml += cardHtml;
-                                    hasFace = true;
-                                } else if (album.name === "ALL VIDEOS" || album.name === "ALL PHOTOS" || album.type === "mixed") {
+                                if (album.name === "ALL VIDEOS" || album.name === "ALL PHOTOS" || album.type === "mixed") {
                                     libHtml += cardHtml;
                                 } else if (album.type === "photo") {
                                     phoHtml += cardHtml;
@@ -318,12 +323,11 @@ enum WebClientHTML {
                                     hasVid = true;
                                 }
                             });
-                            
+
                             libSec.innerHTML = libHtml + '</div>';
                             vidSec.innerHTML = hasVid ? vidHtml + '</div>' : '';
                             phoSec.innerHTML = hasPho ? phoHtml + '</div>' : '';
-                            document.getElementById('face-albums-section').innerHTML = hasFace ? faceHtml + '</div>' : '';
-                            
+
                         } catch (e) {
                             libSec.innerHTML = '<p style="color:red;">エラーが発生しました</p>';
                         }
@@ -343,14 +347,6 @@ enum WebClientHTML {
                         document.getElementById('global-shorts-btn').style.display = 'none';
                         document.getElementById('page-title').innerText = album.name;
                         document.getElementById('search-input').value = "";
-                        
-                        if (album.name.startsWith("👤 ")) {
-                            document.getElementById('rename-face-btn').style.display = 'inline-block';
-                            document.getElementById('analyze-btn').style.display = 'none';
-                        } else {
-                            document.getElementById('rename-face-btn').style.display = 'none';
-                            document.getElementById('analyze-btn').style.display = 'inline-block';
-                        }
 
                         const grid = document.getElementById('videos-grid');
                         grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:#888;">読み込み中...</p>';
@@ -362,31 +358,6 @@ enum WebClientHTML {
                             renderVideos();
                         } catch (e) {
                             grid.innerHTML = '<p style="grid-column: 1/-1; text-align:center; color:red;">取得エラー</p>';
-                        }
-                    }
-
-                    async function analyzeAlbumFaces() {
-                        const album = currentAlbums[history.state.albumIndex];
-                        if(!album) return;
-                        if(confirm("このアルバム内の未解析の動画をサーバー側で顔解析しますか？")) {
-                            fetch(`/albums/${encodeURIComponent(album.id)}/analyzeFaces`, { method: 'POST' });
-                            alert("サーバーで解析を開始しました。しばらく経ってから「顔認識グループ」を確認してください。");
-                        }
-                    }
-
-                    async function renameFaceGroup() {
-                        const album = currentAlbums[history.state.albumIndex];
-                        if(!album || !album.name.startsWith("👤 ")) return;
-                        const newName = prompt("新しい名前を入力してください", album.name.replace("👤 ", ""));
-                        if(newName && newName.trim() !== "") {
-                            await fetch(`/faces/${encodeURIComponent(album.id)}/rename`, {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ name: newName.trim() })
-                            });
-                            alert("名前を変更しました！");
-                            loadAlbums();
-                            document.getElementById('page-title').innerText = "👤 " + newName.trim();
                         }
                     }
 
@@ -460,14 +431,33 @@ enum WebClientHTML {
                         if (oldMedia) oldMedia.remove();
                         
                         if (isPhoto) {
+                            if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+                                document.documentElement.requestFullscreen().catch(err => console.log(err));
+                            }
+
                             document.getElementById('quality-select').style.display = 'none';
+                            const mangaBtn = document.getElementById('manga-mode-toggle');
+                            mangaBtn.style.display = 'block';
+                            mangaBtn.innerText = isMangaMode ? "漫画モード" : "通常モード";
+                            mangaBtn.style.color = isMangaMode ? "var(--accent-color)" : "white";
+
                             const img = document.createElement('img');
                             img.id = 'main-media';
                             img.className = 'photo-viewer';
                             img.src = `/video/${encodeURIComponent(media.id)}`;
+                            img.onclick = function(e) {
+                                const w = this.clientWidth;
+                                const x = e.offsetX;
+                                if (x < w * 0.3) {
+                                    handleNavClick(-1);
+                                } else if (x > w * 0.7) {
+                                    handleNavClick(1);
+                                }
+                            };
                             container.insertBefore(img, container.children[1]);
                         } else {
                             document.getElementById('quality-select').style.display = 'block';
+                            document.getElementById('manga-mode-toggle').style.display = 'none';
                             const video = document.createElement('video');
                             video.id = 'main-media';
                             video.controls = true;
@@ -555,10 +545,54 @@ enum WebClientHTML {
                             media.src = '';
                         }
                         document.getElementById('player-modal').style.display = 'none';
+                        if (document.fullscreenElement && document.exitFullscreen) {
+                            document.exitFullscreen().catch(err => console.log(err));
+                        }
                     }
 
                     function prevMedia() { openMedia(currentMediaIndex - 1); }
                     function nextMedia() { openMedia(currentMediaIndex + 1); }
+
+                    function handleNavClick(direction) {
+                        const media = currentFilteredVideos[currentMediaIndex];
+                        const isPhoto = media && media.mediaType === 'photo';
+                        if (isPhoto && isMangaMode) {
+                            if (direction === -1) nextMedia();
+                            else prevMedia();
+                        } else {
+                            if (direction === -1) prevMedia();
+                            else nextMedia();
+                        }
+                    }
+
+                    function deleteCurrentMedia() {
+                        const media = currentFilteredVideos[currentMediaIndex];
+                        if (!media) return;
+                        if (!confirm('このメディアをパソコンから完全に削除してもよろしいですか？（元に戻せません）')) return;
+                        
+                        fetch('/deleteVideosCompletely', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': currentPin },
+                            body: JSON.stringify({ videoIDs: [media.id] })
+                        }).then(res => {
+                            if (res.ok) {
+                                currentFilteredVideos.splice(currentMediaIndex, 1);
+                                if (currentFilteredVideos.length === 0) {
+                                    closePlayer();
+                                    loadVideos(currentAlbums.findIndex(a => a.name === currentAlbumName));
+                                } else {
+                                    if (currentMediaIndex >= currentFilteredVideos.length) {
+                                        currentMediaIndex = currentFilteredVideos.length - 1;
+                                    }
+                                    openMedia(currentMediaIndex);
+                                }
+                            } else {
+                                alert('削除に失敗しました');
+                            }
+                        }).catch(e => {
+                            alert('通信エラー');
+                        });
+                    }
 
                     document.addEventListener('keydown', (e) => {
                         if (document.getElementById('player-modal').style.display === 'flex') {
@@ -634,8 +668,24 @@ enum WebClientHTML {
                                         break;
                                 }
                             } else {
-                                if (e.key === 'ArrowLeft') prevMedia();
-                                if (e.key === 'ArrowRight') nextMedia();
+                                if (e.key === 'ArrowLeft') handleNavClick(-1);
+                                if (e.key === 'ArrowRight') handleNavClick(1);
+                                if (e.key === 'f' || e.key === 'F') {
+                                    e.preventDefault();
+                                    if (!document.fullscreenElement) {
+                                        if (document.documentElement.requestFullscreen) {
+                                            document.documentElement.requestFullscreen();
+                                        } else if (document.documentElement.webkitRequestFullscreen) {
+                                            document.documentElement.webkitRequestFullscreen();
+                                        }
+                                    } else {
+                                        if (document.exitFullscreen) {
+                                            document.exitFullscreen();
+                                        } else if (document.webkitExitFullscreen) {
+                                            document.webkitExitFullscreen();
+                                        }
+                                    }
+                                }
                             }
                         }
                     });

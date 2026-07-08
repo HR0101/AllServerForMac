@@ -17,7 +17,11 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     @Published var serverURL: String?
     var isRunning: Bool { serverStartTime != nil }
     
-    @Published var serverStartTime: Date?
+    @Published var serverStartTime: Date? {
+        didSet { snapshotServerStartTime.value = serverStartTime }
+    }
+    /// /server/status ルート（ワーカースレッド）用のミラー。メインスレッドを経由せず読める。
+    nonisolated let snapshotServerStartTime = LockedBox<Date?>(nil)
     @Published var uptimeString: String = "00:00:00"
     private var timerCancellable: AnyCancellable?
     
@@ -65,15 +69,39 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             UserDefaults.standard.set(authPIN, forKey: "authPIN")
         }
     }
+    /// 認証をオフにしていても、削除系API（完全削除・アルバム削除・サーバー停止）には
+    /// PINを要求するか。オンなら同一LAN上の第三者が閲覧はできても消すことはできない。
+    @Published var requirePINForDeletion: Bool = true {
+        didSet {
+            requirePINForDeletionCache = requirePINForDeletion
+            UserDefaults.standard.set(requirePINForDeletion, forKey: "requirePINForDeletion")
+        }
+    }
+
+    /// Bonjour で公開するサーバー表示名。空ならコンピュータ名（ユーザー名）を使う。
+    /// 変更はサーバーの再起動後に反映される。
+    @Published var serverDisplayName: String = "" {
+        didSet { UserDefaults.standard.set(serverDisplayName, forKey: "serverDisplayName") }
+    }
+
+    /// アップロード受け入れの上限（GB）。ディスク枯渇の防止用。
+    @Published var maxUploadGB: Int = 20 {
+        didSet {
+            maxUploadBytesCache = maxUploadGB * 1_073_741_824
+            UserDefaults.standard.set(maxUploadGB, forKey: "maxUploadGB")
+        }
+    }
+
     // バックグラウンドスレッドから安全に読むためのスナップショット
     private var authEnabledCache = true
     private var authPINCache = ""
+    private var requirePINForDeletionCache = true
+    private var maxUploadBytesCache = 21_474_836_480
 
     @Published var accessLogs: [AccessLogEntry] = []
     private let maxAccessLogs = 200
 
-    /// アップロード受け入れの上限（ディスク枯渇の防止用）。20GB。
-    let maxUploadBytes = 21_474_836_480
+    var maxUploadBytes: Int { maxUploadBytesCache }
 
     init(dataManager: VideoDataManager) {
         self.dataManager = dataManager
@@ -97,9 +125,18 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         let savedPIN = UserDefaults.standard.string(forKey: "authPIN") ?? ""
         let pin = savedPIN.isEmpty ? String(format: "%06d", Int.random(in: 0...999999)) : savedPIN
         self.authPIN = pin
+
+        let requirePINForDeletionValue = UserDefaults.standard.object(forKey: "requirePINForDeletion") as? Bool ?? true
+        self.requirePINForDeletion = requirePINForDeletionValue
+        self.serverDisplayName = UserDefaults.standard.string(forKey: "serverDisplayName") ?? ""
+        let savedMaxUploadGB = UserDefaults.standard.object(forKey: "maxUploadGB") as? Int ?? 20
+        self.maxUploadGB = savedMaxUploadGB
+
         // didSet は init 中に発火しないため、キャッシュと永続化を手動で行う
         self.authEnabledCache = authEnabledValue
         self.authPINCache = pin
+        self.requirePINForDeletionCache = requirePINForDeletionValue
+        self.maxUploadBytesCache = savedMaxUploadGB * 1_073_741_824
         UserDefaults.standard.set(pin, forKey: "authPIN")
 
         super.init()
@@ -186,10 +223,24 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return ok
     }
 
+    /// アクセスログに残すパスから認証情報を取り除く。
+    /// AsyncImage / AVPlayer はヘッダーを付けられないため、クライアントは PIN を
+    /// URLクエリで送ってくる。request.path をそのまま記録すると PIN が平文で
+    /// アクセスログ画面に並んでしまう（画面共有・スクリーンショットで漏れる）。
+    nonisolated private static func sanitizedLogPath(_ path: String) -> String {
+        guard let qIndex = path.firstIndex(of: "?") else { return path }
+        let base = String(path[..<qIndex])
+        let query = path[path.index(after: qIndex)...]
+        let masked = query.split(separator: "&").map { pair -> String in
+            pair.hasPrefix("pin=") ? "pin=****" : String(pair)
+        }.joined(separator: "&")
+        return base + "?" + masked
+    }
+
     func logAccess(_ request: HttpRequest, authorized: Bool) {
         let ip = request.address ?? "unknown"
         let method = request.method
-        let path = request.path
+        let path = Self.sanitizedLogPath(request.path)
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.accessLogs.insert(AccessLogEntry(date: Date(), ip: ip, method: method, path: path, authorized: authorized), at: 0)
@@ -204,6 +255,31 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         return { [weak self] request in
             guard let self = self else { return .internalServerError }
             let ok = self.isAuthorized(request)
+            self.logAccess(request, authorized: ok)
+            if !ok {
+                let body = Array(#"{"error":"auth_required"}"#.utf8)
+                return .raw(401, "Unauthorized",
+                            ["Content-Type": "application/json", "WWW-Authenticate": "PIN"],
+                            { try? $0.write(body) })
+            }
+            return handler(request)
+        }
+    }
+
+    /// 削除系（完全削除・アルバム削除・サーバー停止）専用の保護ラッパー。
+    /// 通常の認証に加え、「認証オフでも削除にはPINを要求」設定が有効なら
+    /// 認証オフの状態でもPINの一致を要求する（閲覧は自由・削除は保護、という運用のため）。
+    func protectedDestructive(_ handler: @escaping (HttpRequest) -> HttpResponse) -> (HttpRequest) -> HttpResponse {
+        return { [weak self] request in
+            guard let self = self else { return .internalServerError }
+            let ok: Bool
+            if self.authEnabledCache {
+                ok = self.isAuthorized(request)
+            } else if self.requirePINForDeletionCache && !self.authPINCache.isEmpty {
+                ok = self.extractPIN(from: request).map { PINSecurity.constantTimeEquals($0, self.authPINCache) } ?? false
+            } else {
+                ok = true
+            }
             self.logAccess(request, authorized: ok)
             if !ok {
                 let body = Array(#"{"error":"auth_required"}"#.utf8)
@@ -237,7 +313,8 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                         self.statusMessage = "❌ [FATAL] Could not get computer name."; self.server.stop(); return
                     }
                     let userName = NSUserName()
-                    let uniqueServiceName = "\(computerName) (\(userName))"
+                    let customName = self.serverDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let uniqueServiceName = customName.isEmpty ? "\(computerName) (\(userName))" : customName
                     self.netService = NetService(domain: "local.", type: "_myvideoserver._tcp.", name: uniqueServiceName, port: Int32(actualPort))
                     self.netService?.delegate = self
                     self.netService?.publish()
@@ -435,7 +512,22 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     func netServiceDidPublish(_ sender: NetService) {
         let ipAddress = getIPAddress() ?? "N/A"
         self.serverURL = "http://\(ipAddress):\(sender.port)"
-        self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
+        // 同名サービスが既にLAN上にあると Bonjour は自動リネームして公開する。
+        // 黙ってリネームされると iOS 側で「設定した名前が見つからない」ように見えるため、
+        // 実際に公開された名前をステータスに出して気づけるようにする。
+        let requestedName = serverDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !requestedName.isEmpty && sender.name != requestedName {
+            self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)（名前重複のため「\(sender.name)」として公開中）"
+        } else {
+            self.statusMessage = "✅ 実行中: http://\(ipAddress):\(sender.port)"
+        }
+    }
+
+    /// Bonjour の公開自体に失敗したとき（名前衝突で自動リネームも効かない場合など）。
+    /// これを実装しないと、サーバーは動いているのに iOS から一切発見できない状態が
+    /// 何のエラー表示もなく続いてしまう。
+    func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
+        self.statusMessage = "⚠️ サーバーは起動していますが、ネットワーク公開（Bonjour）に失敗しました。iOSから自動発見できません。"
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {

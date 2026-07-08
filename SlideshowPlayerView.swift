@@ -324,6 +324,7 @@ private struct SlideshowContentView: View {
 
     @State private var selectedChapterID: UUID?
     @State private var isSidebarVisible = false
+    @State private var showShortcutHelp = false
     private let sidebarWidth: CGFloat = 250
     private let triggerWidth: CGFloat = 20
 
@@ -332,6 +333,16 @@ private struct SlideshowContentView: View {
             playerItem: playerItem, videos: videos, clipDurations: clipDurations, dataManager: dataManager
         ))
     }
+
+    private static let shortcutList: [(key: String, action: String)] = [
+        ("Space / k", "再生・一時停止"),
+        ("0〜9", "全体の 0%〜90% の位置へジャンプ"),
+        ("g / h / j", "15秒 / 10秒 / 5秒 戻る"),
+        ("l / ; / '", "5秒 / 10秒 / 15秒 進む"),
+        ("r", "ランダムな位置へジャンプ"),
+        ("画面左端にマウス", "チャプター一覧を表示"),
+        ("Esc", "プレイヤーを閉じる"),
+    ]
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -349,16 +360,17 @@ private struct SlideshowContentView: View {
             VStack {
                 HStack {
                     Spacer()
-                    Button { coordinator.close() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.largeTitle)
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.white.opacity(0.7))
+                    PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                        coordinator.close()
                     }
-                    .buttonStyle(.plain)
-                    .padding()
                 }
                 Spacer()
+            }
+
+            if showShortcutHelp {
+                ShortcutHelpPanel(title: "スライドショーのショートカット", shortcuts: Self.shortcutList) {
+                    showShortcutHelp = false
+                }
             }
         }
         .ignoresSafeArea()
@@ -386,7 +398,10 @@ private struct SlideshowContentView: View {
         }
         switch press.key {
         case .escape:
-            coordinator.close()
+            if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
+            return .handled
+        case "?":
+            showShortcutHelp.toggle()
             return .handled
         case .space:
             if press.modifiers.contains(.option) { coordinator.close(); return .handled }

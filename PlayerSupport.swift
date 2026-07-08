@@ -15,9 +15,11 @@ final class PlaybackCoordinator: ObservableObject {
         case multi([VideoItem])
         case slideshow([VideoItem])
         case splitPlay(video: VideoItem, splitCount: Int)
+        case photos(playlist: [VideoItem], current: VideoItem)
     }
 
     @Published var mode: Mode?
+    @Published var returnToMediaID: UUID?
 
     var isPresenting: Bool { mode != nil }
 
@@ -55,7 +57,24 @@ final class PlaybackCoordinator: ObservableObject {
         mode = .splitPlay(video: video, splitCount: min(max(splitCount, 2), 9))
     }
 
+    /// 画像をウィンドウ全体で表示（動画の全画面再生に相当）
+    func viewPhotos(playlist: [VideoItem], current: VideoItem) {
+        let photos = playlist.filter { $0.mediaType == .photo }
+        let start = (photos.contains(current) ? current : photos.first) ?? current
+        mode = .photos(playlist: photos.isEmpty ? [current] : photos, current: start)
+    }
+
     func close() { mode = nil }
+
+    /// プレイヤーを閉じたあとに一覧側で復帰させたい項目を記録する。
+    func rememberReturnTarget(mediaID: UUID) {
+        returnToMediaID = mediaID
+    }
+
+    /// 一覧側で復帰処理を終えたら呼ぶ。
+    func clearReturnTarget() {
+        returnToMediaID = nil
+    }
 }
 
 // MARK: - AVKit-safe player surface
@@ -83,6 +102,96 @@ struct PlayerContainerView: NSViewRepresentable {
         if nsView.player !== player {
             nsView.player = player
         }
+    }
+}
+
+// MARK: - プレイヤー共通UI（閉じる・ショートカットヘルプ）
+
+/// プレイヤー画面の隅に重ねる「ヘルプ」「閉じる」ボタンの組。
+/// 全プレイヤーで見た目と操作感を揃える。
+struct PlayerCornerControls: View {
+    @Binding var showShortcutHelp: Bool
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                showShortcutHelp.toggle()
+            } label: {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.largeTitle)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help("キーボードショートカット一覧（?キー）")
+            .accessibilityLabel("キーボードショートカット一覧")
+
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.largeTitle)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .help("閉じる（Esc）")
+            .accessibilityLabel("プレイヤーを閉じる")
+        }
+        .padding()
+    }
+}
+
+/// キーボードショートカットの一覧パネル。?キーまたはヘルプボタンで表示し、
+/// クリックか Esc / ? で閉じる。
+struct ShortcutHelpPanel: View {
+    let title: String
+    let shortcuts: [(key: String, action: String)]
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Label(title, systemImage: "keyboard")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .font(.title3)
+                    }
+                    .buttonStyle(.plain)
+                    .help("ヘルプを閉じる")
+                }
+
+                Divider()
+
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                    ForEach(Array(shortcuts.enumerated()), id: \.offset) { _, item in
+                        GridRow {
+                            Text(item.key)
+                                .font(.system(.body, design: .monospaced).weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.primary.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                .gridColumnAlignment(.trailing)
+                            Text(item.action)
+                                .font(.body)
+                        }
+                    }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 420)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(radius: 24)
+        }
+        .transition(.opacity)
     }
 }
 

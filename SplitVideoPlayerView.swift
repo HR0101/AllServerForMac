@@ -165,6 +165,7 @@ struct SplitVideoPlayerView: View {
     @StateObject private var viewModel: SplitVideoPlayerViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @FocusState private var isFocused: Bool
+    @State private var showShortcutHelp = false
     private let filename: String
     private let splitCount: Int
 
@@ -175,11 +176,31 @@ struct SplitVideoPlayerView: View {
         _viewModel = StateObject(wrappedValue: SplitVideoPlayerViewModel(url: url, splitCount: splitCount, duration: video.duration))
     }
 
+    private static let shortcutList: [(key: String, action: String)] = [
+        ("Space / k", "全セグメント 再生・一時停止"),
+        ("0〜9", "各セグメント内 0%〜90% へジャンプ"),
+        ("h / j", "10秒 / 5秒 戻る"),
+        ("l / ;", "5秒 / 10秒 進む"),
+        ("r", "各セグメント内ランダム位置へジャンプ"),
+        ("Esc", "プレイヤーを閉じる"),
+    ]
+
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            grid
-            controls
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 0) {
+                header
+                grid
+                controls
+            }
+            PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                coordinator.close()
+            }
+            if showShortcutHelp {
+                ShortcutHelpPanel(title: "分割再生のショートカット", shortcuts: Self.shortcutList) {
+                    showShortcutHelp = false
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -346,6 +367,17 @@ struct SplitVideoPlayerView: View {
     // MARK: - コントロール
     private var controls: some View {
         HStack {
+            Button {
+                viewModel.togglePlayPauseAll()
+            } label: {
+                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 16))
+                    .frame(width: 20)
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.isPlaying ? "一時停止（Space）" : "再生（Space）")
+            .accessibilityLabel(viewModel.isPlaying ? "一時停止" : "再生")
+
             Text(formatTime(viewModel.commonCurrentTime))
                 .font(.caption.monospacedDigit())
             Slider(
@@ -369,7 +401,10 @@ struct SplitVideoPlayerView: View {
         }
         switch press.key {
         case .escape:
-            coordinator.close()
+            if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
+            return .handled
+        case "?":
+            showShortcutHelp.toggle()
             return .handled
         case .space:
             if press.modifiers.contains(.option) { coordinator.close(); return .handled }
