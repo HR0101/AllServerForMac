@@ -438,14 +438,13 @@ struct AlbumDetailView: View {
     private func handleGridKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         guard !items.isEmpty else { return .ignored }
 
-        // 再生キー（Enter / Option+Space）はフォーカス未確定でも動作させる
-        switch press.key {
-        case .return:
+        if handleLibraryShortcut(press, items: items, proxy: proxy) == .handled {
+            return .handled
+        }
+
+        // Option+Space は既存互換の固定ショートカットとして残す。
+        if press.key == .space, press.modifiers.contains(.option) {
             playFromGrid(items: items); return .handled
-        case .space where press.modifiers.contains(.option):
-            playFromGrid(items: items); return .handled
-        default:
-            break
         }
 
         let cols = max(2, Int(appSettings.columnCount))
@@ -458,12 +457,16 @@ struct AlbumDetailView: View {
         }
 
         var nextIndex: Int?
-        switch press.key {
-        case .upArrow: if index - cols >= 0 { nextIndex = index - cols }
-        case .downArrow: if index + cols < items.count { nextIndex = index + cols }
-        case .leftArrow: if index > 0 { nextIndex = index - 1 }
-        case .rightArrow: if index < items.count - 1 { nextIndex = index + 1 }
-        default: return .ignored
+        if MediaShortcutSettings.matches(.libraryMoveUp, press: press), index - cols >= 0 {
+            nextIndex = index - cols
+        } else if MediaShortcutSettings.matches(.libraryMoveDown, press: press), index + cols < items.count {
+            nextIndex = index + cols
+        } else if MediaShortcutSettings.matches(.libraryMoveLeft, press: press), index > 0 {
+            nextIndex = index - 1
+        } else if MediaShortcutSettings.matches(.libraryMoveRight, press: press), index < items.count - 1 {
+            nextIndex = index + 1
+        } else {
+            return .ignored
         }
 
         if let nextIndex, items.indices.contains(nextIndex) {
@@ -477,6 +480,70 @@ struct AlbumDetailView: View {
         return .ignored
     }
 
+    private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
+        if MediaShortcutSettings.matches(.libraryOpenFocused, press: press) {
+            playFromGrid(items: items)
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryOpenExternal, press: press) {
+            if let item = primaryTarget(in: items) { openFileExternal(item) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRevealInFinder, press: press) {
+            if let item = primaryTarget(in: items) { revealInFinder(item) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryToggleFavorite, press: press) {
+            if let item = primaryTarget(in: items) {
+                dataManager.toggleFavorite(videoIDs: effectiveTargetIDs(for: item))
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryDelete, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { showBulkDeleteConfirmation = true }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMoveToTrash, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { moveSelectedToTrash() }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryExport, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { exportSelectedItems() }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryImport, press: press) {
+            importFilesViaDialog()
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRandomPlay, press: press) {
+            coordinator.playRandom(from: items.filter { $0.mediaType == .video })
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMultiPlay, press: press) {
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.playMulti(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.startSlideshow(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySplitPlay, press: press) {
+            let selected = selectedVideoItems
+            if selected.count == 1, let video = selected.first {
+                splitTargetVideo = video
+                showSplitSheet = true
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryDuplicateCheck, press: press) {
+            if canRemoveItemsFromCurrentAlbum, !items.isEmpty {
+                runDuplicateCheck()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRemoveFromAlbum, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if canRemoveItemsFromCurrentAlbum, !selectedVideoIDs.isEmpty {
+                removeSelectedFromAlbum()
+            }
+            return .handled
+        }
+
+        return .ignored
+    }
+
     /// 選択が複数なら同時再生、単一/フォーカス対象を通常再生
     private func playFromGrid(items: [VideoItem]) {
         let selectedVideos = selectedVideoItems
@@ -487,6 +554,23 @@ struct AlbumDetailView: View {
         } else if let first = items.first {
             openFile(first)
         }
+    }
+
+    private func primaryTarget(in items: [VideoItem]) -> VideoItem? {
+        if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
+            return item
+        }
+        if let selectedID = selectedVideoIDs.first, let item = items.first(where: { $0.id == selectedID }) {
+            return item
+        }
+        return items.first
+    }
+
+    private func ensureSelectionForFocusedItem(in items: [VideoItem]) {
+        guard selectedVideoIDs.isEmpty, let item = primaryTarget(in: items) else { return }
+        selectedVideoIDs = [item.id]
+        lastSelectedVideoID = item.id
+        focusedVideoID = item.id
     }
 
     private var noResultsState: some View {
@@ -1413,14 +1497,13 @@ struct LibraryCategoryView: View {
     private func handleKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         guard !items.isEmpty else { return .ignored }
 
-        // 再生キー（Enter / Option+Space）はフォーカス未確定でも動作させる
-        switch press.key {
-        case .return:
+        if handleLibraryShortcut(press, items: items) == .handled {
+            return .handled
+        }
+
+        // Option+Space は既存互換の固定ショートカットとして残す。
+        if press.key == .space, press.modifiers.contains(.option) {
             playFocused(items: items); return .handled
-        case .space where press.modifiers.contains(.option):
-            playFocused(items: items); return .handled
-        default:
-            break
         }
 
         let cols = max(2, Int(appSettings.columnCount))
@@ -1430,12 +1513,16 @@ struct LibraryCategoryView: View {
             return .handled
         }
         var nextIndex: Int?
-        switch press.key {
-        case .upArrow: if index - cols >= 0 { nextIndex = index - cols }
-        case .downArrow: if index + cols < items.count { nextIndex = index + cols }
-        case .leftArrow: if index > 0 { nextIndex = index - 1 }
-        case .rightArrow: if index < items.count - 1 { nextIndex = index + 1 }
-        default: return .ignored
+        if MediaShortcutSettings.matches(.libraryMoveUp, press: press), index - cols >= 0 {
+            nextIndex = index - cols
+        } else if MediaShortcutSettings.matches(.libraryMoveDown, press: press), index + cols < items.count {
+            nextIndex = index + cols
+        } else if MediaShortcutSettings.matches(.libraryMoveLeft, press: press), index > 0 {
+            nextIndex = index - 1
+        } else if MediaShortcutSettings.matches(.libraryMoveRight, press: press), index < items.count - 1 {
+            nextIndex = index + 1
+        } else {
+            return .ignored
         }
         if let nextIndex, items.indices.contains(nextIndex) {
             let id = items[nextIndex].id
@@ -1443,6 +1530,81 @@ struct LibraryCategoryView: View {
             withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
             return .handled
         }
+        return .ignored
+    }
+
+    private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem]) -> KeyPress.Result {
+        if MediaShortcutSettings.matches(.libraryOpenFocused, press: press) {
+            playFocused(items: items)
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryOpenExternal, press: press) {
+            if let item = primaryTarget(in: items), let url = dataManager.fileURL(for: item) {
+                NSWorkspace.shared.open(url)
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRevealInFinder, press: press) {
+            if let item = primaryTarget(in: items) {
+                NSWorkspace.shared.activateFileViewerSelecting([dataManager.videoStorageURL.appendingPathComponent(item.internalFilename)])
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryToggleFavorite, press: press) {
+            if !isTrash, let item = primaryTarget(in: items) {
+                dataManager.toggleFavorite(videoIDs: targetIDs(for: item))
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryDelete, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { showBulkDeleteConfirmation = true }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMoveToTrash, press: press) {
+            guard !isTrash else { return .handled }
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty {
+                dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
+                selectedVideoIDs.removeAll()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRestoreFromTrash, press: press) {
+            guard isTrash else { return .handled }
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty {
+                dataManager.restoreFromTrash(videoIDs: Array(selectedVideoIDs))
+                selectedVideoIDs.removeAll()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryExport, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { exportSelectedItems() }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRandomPlay, press: press) {
+            guard !isTrash else { return .handled }
+            coordinator.playRandom(from: items.filter { $0.mediaType == .video })
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMultiPlay, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.playMulti(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.startSlideshow(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySplitPlay, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count == 1, let video = selected.first {
+                splitTargetVideo = video
+                showSplitSheet = true
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryEmptyTrash, press: press) {
+            if isTrash, !dataManager.trashedVideos.isEmpty {
+                showEmptyTrashAlert = true
+            }
+            return .handled
+        }
+
         return .ignored
     }
 
@@ -1455,6 +1617,23 @@ struct LibraryCategoryView: View {
         } else if let first = items.first {
             open(first)
         }
+    }
+
+    private func primaryTarget(in items: [VideoItem]) -> VideoItem? {
+        if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
+            return item
+        }
+        if let selectedID = selectedVideoIDs.first, let item = items.first(where: { $0.id == selectedID }) {
+            return item
+        }
+        return items.first
+    }
+
+    private func ensureSelectionForFocusedItem(in items: [VideoItem]) {
+        guard selectedVideoIDs.isEmpty, let item = primaryTarget(in: items) else { return }
+        selectedVideoIDs = [item.id]
+        lastSelectedVideoID = item.id
+        focusedVideoID = item.id
     }
 
     @MainActor

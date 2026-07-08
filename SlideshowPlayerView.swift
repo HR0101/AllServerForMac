@@ -325,6 +325,7 @@ private struct SlideshowContentView: View {
     @State private var selectedChapterID: UUID?
     @State private var isSidebarVisible = false
     @State private var showShortcutHelp = false
+    @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let sidebarWidth: CGFloat = 250
     private let triggerWidth: CGFloat = 20
 
@@ -334,15 +335,27 @@ private struct SlideshowContentView: View {
         ))
     }
 
-    private static let shortcutList: [(key: String, action: String)] = [
-        ("Space / k", "再生・一時停止"),
-        ("0〜9", "全体の 0%〜90% の位置へジャンプ"),
-        ("g / h / j", "15秒 / 10秒 / 5秒 戻る"),
-        ("l / ; / '", "5秒 / 10秒 / 15秒 進む"),
-        ("r", "ランダムな位置へジャンプ"),
-        ("画面左端にマウス", "チャプター一覧を表示"),
-        ("Esc", "プレイヤーを閉じる"),
-    ]
+    private var shortcutList: [(key: String, action: String)] {
+        _ = shortcutSettingsVersion
+        return MediaShortcutSettings.shortcutList(
+            for: [
+                .videoPlayPause,
+                .videoSeekBack15,
+                .videoSeekBack10,
+                .videoSeekBack5,
+                .videoSeekForward5,
+                .videoSeekForward10,
+                .videoSeekForward15,
+                .videoRandomSeek
+            ],
+            extraItems: [
+                ("0〜9", "全体の 0%〜90% の位置へジャンプ"),
+                ("?", "ショートカット一覧を表示"),
+                ("画面左端にマウス", "チャプター一覧を表示"),
+                ("Esc", "プレイヤーを閉じる")
+            ]
+        )
+    }
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -368,7 +381,7 @@ private struct SlideshowContentView: View {
             }
 
             if showShortcutHelp {
-                ShortcutHelpPanel(title: "スライドショーのショートカット", shortcuts: Self.shortcutList) {
+                ShortcutHelpPanel(title: "スライドショーのショートカット", shortcuts: shortcutList) {
                     showShortcutHelp = false
                 }
             }
@@ -404,18 +417,41 @@ private struct SlideshowContentView: View {
             showShortcutHelp.toggle()
             return .handled
         case .space:
-            if press.modifiers.contains(.option) { coordinator.close(); return .handled }
+            if press.modifiers.contains(.option) {
+                coordinator.close()
+                return .handled
+            }
+            break
+        default:
+            break
+        }
+
+        if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
             viewModel.playPause()
             return .handled
-        case "r": viewModel.seekToRandomTime(); return .handled
-        case "g": viewModel.seek(by: -15); return .handled
-        case "h": viewModel.seek(by: -10); return .handled
-        case "j": viewModel.seek(by: -5); return .handled
-        case "k": viewModel.playPause(); return .handled
-        case "l": viewModel.seek(by: 5); return .handled
-        case ";": viewModel.seek(by: 10); return .handled
-        case "'": viewModel.seek(by: 15); return .handled
-        default: return .ignored
+        } else if MediaShortcutSettings.matches(.videoRandomSeek, press: press) {
+            viewModel.seekToRandomTime()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack15, press: press) {
+            viewModel.seek(by: -15)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack10, press: press) {
+            viewModel.seek(by: -10)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack5, press: press) {
+            viewModel.seek(by: -5)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward5, press: press) {
+            viewModel.seek(by: 5)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
+            viewModel.seek(by: 10)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward15, press: press) {
+            viewModel.seek(by: 15)
+            return .handled
         }
+
+        return .ignored
     }
 }

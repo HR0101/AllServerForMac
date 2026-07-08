@@ -127,6 +127,7 @@ struct MultiVideoPlayerView: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @FocusState private var isFocused: Bool
     @State private var showShortcutHelp = false
+    @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let videoCount: Int
 
     init(videos: [VideoItem], dataManager: VideoDataManager) {
@@ -134,14 +135,24 @@ struct MultiVideoPlayerView: View {
         self.videoCount = videos.count
     }
 
-    private static let shortcutList: [(key: String, action: String)] = [
-        ("Space / k", "全画面 再生・一時停止"),
-        ("0〜9", "0%〜90% の位置へ同時ジャンプ"),
-        ("h / j", "10秒 / 5秒 戻る"),
-        ("l / ;", "5秒 / 10秒 進む"),
-        ("r", "全動画同じランダム位置へジャンプ"),
-        ("Esc", "プレイヤーを閉じる"),
-    ]
+    private var shortcutList: [(key: String, action: String)] {
+        _ = shortcutSettingsVersion
+        return MediaShortcutSettings.shortcutList(
+            for: [
+                .videoPlayPause,
+                .videoSeekBack10,
+                .videoSeekBack5,
+                .videoSeekForward5,
+                .videoSeekForward10,
+                .videoRandomSeek
+            ],
+            extraItems: [
+                ("0〜9", "0%〜90% の位置へ同時ジャンプ"),
+                ("?", "ショートカット一覧を表示"),
+                ("Esc", "プレイヤーを閉じる")
+            ]
+        )
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -153,7 +164,7 @@ struct MultiVideoPlayerView: View {
                 coordinator.close()
             }
             if showShortcutHelp {
-                ShortcutHelpPanel(title: "同時再生のショートカット", shortcuts: Self.shortcutList) {
+                ShortcutHelpPanel(title: "同時再生のショートカット", shortcuts: shortcutList) {
                     showShortcutHelp = false
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -300,17 +311,36 @@ struct MultiVideoPlayerView: View {
             showShortcutHelp.toggle()
             return .handled
         case .space:
-            if press.modifiers.contains(.option) { coordinator.close(); return .handled }
+            if press.modifiers.contains(.option) {
+                coordinator.close()
+                return .handled
+            }
+            break
+        default:
+            break
+        }
+
+        if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
             viewModel.togglePlayPauseAll()
             return .handled
-        case "r": viewModel.seekAllToRandomTime(); return .handled
-        case "h": viewModel.seekAll(by: -10); return .handled
-        case "j": viewModel.seekAll(by: -5); return .handled
-        case "k": viewModel.togglePlayPauseAll(); return .handled
-        case "l": viewModel.seekAll(by: 5); return .handled
-        case ";": viewModel.seekAll(by: 10); return .handled
-        default: return .ignored
+        } else if MediaShortcutSettings.matches(.videoRandomSeek, press: press) {
+            viewModel.seekAllToRandomTime()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack10, press: press) {
+            viewModel.seekAll(by: -10)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack5, press: press) {
+            viewModel.seekAll(by: -5)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward5, press: press) {
+            viewModel.seekAll(by: 5)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
+            viewModel.seekAll(by: 10)
+            return .handled
         }
+
+        return .ignored
     }
 
     private func formatTime(_ time: Double) -> String {

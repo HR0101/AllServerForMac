@@ -95,6 +95,8 @@ struct PreferencesView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                MediaShortcutSettingsSection()
             }
             .formStyle(.grouped)
 

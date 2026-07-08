@@ -13,6 +13,8 @@ struct MediaPreviewView: View {
     @State private var photo: NSImage?
     @State private var fileMissing = false
     @AppStorage("isMangaMode") private var isMangaMode = false
+    @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
+    @FocusState private var isFocused: Bool
     @State private var photoCache: [UUID: NSImage] = [:]
     @State private var loadingTask: Task<Void, Never>?
     @State private var preloadTask: Task<Void, Never>?
@@ -28,7 +30,12 @@ struct MediaPreviewView: View {
             content
         }
         .frame(minWidth: 760, idealWidth: 920, minHeight: 500, idealHeight: 640)
-        .onAppear(perform: load)
+        .focusable()
+        .focused($isFocused)
+        .onAppear {
+            isFocused = true
+            load()
+        }
         .onDisappear {
             loadingTask?.cancel()
             preloadTask?.cancel()
@@ -38,6 +45,7 @@ struct MediaPreviewView: View {
         .onChange(of: item.id) { _, _ in
             load()
         }
+        .onKeyPress(phases: .down, action: handleKeyPress)
     }
 
     private func changeItem(offset: Int) {
@@ -88,19 +96,12 @@ struct MediaPreviewView: View {
 
             if item.mediaType == .photo {
                 Button {
-                    let list = items.isEmpty ? [item] : items
-                    let target = item
-                    dismiss()
-                    // シートを閉じてから全画面ビューア（ウィンドウ全体差し替え）へ切り替える
-                    DispatchQueue.main.async {
-                        coordinator.viewPhotos(playlist: list, current: target)
-                    }
+                    openFullScreenPhoto()
                 } label: {
                     Label("全画面表示", systemImage: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.borderless)
-                .keyboardShortcut("f", modifiers: [])
             }
 
             Button {
@@ -156,15 +157,105 @@ struct MediaPreviewView: View {
                     ProgressView()
                 }
 
-                if !items.isEmpty {
-                    HStack {
-                        Button("") { changeItem(offset: -1) }.keyboardShortcut(isMangaMode ? .rightArrow : .leftArrow, modifiers: []).opacity(0)
-                        Button("") { changeItem(offset: 1) }.keyboardShortcut(isMangaMode ? .leftArrow : .rightArrow, modifiers: []).opacity(0)
-                    }
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
+        _ = shortcutSettingsVersion
+
+        if item.mediaType == .photo {
+            if MediaShortcutSettings.matches(.photoPrevious, press: press) {
+                changeItem(offset: isMangaMode ? 1 : -1)
+                return .handled
+            } else if MediaShortcutSettings.matches(.photoNext, press: press) {
+                changeItem(offset: isMangaMode ? -1 : 1)
+                return .handled
+            } else if MediaShortcutSettings.matches(.photoToggleMangaMode, press: press) {
+                isMangaMode.toggle()
+                return .handled
+            } else if MediaShortcutSettings.matches(.photoClose, press: press) {
+                openFullScreenPhoto()
+                return .handled
+            }
+        } else {
+            if let digit = press.key.character.wholeNumberValue {
+                seekVideo(toPercentage: Double(digit) / 10.0)
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
+                toggleVideoPlayback()
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoRandomSeek, press: press) {
+                seekVideoToRandomTime()
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoSeekBack15, press: press) {
+                seekVideo(by: -15)
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoSeekBack10, press: press) {
+                seekVideo(by: -10)
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoSeekBack5, press: press) {
+                seekVideo(by: -5)
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoSeekForward5, press: press) {
+                seekVideo(by: 5)
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
+                seekVideo(by: 10)
+                return .handled
+            } else if MediaShortcutSettings.matches(.videoSeekForward15, press: press) {
+                seekVideo(by: 15)
+                return .handled
+            }
+        }
+
+        switch press.key {
+        case .escape:
+            dismiss()
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    private func openFullScreenPhoto() {
+        guard item.mediaType == .photo else { return }
+        let list = items.isEmpty ? [item] : items
+        let target = item
+        dismiss()
+        // シートを閉じてから全画面ビューアへ切り替える
+        DispatchQueue.main.async {
+            coordinator.viewPhotos(playlist: list, current: target)
+        }
+    }
+
+    private func toggleVideoPlayback() {
+        guard let player else { return }
+        if player.rate == 0 {
+            player.play()
+        } else {
+            player.pause()
+        }
+    }
+
+    private func seekVideo(by seconds: Double) {
+        guard let player else { return }
+        let currentSeconds = player.currentTime().seconds
+        let targetTime = CMTime(seconds: currentSeconds + seconds, preferredTimescale: 600)
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func seekVideo(toPercentage percentage: Double) {
+        guard let player, let duration = player.currentItem?.duration, duration.seconds > 0 else { return }
+        let targetTime = CMTime(seconds: duration.seconds * percentage, preferredTimescale: 600)
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func seekVideoToRandomTime() {
+        guard let player, let duration = player.currentItem?.duration, duration.seconds > 0 else { return }
+        let targetTime = CMTime(seconds: Double.random(in: 0..<duration.seconds), preferredTimescale: 600)
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     private func load() {

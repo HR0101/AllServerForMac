@@ -34,12 +34,12 @@ struct PhotoViewerView: View {
         case next
     }
 
-    let photos: [VideoItem]
     @State var current: VideoItem
     let dataManager: VideoDataManager
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @AppStorage("isMangaMode") private var isMangaMode = false
+    @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     @FocusState private var isFocused: Bool
 
     @State private var image: NSImage?
@@ -54,6 +54,7 @@ struct PhotoViewerView: View {
     @State private var hideControlsTask: Task<Void, Never>?
     @State private var hideFilmstripTask: Task<Void, Never>?
     @State private var filmstripVisible = false
+    @State private var visiblePhotos: [VideoItem]
 
     private let preloadRadius = 3
     private let controlsAutoHideDelay: UInt64 = 2_000_000_000
@@ -63,10 +64,16 @@ struct PhotoViewerView: View {
     private let filmstripPreviewHeight: CGFloat = 270
     private let filmstripThumbSize: CGFloat = 138
     private let filmstripBarHeight: CGFloat = 198
+    private let topControlsHoverHeight: CGFloat = 96
 
+    init(photos: [VideoItem], current: VideoItem, dataManager: VideoDataManager) {
+        self.dataManager = dataManager
+        _current = State(initialValue: current)
+        _visiblePhotos = State(initialValue: photos)
+    }
 
     private var currentIndex: Int? {
-        photos.firstIndex(where: { $0.id == current.id })
+        visiblePhotos.firstIndex(where: { $0.id == current.id })
     }
 
     var body: some View {
@@ -78,10 +85,6 @@ struct PhotoViewerView: View {
             if controlsVisible {
                 topBar
                     .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            if !controlsVisible {
-                topHoverZone
             }
 
         }
@@ -113,23 +116,6 @@ struct PhotoViewerView: View {
         .onKeyPress(phases: .down, action: handleKeyPress)
     }
 
-    private var topHoverZone: some View {
-        VStack(spacing: 0) {
-            Color.clear
-                .frame(height: 96)
-                .contentShape(Rectangle())
-                .onContinuousHover { phase in
-                    switch phase {
-                    case .active:
-                        showControls()
-                    case .ended:
-                        hideControlsAfterDelay()
-                    }
-                }
-            Spacer(minLength: 0)
-        }
-    }
-
     @ViewBuilder
     private var imageLayer: some View {
         if fileMissing {
@@ -142,30 +128,15 @@ struct PhotoViewerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let image {
             GeometryReader { geo in
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture { location in
-                        let w = geo.size.width
-                        if location.x < w * 0.3 {
-                            changeItem(offset: isMangaMode ? 1 : -1)
-                        } else if location.x > w * 0.7 {
-                            changeItem(offset: isMangaMode ? -1 : 1)
-                        }
-                    }
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case .active(let location):
-                            updateHoverAffordances(for: location, in: geo.size)
-                        case .ended:
-                            edgePreviewSide = nil
-                            hideFilmstripAfterDelay()
-                        }
-                    }
+                ZStack {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                edgePreviewOverlay
+                    interactionLayer(in: geo.size)
+                    edgePreviewOverlay
+                }
             }
         } else {
             ProgressView()
@@ -175,6 +146,29 @@ struct PhotoViewerView: View {
         }
     }
 
+    private func interactionLayer(in size: CGSize) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                let width = size.width
+                if location.x < width * 0.3 {
+                    changeItem(offset: isMangaMode ? 1 : -1)
+                } else if location.x > width * 0.7 {
+                    changeItem(offset: isMangaMode ? -1 : 1)
+                }
+            }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    updateHoverAffordances(for: location, in: size)
+                case .ended:
+                    edgePreviewSide = nil
+                    hideControlsAfterDelay()
+                    hideFilmstripAfterDelay()
+                }
+            }
+    }
+
     private var topBar: some View {
         HStack(spacing: 12) {
             Text(current.originalFilename)
@@ -182,8 +176,8 @@ struct PhotoViewerView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if photos.count > 1, let idx = currentIndex {
-                Text("\(idx + 1) / \(photos.count)")
+            if visiblePhotos.count > 1, let idx = currentIndex {
+                Text("\(idx + 1) / \(visiblePhotos.count)")
                     .font(.system(size: 12))
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.7))
@@ -191,7 +185,7 @@ struct PhotoViewerView: View {
 
             Spacer()
 
-            if photos.count > 1 {
+            if visiblePhotos.count > 1 {
                 Button { isMangaMode.toggle() } label: {
                     Text(isMangaMode ? "漫画モード" : "通常モード")
                         .font(.system(size: 12))
@@ -248,7 +242,7 @@ struct PhotoViewerView: View {
 
     @ViewBuilder
     private var edgePreviewOverlay: some View {
-        if let side = edgePreviewSide, photos.count > 1 {
+        if let side = edgePreviewSide, visiblePhotos.count > 1 {
             HStack {
                 if side == .previous {
                     edgePreviewPanel(side: .previous)
@@ -268,11 +262,11 @@ struct PhotoViewerView: View {
 
     @ViewBuilder
     private var bottomFilmstrip: some View {
-        if photos.count > 1 {
+        if visiblePhotos.count > 1 {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 10) {
-                        ForEach(photos) { photo in
+                        ForEach(visiblePhotos) { photo in
                             Button {
                                 current = photo
                             } label: {
@@ -322,7 +316,7 @@ struct PhotoViewerView: View {
         let targetIndex = side == .previous
             ? currentIndex.map { $0 + (isMangaMode ? 1 : -1) }
             : currentIndex.map { $0 + (isMangaMode ? -1 : 1) }
-        let targetItem = targetIndex.flatMap { photos.indices.contains($0) ? photos[$0] : nil }
+        let targetItem = targetIndex.flatMap { visiblePhotos.indices.contains($0) ? visiblePhotos[$0] : nil }
 
         return VStack(spacing: 0) {
             ZStack {
@@ -349,6 +343,10 @@ struct PhotoViewerView: View {
             .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 4)
         }
         .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
+        .task(id: targetItem?.id) {
+            guard let targetItem else { return }
+            await loadThumbnailIfNeeded(for: targetItem)
+        }
     }
 
     private func filmstripCell(for photo: VideoItem) -> some View {
@@ -400,17 +398,21 @@ struct PhotoViewerView: View {
 
     private func deleteCurrentPhoto() {
         let idToDelete = current.id
-        let currentIdx = currentIndex ?? 0
-        
-        // 次の画像へ移動（最後の画像なら前の画像、それもなければ閉じる）
-        if currentIdx < photos.count - 1 {
-            current = photos[currentIdx + 1]
-        } else if currentIdx > 0 {
-            current = photos[currentIdx - 1]
-        } else {
+        guard let currentIdx = currentIndex else { return }
+        let remainingPhotos = visiblePhotos.filter { $0.id != idToDelete }
+
+        imageCache[idToDelete] = nil
+        thumbnailCache[idToDelete] = nil
+        edgePreviewSide = nil
+
+        if remainingPhotos.isEmpty {
             coordinator.close()
+        } else {
+            let nextIndex = min(currentIdx, remainingPhotos.count - 1)
+            visiblePhotos = remainingPhotos
+            current = remainingPhotos[nextIndex]
         }
-        
+
         // 完全に削除（ゴミ箱へ移動等）
         dataManager.deleteVideos(videoIDs: [idToDelete])
     }
@@ -418,19 +420,20 @@ struct PhotoViewerView: View {
     private func changeItem(offset: Int) {
         guard let idx = currentIndex else { return }
         let nextIdx = idx + offset
-        if nextIdx >= 0 && nextIdx < photos.count {
-            current = photos[nextIdx]
+        if nextIdx >= 0 && nextIdx < visiblePhotos.count {
+            current = visiblePhotos[nextIdx]
         }
     }
 
     private func updateEdgePreview(for location: CGPoint, width: CGFloat) {
-        guard photos.count > 1, width > 0 else {
+        guard visiblePhotos.count > 1, width > 0 else {
             edgePreviewSide = nil
             return
         }
 
-        let leftThreshold = width * 0.06
-        let rightThreshold = width * 0.94
+        let edgeActivationWidth = max(120, min(220, width * 0.16))
+        let leftThreshold = edgeActivationWidth
+        let rightThreshold = width - edgeActivationWidth
 
         if location.x <= leftThreshold {
             edgePreviewSide = .previous
@@ -442,9 +445,15 @@ struct PhotoViewerView: View {
     }
 
     private func updateHoverAffordances(for location: CGPoint, in size: CGSize) {
-        guard photos.count > 1, size.width > 0, size.height > 0 else {
+        guard visiblePhotos.count > 1, size.width > 0, size.height > 0 else {
             edgePreviewSide = nil
             return
+        }
+
+        if location.y <= topControlsHoverHeight {
+            showControls()
+        } else if controlsVisible {
+            hideControlsAfterDelay()
         }
 
         let bottomThreshold = max(92, min(140, size.height * 0.16))
@@ -462,19 +471,26 @@ struct PhotoViewerView: View {
     }
 
     private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
-        switch press.key {
-        case .leftArrow:
+        _ = shortcutSettingsVersion
+
+        if MediaShortcutSettings.matches(.photoPrevious, press: press) {
             changeItem(offset: isMangaMode ? 1 : -1)
             return .handled
-        case .rightArrow:
+        } else if MediaShortcutSettings.matches(.photoNext, press: press) {
             changeItem(offset: isMangaMode ? -1 : 1)
             return .handled
-        case "f", "F":
-            coordinator.close()
+        } else if MediaShortcutSettings.matches(.photoToggleMangaMode, press: press) {
+            isMangaMode.toggle()
             return .handled
-        case "\u{7F}", "\u{F728}": // Backspace (delete) and Delete (forward delete)
+        } else if MediaShortcutSettings.matches(.photoDelete, press: press) {
             deleteCurrentPhoto()
             return .handled
+        } else if MediaShortcutSettings.matches(.photoClose, press: press) {
+            coordinator.close()
+            return .handled
+        }
+
+        switch press.key {
         case .escape:
             coordinator.close()
             return .handled
@@ -562,7 +578,7 @@ struct PhotoViewerView: View {
     }
 
     private func scrollFilmstripToCurrent(_ proxy: ScrollViewProxy) {
-        guard photos.contains(where: { $0.id == current.id }) else { return }
+        guard visiblePhotos.contains(where: { $0.id == current.id }) else { return }
         withAnimation(.easeOut(duration: 0.15)) {
             proxy.scrollTo(current.id, anchor: .center)
         }
@@ -570,7 +586,7 @@ struct PhotoViewerView: View {
 
     private func preloadFilmstripThumbnails() {
         guard thumbnailTask == nil else { return }
-        let targets = photos
+        let targets = visiblePhotos
             .filter { thumbnailCache[$0.id] == nil }
             .compactMap { item -> (UUID, URL)? in
                 guard let url = dataManager.fileURL(for: item) else { return nil }
@@ -595,6 +611,18 @@ struct PhotoViewerView: View {
                 }
             }
         }
+    }
+
+    private func loadThumbnailIfNeeded(for item: VideoItem) async {
+        guard thumbnailCache[item.id] == nil,
+              let url = dataManager.fileURL(for: item) else { return }
+
+        let loaded = await Task.detached(priority: .utility) {
+            PhotoImageLoader.loadDisplayImage(from: url, maxPixelSize: filmstripThumbnailPixelSize)
+        }.value
+
+        guard thumbnailCache[item.id] == nil, let loaded else { return }
+        thumbnailCache[item.id] = loaded
     }
 
     private func preloadNearbyImages() {
@@ -624,16 +652,16 @@ struct PhotoViewerView: View {
 
     private func nearbyPhotos(around index: Int) -> [VideoItem] {
         let lower = max(0, index - preloadRadius)
-        let upper = min(photos.count - 1, index + preloadRadius)
+        let upper = min(visiblePhotos.count - 1, index + preloadRadius)
         guard lower <= upper else { return [] }
         return (lower...upper)
             .filter { $0 != index }
-            .map { photos[$0] }
+            .map { visiblePhotos[$0] }
     }
 
     private func trimImageCache() {
         guard let index = currentIndex else { return }
-        let keepIDs = Set((max(0, index - preloadRadius)...min(photos.count - 1, index + preloadRadius)).map { photos[$0].id })
+        let keepIDs = Set((max(0, index - preloadRadius)...min(visiblePhotos.count - 1, index + preloadRadius)).map { visiblePhotos[$0].id })
         imageCache = imageCache.filter { keepIDs.contains($0.key) }
     }
 }
