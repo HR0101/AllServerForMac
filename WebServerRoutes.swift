@@ -103,7 +103,7 @@ extension WebServerManager {
                 let albumType = AlbumType(rawValue: req.type) ?? .video
                 // 予約(async)だけして即OKを返すと、直後の一覧取得に反映前の状態が返る。
                 // 変更系は低頻度なので、メインスレッドでの反映完了を待ってから応答する。
-                DispatchQueue.main.sync { dataManager.createAlbum(name: req.name, type: albumType) }
+                _ = DispatchQueue.main.sync { dataManager.createAlbum(name: req.name, type: albumType) }
                 return .ok(.text("Created"))
             } catch { return .badRequest(.text("Invalid request")) }
         }

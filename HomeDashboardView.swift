@@ -32,6 +32,9 @@ struct HomeView: View {
                     scheduleCard
                     resourcesCard
                     duplicateCheckCard
+                    if !dataManager.linkedFolderConflicts.isEmpty {
+                        linkedFolderConflictCard
+                    }
                     storageCard
                     logsCard
                 }
@@ -98,6 +101,70 @@ struct HomeView: View {
 
             duplicateAlbumList(title: "未チェック", albums: uncheckedAlbums, emptyMessage: "未チェックのアルバムはありません。")
             duplicateAlbumList(title: "チェック済み", albums: checkedAlbums, emptyMessage: "チェック済みのアルバムはありません。")
+        }
+        .dashboardCard()
+    }
+
+    // MARK: フォルダ紐づけ候補カード
+    private var linkedFolderConflictCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            CardHeader(
+                icon: "folder.badge.questionmark",
+                tint: .yellow,
+                title: "フォルダ紐づけ候補",
+                subtitle: "同名フォルダの選択"
+            )
+
+            ForEach(dataManager.linkedFolderConflicts) { conflict in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "rectangle.stack.fill")
+                            .foregroundStyle(.yellow)
+                            .font(.system(size: 12))
+                        Text(conflict.albumName)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                    }
+
+                    ForEach(conflict.candidates) { candidate in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(candidate.folderPath)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(candidate.folderPath)
+                                Text("\(candidate.matchCount)件一致")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            Button {
+                                dataManager.confirmLinkedFolderCandidate(candidate)
+                            } label: {
+                                Label("選択", systemImage: "checkmark.circle")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color(NSColor.textBackgroundColor).opacity(0.45))
+                        )
+                    }
+                }
+                .padding(.vertical, 2)
+
+                if conflict.id != dataManager.linkedFolderConflicts.last?.id {
+                    Divider()
+                }
+            }
         }
         .dashboardCard()
     }

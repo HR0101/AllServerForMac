@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - デザイントークン
@@ -72,11 +73,21 @@ struct IconTile: View {
             )
             .frame(width: size, height: size)
             .overlay(
-                Image(systemName: icon)
+                safeSystemImage(named: icon)
                     .font(.system(size: size * 0.5, weight: .semibold))
                     .foregroundStyle(.white)
             )
             .shadow(color: tint.opacity(0.35), radius: 3, x: 0, y: 1)
+    }
+
+    private func safeSystemImage(named name: String) -> Image {
+        if let nsImage = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+            return Image(nsImage: nsImage)
+        }
+        if let nsImage = NSImage(named: NSImage.Name(name)) {
+            return Image(nsImage: nsImage)
+        }
+        return Image(nsImage: NSImage(systemSymbolName: "questionmark", accessibilityDescription: nil) ?? NSImage())
     }
 }
 

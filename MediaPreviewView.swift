@@ -284,6 +284,8 @@ struct MediaPreviewView: View {
             photo = nil
             let targetID = item.id
             loadingTask = Task.detached(priority: .userInitiated) {
+                await ThumbnailDecodeLimiter.shared.acquire()
+                defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
                 let image = PhotoImageLoader.loadDisplayImage(from: url)
                 await MainActor.run {
                     guard item.id == targetID else { return }
@@ -315,6 +317,9 @@ struct MediaPreviewView: View {
         guard !targets.isEmpty else { return }
 
         preloadTask = Task.detached(priority: .utility) {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+
             for (id, url) in targets {
                 guard !Task.isCancelled else { return }
                 guard let image = PhotoImageLoader.loadDisplayImage(from: url) else { continue }

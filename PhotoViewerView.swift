@@ -47,16 +47,23 @@ struct PhotoViewerView: View {
     @State private var controlsVisible = true
     @State private var edgePreviewSide: EdgePreviewSide?
     @State private var imageCache: [UUID: NSImage] = [:]
+    @State private var previewImageCache: [UUID: NSImage] = [:]
     @State private var thumbnailCache: [UUID: NSImage] = [:]
     @State private var loadingTask: Task<Void, Never>?
     @State private var preloadTask: Task<Void, Never>?
+    @State private var previewPreloadTask: Task<Void, Never>?
     @State private var thumbnailTask: Task<Void, Never>?
     @State private var hideControlsTask: Task<Void, Never>?
     @State private var hideFilmstripTask: Task<Void, Never>?
     @State private var filmstripVisible = false
+    @State private var filmstripPreloadCenterID: UUID?
     @State private var visiblePhotos: [VideoItem]
 
-    private let preloadRadius = 3
+    private let preloadRadius = 8
+    private let imageCacheRadius = 12
+    private let previewPreloadRadius = 18
+    private let previewCacheRadius = 24
+    private let previewPixelSize: CGFloat = 1200
     private let controlsAutoHideDelay: UInt64 = 2_000_000_000
     private let filmstripThumbnailPixelSize: CGFloat = 220
     private let filmstripAutoHideDelay: UInt64 = 2_000_000_000
@@ -65,6 +72,7 @@ struct PhotoViewerView: View {
     private let filmstripThumbSize: CGFloat = 138
     private let filmstripBarHeight: CGFloat = 198
     private let topControlsHoverHeight: CGFloat = 96
+    private let filmstripPreloadRadius = 12
 
     init(photos: [VideoItem], current: VideoItem, dataManager: VideoDataManager) {
         self.dataManager = dataManager
@@ -109,6 +117,7 @@ struct PhotoViewerView: View {
         .onDisappear {
             loadingTask?.cancel()
             preloadTask?.cancel()
+            previewPreloadTask?.cancel()
             thumbnailTask?.cancel()
             hideControlsTask?.cancel()
             hideFilmstripTask?.cancel()
@@ -303,6 +312,7 @@ struct PhotoViewerView: View {
                 .task(id: current.id) {
                     await Task.yield()
                     scrollFilmstripToCurrent(proxy)
+                    preloadFilmstripThumbnails(around: currentIndex)
                 }
                 .onAppear {
                     scrollFilmstripToCurrent(proxy)
@@ -402,6 +412,7 @@ struct PhotoViewerView: View {
         let remainingPhotos = visiblePhotos.filter { $0.id != idToDelete }
 
         imageCache[idToDelete] = nil
+        previewImageCache[idToDelete] = nil
         thumbnailCache[idToDelete] = nil
         edgePreviewSide = nil
 
@@ -509,13 +520,31 @@ struct PhotoViewerView: View {
             return
         }
 
-        image = nil
+        let cachedPreview = previewImageCache[current.id] ?? thumbnailCache[current.id]
+        if let preview = cachedPreview {
+            image = preview
+        } else {
+            image = nil
+        }
         guard let url = dataManager.fileURL(for: current) else {
             fileMissing = true
             return
         }
         let targetID = current.id
+        let needsPreview = cachedPreview == nil
+        preloadPreviewImages()
         loadingTask = Task.detached(priority: .userInitiated) {
+            if needsPreview,
+               let preview = PhotoImageLoader.loadDisplayImage(from: url, maxPixelSize: previewPixelSize) {
+                await MainActor.run {
+                    guard current.id == targetID, imageCache[targetID] == nil else { return }
+                    previewImageCache[targetID] = preview
+                    image = preview
+                    trimPreviewImageCache()
+                }
+            }
+
+            guard !Task.isCancelled else { return }
             let loaded = PhotoImageLoader.loadDisplayImage(from: url)
             await MainActor.run {
                 // 読み込み中に別の画像へ移動していた場合は破棄する
@@ -524,6 +553,7 @@ struct PhotoViewerView: View {
                     imageCache[targetID] = loaded
                     image = loaded
                     trimImageCache()
+                    preloadPreviewImages()
                     preloadNearbyImages()
                 } else {
                     fileMissing = true
@@ -555,10 +585,13 @@ struct PhotoViewerView: View {
 
     private func showFilmstrip() {
         hideFilmstripTask?.cancel()
+        let shouldPreload = filmstripPreloadCenterID != current.id
         withAnimation(.easeInOut(duration: 0.2)) {
             filmstripVisible = true
         }
-        preloadFilmstripThumbnails()
+        if shouldPreload {
+            preloadFilmstripThumbnails(around: currentIndex)
+        }
     }
 
     private func hideFilmstrip() {
@@ -585,8 +618,32 @@ struct PhotoViewerView: View {
     }
 
     private func preloadFilmstripThumbnails() {
+        preloadFilmstripThumbnails(around: currentIndex)
+    }
+
+    private func preloadFilmstripThumbnails(around index: Int?) {
+        guard filmstripPreloadCenterID != current.id || thumbnailTask == nil else { return }
+        thumbnailTask?.cancel()
+        thumbnailTask = nil
+
+        guard let index else { return }
+        filmstripPreloadCenterID = current.id
+        let lower = max(0, index - filmstripPreloadRadius)
+        let upper = min(visiblePhotos.count - 1, index + filmstripPreloadRadius)
+        guard lower <= upper else { return }
+
+        let priorityIDs = Set(nearbyPhotos(around: index).map(\.id) + [current.id])
+        let windowPhotos = Array(visiblePhotos[lower...upper])
+            .sorted { lhs, rhs in
+                if priorityIDs.contains(lhs.id) != priorityIDs.contains(rhs.id) {
+                    return priorityIDs.contains(lhs.id)
+                }
+                return abs((visiblePhotos.firstIndex(where: { $0.id == lhs.id }) ?? index) - index)
+                    < abs((visiblePhotos.firstIndex(where: { $0.id == rhs.id }) ?? index) - index)
+            }
+
         guard thumbnailTask == nil else { return }
-        let targets = visiblePhotos
+        let targets = windowPhotos
             .filter { thumbnailCache[$0.id] == nil }
             .compactMap { item -> (UUID, URL)? in
                 guard let url = dataManager.fileURL(for: item) else { return nil }
@@ -596,6 +653,9 @@ struct PhotoViewerView: View {
         guard !targets.isEmpty else { return }
 
         thumbnailTask = Task.detached(priority: .utility) {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+
             defer {
                 Task { @MainActor in
                     thumbnailTask = nil
@@ -618,7 +678,9 @@ struct PhotoViewerView: View {
               let url = dataManager.fileURL(for: item) else { return }
 
         let loaded = await Task.detached(priority: .utility) {
-            PhotoImageLoader.loadDisplayImage(from: url, maxPixelSize: filmstripThumbnailPixelSize)
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+            return PhotoImageLoader.loadDisplayImage(from: url, maxPixelSize: filmstripThumbnailPixelSize)
         }.value
 
         guard thumbnailCache[item.id] == nil, let loaded else { return }
@@ -628,19 +690,28 @@ struct PhotoViewerView: View {
     private func preloadNearbyImages() {
         guard let index = currentIndex else { return }
         preloadTask?.cancel()
-        let targets = nearbyPhotos(around: index)
+        let targets = nearbyPhotos(around: index, radius: preloadRadius)
             .filter { imageCache[$0.id] == nil }
             .compactMap { item -> (UUID, URL)? in
                 guard let url = dataManager.fileURL(for: item) else { return nil }
                 return (item.id, url)
             }
 
-        guard !targets.isEmpty else { return }
+        preloadPreviewImages()
+
+        guard !targets.isEmpty else {
+            trimImageCache()
+            trimPreviewImageCache()
+            return
+        }
 
         preloadTask = Task.detached(priority: .utility) {
             for (id, url) in targets {
                 guard !Task.isCancelled else { return }
-                guard let loaded = PhotoImageLoader.loadDisplayImage(from: url) else { continue }
+                await ThumbnailDecodeLimiter.shared.acquire()
+                let loaded = PhotoImageLoader.loadDisplayImage(from: url)
+                await ThumbnailDecodeLimiter.shared.release()
+                guard !Task.isCancelled, let loaded else { continue }
                 await MainActor.run {
                     guard imageCache[id] == nil else { return }
                     imageCache[id] = loaded
@@ -650,18 +721,60 @@ struct PhotoViewerView: View {
         }
     }
 
-    private func nearbyPhotos(around index: Int) -> [VideoItem] {
-        let lower = max(0, index - preloadRadius)
-        let upper = min(visiblePhotos.count - 1, index + preloadRadius)
+    private func preloadPreviewImages() {
+        guard let index = currentIndex else { return }
+        previewPreloadTask?.cancel()
+        let targets = nearbyPhotos(around: index, radius: previewPreloadRadius)
+            .filter { previewImageCache[$0.id] == nil && imageCache[$0.id] == nil }
+            .compactMap { item -> (UUID, URL)? in
+                guard let url = dataManager.fileURL(for: item) else { return nil }
+                return (item.id, url)
+            }
+
+        guard !targets.isEmpty else {
+            trimPreviewImageCache()
+            return
+        }
+
+        previewPreloadTask = Task.detached(priority: .utility) {
+            for (id, url) in targets {
+                guard !Task.isCancelled else { return }
+                await ThumbnailDecodeLimiter.shared.acquire()
+                let loaded = PhotoImageLoader.loadDisplayImage(from: url, maxPixelSize: previewPixelSize)
+                await ThumbnailDecodeLimiter.shared.release()
+                guard !Task.isCancelled, let loaded else { continue }
+                await MainActor.run {
+                    guard previewImageCache[id] == nil, imageCache[id] == nil else { return }
+                    previewImageCache[id] = loaded
+                    trimPreviewImageCache()
+                }
+            }
+        }
+    }
+
+    private func nearbyPhotos(around index: Int, radius: Int) -> [VideoItem] {
+        let lower = max(0, index - radius)
+        let upper = min(visiblePhotos.count - 1, index + radius)
         guard lower <= upper else { return [] }
         return (lower...upper)
             .filter { $0 != index }
+            .sorted { abs($0 - index) < abs($1 - index) }
             .map { visiblePhotos[$0] }
+    }
+
+    private func nearbyPhotos(around index: Int) -> [VideoItem] {
+        nearbyPhotos(around: index, radius: preloadRadius)
     }
 
     private func trimImageCache() {
         guard let index = currentIndex else { return }
-        let keepIDs = Set((max(0, index - preloadRadius)...min(visiblePhotos.count - 1, index + preloadRadius)).map { visiblePhotos[$0].id })
+        let keepIDs = Set((max(0, index - imageCacheRadius)...min(visiblePhotos.count - 1, index + imageCacheRadius)).map { visiblePhotos[$0].id })
         imageCache = imageCache.filter { keepIDs.contains($0.key) }
+    }
+
+    private func trimPreviewImageCache() {
+        guard let index = currentIndex else { return }
+        let keepIDs = Set((max(0, index - previewCacheRadius)...min(visiblePhotos.count - 1, index + previewCacheRadius)).map { visiblePhotos[$0].id })
+        previewImageCache = previewImageCache.filter { keepIDs.contains($0.key) }
     }
 }

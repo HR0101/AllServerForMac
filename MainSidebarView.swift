@@ -377,6 +377,16 @@ struct MainSidebarView: View {
                 folderRowLabel(node, isPhotoTree: isPhotoTree)
             }
             .contextMenu {
+                if let album = node.album, album.linkedFolderPath != nil || album.linkedFolderBookmarkData != nil {
+                    Button("紐づけフォルダを更新") {
+                        rescanLinkedFolder(albumID: album.id)
+                    }
+                } else {
+                    Button("フォルダを紐づけ…") {
+                        linkFolderToNode(node, isPhotoTree: isPhotoTree)
+                    }
+                }
+                Divider()
                 Button("フォルダにエクスポート…") {
                     exportAlbums(albumIDs: albumIDs(in: node))
                 }
@@ -385,6 +395,34 @@ struct MainSidebarView: View {
                     requestAlbumDeletion(albumIDs: albumIDs(in: node))
                 }
             })
+        }
+    }
+
+    private func linkFolderToNode(_ node: SidebarAlbumNode, isPhotoTree: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "「\(node.id)」に紐づけるFinderフォルダを選択してください"
+
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+
+        Task {
+            let albumID: UUID?
+            if let existingID = node.album?.id {
+                albumID = existingID
+            } else {
+                albumID = dataManager.createAlbum(name: node.id, type: isPhotoTree ? .photo : .video)
+            }
+
+            guard let albumID else { return }
+            await dataManager.linkFolder(folderURL: folderURL, to: albumID)
+        }
+    }
+
+    private func rescanLinkedFolder(albumID: UUID) {
+        Task {
+            await dataManager.rescanLinkedFolder(albumID: albumID)
         }
     }
 

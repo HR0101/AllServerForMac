@@ -2,6 +2,38 @@ import SwiftUI
 import AVFoundation
 import AppKit
 
+actor ThumbnailDecodeLimiter {
+    static let shared = ThumbnailDecodeLimiter(limit: 3)
+
+    private let limit: Int
+    private var runningCount = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    func acquire() async {
+        if runningCount < limit {
+            runningCount += 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            runningCount = max(0, runningCount - 1)
+        } else {
+            let continuation = waiters.removeFirst()
+            continuation.resume()
+        }
+    }
+}
+
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
     let dataManager: VideoDataManager
@@ -86,9 +118,10 @@ struct MacVideoThumbnailView: View {
                 return
             }
 
-            let cached: NSImage? = await Task.detached(priority: .userInitiated) {
-                guard let data = try? Data(contentsOf: cacheURL) else { return nil }
-                return NSImage(data: data)
+            let cached: NSImage? = await Task.detached(priority: .utility) {
+                await ThumbnailDecodeLimiter.shared.acquire()
+                defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+                return NSImage(contentsOf: cacheURL)
             }.value
             if let img = cached {
                 Self.memoryCache.setObject(img, forKey: cacheKey)
@@ -109,13 +142,19 @@ struct MacVideoThumbnailView: View {
     private func generatePhotoThumbnail(fileURL: URL, cacheURL: URL) async {
         // 元画像の読み込み・デコード・切り抜き・JPEG書き出しは重い同期処理のため、
         // メインスレッド（UIスレッド）をブロックしないようバックグラウンドで実行する。
-        let nsImage: NSImage? = await Task.detached(priority: .userInitiated) {
-            guard let imageData = try? Data(contentsOf: fileURL),
-                  let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil) else { return nil }
+        let nsImage: NSImage? = await Task.detached(priority: .utility) {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+
+            let sourceOptions: [CFString: Any] = [
+                kCGImageSourceShouldCache: false
+            ]
+            guard let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions as CFDictionary) else { return nil }
             let options: [CFString: Any] = [
                 kCGImageSourceThumbnailMaxPixelSize: 300,
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true
             ]
             guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary),
                   let cropped = squareCroppedCGImage(cgImage, side: 400) else { return nil }
@@ -168,7 +207,10 @@ struct MacVideoThumbnailView: View {
 
         // 切り抜き・JPEG書き出しはバックグラウンドで実行する（AVAssetImageGenerator 自体は非同期だが、
         // その後の後処理は同期処理でメインスレッドをブロックしうるため）。
-        let nsImage: NSImage? = await Task.detached(priority: .userInitiated) {
+        let nsImage: NSImage? = await Task.detached(priority: .utility) {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+
             guard let cropped = squareCroppedCGImage(cgImage, side: 400) else { return nil }
             if let data = jpegData(from: cropped, compression: 0.7) {
                 try? data.write(to: cacheURL)

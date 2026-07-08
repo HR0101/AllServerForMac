@@ -145,7 +145,9 @@ final class SlideshowPlayerViewModel: ObservableObject {
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
-            Task { @MainActor in self?.updateCurrentChapter(at: time.seconds) }
+            Task { @MainActor [weak self] in
+                self?.updateCurrentChapter(at: time.seconds)
+            }
         }
 
         self.player.play()

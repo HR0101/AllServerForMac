@@ -39,8 +39,8 @@ final class MultiVideoPlayerViewModel: ObservableObject {
         leadPlayerTimeObserver = leadPlayer.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
-            Task { @MainActor in
-                guard let self = self, !self.isSliderEditing else { return }
+            Task { @MainActor [weak self] in
+                guard let self, !self.isSliderEditing else { return }
                 self.commonCurrentTime = time.seconds
             }
         }

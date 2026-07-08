@@ -73,6 +73,14 @@ struct AlbumDetailView: View {
         Array(repeating: GridItem(.flexible(), spacing: 12), count: max(2, Int(appSettings.columnCount)))
     }
 
+    private var currentAlbum: Album {
+        dataManager.albums.first(where: { $0.id == album.id }) ?? album
+    }
+
+    private var isLinkedToFolder: Bool {
+        currentAlbum.linkedFolderPath != nil || currentAlbum.linkedFolderBookmarkData != nil
+    }
+
     /// 検索・並べ替えを適用した表示アイテム（動画＋画像、ゴミ箱を除く）
     private var displayedItems: [VideoItem] {
         let memberIDs = Set(album.videoIDs)
@@ -102,7 +110,6 @@ struct AlbumDetailView: View {
         let items = displayedItems
         let videoItems = items.filter { $0.mediaType == .video }
         let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
-        let photoItems = items.filter { $0.mediaType == .photo }
 
         return VStack(spacing: 0) {
             ZStack {
@@ -186,6 +193,16 @@ struct AlbumDetailView: View {
                     Label("インポート", systemImage: "plus.circle")
                 }
                 .help("ファイルまたはフォルダをインポート")
+            }
+
+            if canRemoveItemsFromCurrentAlbum {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: isLinkedToFolder ? rescanLinkedFolder : linkFolderViaDialog) {
+                        Label(isLinkedToFolder ? "フォルダ更新" : "フォルダ紐づけ", systemImage: isLinkedToFolder ? "arrow.triangle.2.circlepath" : "folder.badge.plus")
+                    }
+                    .help(isLinkedToFolder ? "紐づけフォルダを再スキャンして新規メディアを取り込みます" : "このアルバムにFinder上のフォルダを紐づけます")
+                    .disabled(isImporting)
+                }
             }
 
             // 重複チェックはアルバム単位でのみ意味を持つ（すべての動画/画像には全アルバムのメディアが
@@ -289,7 +306,7 @@ struct AlbumDetailView: View {
                         isImporting = true
                         importedCount = 0
                         let progress = ImportProgressThrottle { importedCount = $0 }
-                        await dataManager.importFolder(folderURL: url, as: album.type) { progress.tick() }
+                        await dataManager.importAndLinkFolder(folderURL: url, as: album.type) { progress.tick() }
                         progress.finish()
                         isImporting = false
                         pendingFolderURL = nil
@@ -678,7 +695,7 @@ struct AlbumDetailView: View {
                 importedCount = 0
                 let progress = ImportProgressThrottle { importedCount = $0 }
                 for folderURL in folderURLs {
-                    await dataManager.importFolder(folderURL: folderURL, as: album.type) { progress.tick() }
+                    await dataManager.importAndLinkFolder(folderURL: folderURL, as: album.type) { progress.tick() }
                 }
                 await dataManager.importMediaFiles(from: fileURLs, to: album.id) { progress.tick() }
                 progress.finish()
@@ -886,12 +903,42 @@ struct AlbumDetailView: View {
                 importedCount = 0
                 let progress = ImportProgressThrottle { importedCount = $0 }
                 for folderURL in folderURLs {
-                    await dataManager.importFolder(folderURL: folderURL, as: album.type) { progress.tick() }
+                    await dataManager.importAndLinkFolder(folderURL: folderURL, as: album.type) { progress.tick() }
                 }
                 await dataManager.importMediaFiles(from: fileURLs, to: album.id) { progress.tick() }
                 progress.finish()
                 isImporting = false
             }
+        }
+    }
+
+    private func linkFolderViaDialog() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "このアルバムに紐づけるフォルダを選択してください"
+
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+
+        Task {
+            isImporting = true
+            importedCount = 0
+            let progress = ImportProgressThrottle { importedCount = $0 }
+            await dataManager.linkFolder(folderURL: folderURL, to: album.id) { progress.tick() }
+            progress.finish()
+            isImporting = false
+        }
+    }
+
+    private func rescanLinkedFolder() {
+        Task {
+            isImporting = true
+            importedCount = 0
+            let progress = ImportProgressThrottle { importedCount = $0 }
+            await dataManager.rescanLinkedFolder(albumID: album.id) { progress.tick() }
+            progress.finish()
+            isImporting = false
         }
     }
 
@@ -1227,7 +1274,6 @@ struct LibraryCategoryView: View {
         let items = displayedItems
         let videoItems = items.filter { $0.mediaType == .video }
         let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
-        let photoItems = items.filter { $0.mediaType == .photo }
 
         return VStack(spacing: 0) {
             ZStack {

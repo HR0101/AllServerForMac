@@ -60,7 +60,7 @@ final class SplitVideoPlayerViewModel: ObservableObject {
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, !self.isSliderEditing else { return }
                 // リードプレイヤーの「セグメント内での経過時間」を表示
                 let elapsed = time.seconds - self.segmentOffsets[0]
@@ -76,13 +76,14 @@ final class SplitVideoPlayerViewModel: ObservableObject {
         for (i, player) in players.enumerated() {
             let endTime = segmentOffsets[i] + segmentDuration
             let boundary = CMTime(seconds: endTime, preferredTimescale: 600)
+            let segmentOffset = segmentOffsets[i]
             let observer = player.addBoundaryTimeObserver(
                 forTimes: [NSValue(time: boundary)], queue: .main
-            ) { [weak self, weak player] in
-                Task { @MainActor in
+            ) { [weak self, weak player, segmentOffset] in
+                Task { @MainActor [weak self, weak player, segmentOffset] in
                     guard let self, let player else { return }
                     // セグメント先頭に戻してループ再生
-                    let start = CMTime(seconds: self.segmentOffsets[i], preferredTimescale: 600)
+                    let start = CMTime(seconds: segmentOffset, preferredTimescale: 600)
                     player.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero)
                     player.play()
                 }

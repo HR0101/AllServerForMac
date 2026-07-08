@@ -4,6 +4,7 @@ import AVFoundation
 import CryptoKit
 import Combine
 import Darwin
+import Dispatch
 import ImageIO
 import UniformTypeIdentifiers
 import Vision
@@ -110,12 +111,23 @@ struct Album: Identifiable, Codable, Hashable {
     var name: String
     var videoIDs: [UUID]
     var type: AlbumType
+    var linkedFolderPath: String?
+    var linkedFolderBookmarkData: Data?
     
-    init(id: UUID, name: String, videoIDs: [UUID], type: AlbumType) {
+    init(
+        id: UUID,
+        name: String,
+        videoIDs: [UUID],
+        type: AlbumType,
+        linkedFolderPath: String? = nil,
+        linkedFolderBookmarkData: Data? = nil
+    ) {
         self.id = id
         self.name = name
         self.videoIDs = videoIDs
         self.type = type
+        self.linkedFolderPath = linkedFolderPath
+        self.linkedFolderBookmarkData = linkedFolderBookmarkData
     }
     
     init(from decoder: Decoder) throws {
@@ -124,7 +136,27 @@ struct Album: Identifiable, Codable, Hashable {
         self.name = try container.decode(String.self, forKey: .name)
         self.videoIDs = try container.decode([UUID].self, forKey: .videoIDs)
         self.type = try container.decodeIfPresent(AlbumType.self, forKey: .type) ?? .video
+        self.linkedFolderPath = try container.decodeIfPresent(String.self, forKey: .linkedFolderPath)
+        self.linkedFolderBookmarkData = try container.decodeIfPresent(Data.self, forKey: .linkedFolderBookmarkData)
     }
+}
+
+struct LinkedFolderCandidate: Identifiable, Hashable {
+    let id: String
+    let conflictID: String
+    let albumID: UUID?
+    let albumName: String
+    let albumType: AlbumType
+    let folderPath: String
+    let matchCount: Int
+}
+
+struct LinkedFolderConflict: Identifiable, Hashable {
+    let id: String
+    let albumID: UUID?
+    let albumName: String
+    let albumType: AlbumType
+    let candidates: [LinkedFolderCandidate]
 }
 
 private nonisolated struct DataContainer: Codable {
@@ -167,6 +199,24 @@ struct DuplicateCheckResult {
     let failedHashCount: Int
 }
 
+private final class LinkedFolderMonitor {
+    let folderURL: URL
+    let source: DispatchSourceFileSystemObject
+    let fileDescriptor: Int32
+    let shouldStopAccessing: Bool
+
+    init(folderURL: URL, source: DispatchSourceFileSystemObject, fileDescriptor: Int32, shouldStopAccessing: Bool) {
+        self.folderURL = folderURL
+        self.source = source
+        self.fileDescriptor = fileDescriptor
+        self.shouldStopAccessing = shouldStopAccessing
+    }
+
+    func cancel() {
+        source.cancel()
+    }
+}
+
 /// 自動重複チェックの進捗状態。VideoDataManager 本体とは別の ObservableObject に分離することで、
 /// ハッシュ計算中に頻繁に更新される progress/statusMessage が、写真・動画一覧を表示する
 /// 巨大なギャラリービュー（videos/albums を @Published で購読している側）まで再描画させないようにする。
@@ -194,8 +244,17 @@ nonisolated struct LibrarySnapshotData {
 @MainActor
 class VideoDataManager: ObservableObject {
     @Published var videos: [VideoItem] = [] {
-        didSet { snapshotLibrary.value = LibrarySnapshotData(videos: videos, albums: albums) }
+        didSet {
+            snapshotLibrary.value = LibrarySnapshotData(videos: videos, albums: albums)
+            cachedExistingSourcePaths = nil
+        }
     }
+
+    /// `existingImportedSourcePaths()` の結果キャッシュ。リンクフォルダが数百件あると、
+    /// アルバムごとに毎回 videos 全件を resolvingSymlinksInPath() し直すコストが
+    /// 「アルバム数 × 動画数」で効いてきて起動時/定期スキャン時にメインスレッドが固まるため、
+    /// videos が変化しない限り使い回す（変化した時だけ videos の didSet で無効化する）。
+    private var cachedExistingSourcePaths: Set<String>?
     @Published var albums: [Album] = [] {
         didSet { snapshotLibrary.value = LibrarySnapshotData(videos: videos, albums: albums) }
     }
@@ -205,6 +264,7 @@ class VideoDataManager: ObservableObject {
     nonisolated let snapshotLibrary = LockedBox<LibrarySnapshotData>(LibrarySnapshotData(videos: [], albums: []))
     @Published private(set) var duplicateCheckStates: [UUID: DuplicateCheckState] = [:]
     @Published private(set) var isDuplicateCheckRunning = false
+    @Published private(set) var linkedFolderConflicts: [LinkedFolderConflict] = []
     let duplicateCheckStatus = DuplicateCheckStatus()
 
     /// 自動重複チェック（バックグラウンドで定期的に走るもの）のオン/オフ。手動チェック（アルバム内の「重複チェック」ボタン）には影響しない。
@@ -256,7 +316,7 @@ class VideoDataManager: ObservableObject {
     private let dataFileURL: URL
     
     /// library.json の現行スキーマ世代。フィールドを追加したら上げる。
-    nonisolated static let librarySchemaVersion = 2
+    nonisolated static let librarySchemaVersion = 3
 
     static let allVideosAlbumName = "ALL VIDEOS"
     static let allPhotosAlbumName = "ALL PHOTOS"
@@ -265,6 +325,9 @@ class VideoDataManager: ObservableObject {
     private var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     private var isGeneratingProxy = false
     private var duplicateAutoCheckTask: Task<Void, Never>?
+    private var linkedFolderMonitors: [UUID: LinkedFolderMonitor] = [:]
+    private var linkedFolderScanTasks: [UUID: Task<Void, Never>] = [:]
+    private var linkedFolderPeriodicScanTask: Task<Void, Never>?
 
     // key: "<videoID>_<quality>", 値: 0...1 の進捗、nil = 生成していない
     private var proxyProgressMap: [String: Double] = [:]
@@ -341,10 +404,14 @@ class VideoDataManager: ObservableObject {
         if autoCleanupMissingFilesEnabled {
             runAutomaticMissingFileCleanup()
         }
+        reconcileLinkedFoldersFromExistingPaths()
+        startLinkedFolderMonitoring()
+        startLinkedFolderPeriodicScan()
 
         // 保存はデバウンスされているため、終了時に保留中の分を確実に書き込む
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.stopLinkedFolderMonitoring()
                 self?.flushPendingSave()
             }
         }
@@ -499,7 +566,7 @@ class VideoDataManager: ObservableObject {
             return DuplicateCheckResult(checkedCount: 0, duplicateCount: 0, missingFileCount: 0, failedHashCount: 0)
         }
 
-        let itemsByID = Dictionary(uniqueKeysWithValues: videos.map { ($0.id, $0) })
+        let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
 
         if let albumID {
             guard let album = albums.first(where: { $0.id == albumID }) else {
@@ -757,7 +824,7 @@ class VideoDataManager: ObservableObject {
     /// お気に入り・ゴミ箱のように複数アルバムのメディアが混在する場面でも、
     /// アイテムごとに所属アルバムを調べてそれぞれ適切なサブフォルダへ振り分ける。
     func exportMedia(videoIDs: [UUID], to destinationFolder: URL, progress: @MainActor @escaping (Int, Int) -> Void = { _, _ in }) async -> (successCount: Int, failedCount: Int) {
-        let itemsByID = Dictionary(uniqueKeysWithValues: videos.map { ($0.id, $0) })
+        let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
 
         // 各アイテムが属するカスタムアルバム名を1回の走査で求める（ALL VIDEOS/ALL PHOTOS は除外）。
         // 複数のアルバムに属する場合は albums 内で最初に見つかったものを使う。
@@ -844,13 +911,9 @@ class VideoDataManager: ObservableObject {
         exportSession.outputFileType = .mp4
         exportSession.shouldOptimizeForNetworkUse = true
         
-        await withCheckedContinuation { continuation in
-            exportSession.exportAsynchronously {
-                continuation.resume()
-            }
-        }
-        
-        if exportSession.status != .completed {
+        do {
+            try await exportSession.export(to: destinationURL, as: .mp4)
+        } catch {
             try? FileManager.default.removeItem(at: destinationURL)
         }
     }
@@ -906,15 +969,16 @@ class VideoDataManager: ObservableObject {
             }
         }
 
-        await withCheckedContinuation { continuation in
-            exportSession.exportAsynchronously { continuation.resume() }
+        do {
+            try await exportSession.export(to: destinationURL, as: .mp4)
+        } catch {
+            await MainActor.run { self.proxyProgressMap[key] = nil }
+            try? FileManager.default.removeItem(at: destinationURL)
+            return
         }
         progressTimer.cancel()
 
         await MainActor.run {
-            if exportSession.status != .completed {
-                try? FileManager.default.removeItem(at: destinationURL)
-            }
             self.proxyProgressMap[key] = nil   // 完了/失敗で生成中フラグを解除
         }
     }
@@ -996,6 +1060,490 @@ class VideoDataManager: ObservableObject {
         return formatter.string(fromByteCount: totalSize)
     }
 
+    private func bookmarkData(for folderURL: URL) -> Data? {
+        try? folderURL.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    private func resolvedLinkedFolderURL(for album: Album) -> URL? {
+        if let data = album.linkedFolderBookmarkData {
+            var isStale = false
+            if let url = try? URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) {
+                if isStale, let index = albums.firstIndex(where: { $0.id == album.id }) {
+                    albums[index].linkedFolderBookmarkData = bookmarkData(for: url)
+                    albums[index].linkedFolderPath = url.path
+                    saveData()
+                }
+                return url
+            }
+        }
+
+        if let path = album.linkedFolderPath {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
+    }
+
+    private func normalizedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func existingImportedSourcePaths() -> Set<String> {
+        if let cachedExistingSourcePaths {
+            return cachedExistingSourcePaths
+        }
+        let paths: Set<String> = Set(videos.compactMap { item in
+            guard let path = item.externalFilePath else { return nil }
+            return normalizedPath(URL(fileURLWithPath: path))
+        })
+        cachedExistingSourcePaths = paths
+        return paths
+    }
+
+    private func newMediaFiles(from urls: [URL], existingPaths: Set<String>) -> [URL] {
+        urls.filter { !existingPaths.contains(normalizedPath($0)) }
+    }
+
+    func importAndLinkFolder(
+        folderURL: URL,
+        as albumType: AlbumType,
+        onItemProcessed: @MainActor @escaping () -> Void = {}
+    ) async {
+        let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
+        defer { if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() } }
+
+        await importLinkedFolderContents(
+            folderURL: folderURL,
+            as: albumType,
+            parentAlbumName: nil,
+            rootBookmarkData: bookmarkData(for: folderURL),
+            onItemProcessed: onItemProcessed
+        )
+        reconcileLinkedFoldersFromExistingPaths()
+        startLinkedFolderMonitoring()
+    }
+
+    func linkFolder(
+        folderURL: URL,
+        to albumID: UUID,
+        onItemProcessed: @MainActor @escaping () -> Void = {}
+    ) async {
+        guard let album = albums.first(where: { $0.id == albumID }) else { return }
+        let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
+        defer { if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() } }
+
+        await importLinkedFolderContents(
+            folderURL: folderURL,
+            as: album.type,
+            parentAlbumName: nil,
+            rootAlbumID: albumID,
+            rootBookmarkData: bookmarkData(for: folderURL),
+            onItemProcessed: onItemProcessed
+        )
+        reconcileLinkedFoldersFromExistingPaths()
+        startLinkedFolderMonitoring()
+    }
+
+    func rescanLinkedFolder(
+        albumID: UUID,
+        onItemProcessed: @MainActor @escaping () -> Void = {}
+    ) async {
+        await scanLinkedFolder(albumID: albumID, onItemProcessed: onItemProcessed)
+    }
+
+    func confirmLinkedFolderCandidate(_ candidate: LinkedFolderCandidate) {
+        guard let albumID = existingOrCreateAlbumID(name: candidate.albumName, type: candidate.albumType, preferredID: candidate.albumID) else {
+            return
+        }
+        setLinkedFolder(folderURL: URL(fileURLWithPath: candidate.folderPath), albumID: albumID)
+        linkedFolderConflicts.removeAll { $0.id == candidate.conflictID }
+        scheduleLinkedFolderScan(albumID: albumID, delayNanoseconds: 500_000_000)
+    }
+
+    private func setLinkedFolder(folderURL: URL, albumID: UUID) {
+        guard let index = albums.firstIndex(where: { $0.id == albumID }) else { return }
+        albums[index].linkedFolderPath = folderURL.path
+        albums[index].linkedFolderBookmarkData = bookmarkData(for: folderURL)
+        saveData()
+        startLinkedFolderMonitoring()
+    }
+
+    private func existingOrCreateAlbumID(name: String, type: AlbumType, preferredID: UUID? = nil) -> UUID? {
+        if let preferredID, albums.contains(where: { $0.id == preferredID }) {
+            return preferredID
+        }
+        if let existingAlbum = albums.first(where: { $0.name == name }) {
+            return existingAlbum.id
+        }
+        return createAlbum(name: name, type: type)
+    }
+
+    private func reconcileLinkedFoldersFromExistingPaths() {
+        let protectedNames: Set<String> = [Self.allVideosAlbumName, Self.allPhotosAlbumName]
+        let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
+        let existingAlbumsByName = Dictionary(grouping: albums) { $0.name }
+        let albumsToEvaluate = albums.filter { album in
+            !protectedNames.contains(album.name)
+            && album.linkedFolderPath == nil
+            && album.linkedFolderBookmarkData == nil
+        }
+        let sourceAlbums = albums.filter { !protectedNames.contains($0.name) }
+        var conflicts: [LinkedFolderConflict] = []
+
+        for album in albumsToEvaluate {
+            let candidateCounts = linkedFolderCandidateCounts(
+                targetAlbumName: album.name,
+                sourceAlbums: [album],
+                itemsByID: itemsByID
+            )
+
+            let candidates = candidateCounts
+                .map { path, count in
+                    LinkedFolderCandidate(
+                        id: "\(album.id.uuidString)|\(path)",
+                        conflictID: album.id.uuidString,
+                        albumID: album.id,
+                        albumName: album.name,
+                        albumType: album.type,
+                        folderPath: path,
+                        matchCount: count
+                    )
+                }
+                .sorted {
+                    if $0.matchCount != $1.matchCount { return $0.matchCount > $1.matchCount }
+                    return $0.folderPath.localizedStandardCompare($1.folderPath) == .orderedAscending
+                }
+
+            if candidates.count == 1, let candidate = candidates.first {
+                confirmLinkedFolderCandidate(candidate)
+            } else if candidates.count > 1 {
+                conflicts.append(
+                    LinkedFolderConflict(
+                        id: album.id.uuidString,
+                        albumID: album.id,
+                        albumName: album.name,
+                        albumType: album.type,
+                        candidates: candidates
+                    )
+                )
+            }
+        }
+
+        let virtualFolders = virtualFolderCandidates(
+            from: sourceAlbums,
+            existingAlbumsByName: existingAlbumsByName,
+            itemsByID: itemsByID
+        )
+        for folder in virtualFolders {
+            let candidateCounts = linkedFolderCandidateCounts(
+                targetAlbumName: folder.name,
+                sourceAlbums: folder.sourceAlbums,
+                itemsByID: itemsByID
+            )
+            let candidates = candidateCounts
+                .map { path, count in
+                    LinkedFolderCandidate(
+                        id: "virtual|\(folder.name)|\(path)",
+                        conflictID: "virtual|\(folder.name)",
+                        albumID: nil,
+                        albumName: folder.name,
+                        albumType: folder.type,
+                        folderPath: path,
+                        matchCount: count
+                    )
+                }
+                .sorted {
+                    if $0.matchCount != $1.matchCount { return $0.matchCount > $1.matchCount }
+                    return $0.folderPath.localizedStandardCompare($1.folderPath) == .orderedAscending
+                }
+
+            if candidates.count == 1, let candidate = candidates.first {
+                confirmLinkedFolderCandidate(candidate)
+            } else if candidates.count > 1 {
+                conflicts.append(
+                    LinkedFolderConflict(
+                        id: "virtual|\(folder.name)",
+                        albumID: nil,
+                        albumName: folder.name,
+                        albumType: folder.type,
+                        candidates: candidates
+                    )
+                )
+            }
+        }
+
+        linkedFolderConflicts = conflicts
+    }
+
+    private func linkedFolderCandidateCounts(
+        targetAlbumName: String,
+        sourceAlbums: [Album],
+        itemsByID: [UUID: VideoItem]
+    ) -> [String: Int] {
+        let targetComponents = albumPathComponents(targetAlbumName)
+        guard !targetComponents.isEmpty else { return [:] }
+
+        var counts: [String: Int] = [:]
+        for album in sourceAlbums {
+            let sourceComponents = albumPathComponents(album.name)
+            guard sourceComponents.starts(with: targetComponents) else { continue }
+            let levelsUp = sourceComponents.count - targetComponents.count
+
+            for itemID in album.videoIDs {
+                guard let item = itemsByID[itemID],
+                      let externalPath = item.externalFilePath else { continue }
+
+                var folderURL = URL(fileURLWithPath: externalPath).deletingLastPathComponent()
+                for _ in 0..<levelsUp {
+                    folderURL.deleteLastPathComponent()
+                }
+
+                guard folderURL.lastPathComponent == targetComponents.last,
+                      isExistingDirectory(folderURL) else { continue }
+                counts[normalizedPath(folderURL), default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private func virtualFolderCandidates(
+        from sourceAlbums: [Album],
+        existingAlbumsByName: [String: [Album]],
+        itemsByID: [UUID: VideoItem]
+    ) -> [(name: String, type: AlbumType, sourceAlbums: [Album])] {
+        var sourceAlbumsByFolder: [String: [Album]] = [:]
+        var typeByFolder: [String: AlbumType] = [:]
+
+        for album in sourceAlbums {
+            let components = albumPathComponents(album.name)
+            guard components.count > 1 else { continue }
+
+            for depth in 1..<components.count {
+                let folderName = components.prefix(depth).joined(separator: "/")
+                guard existingAlbumsByName[folderName] == nil else { continue }
+                sourceAlbumsByFolder[folderName, default: []].append(album)
+                typeByFolder[folderName] = combinedAlbumType(typeByFolder[folderName], album.type)
+                break
+            }
+        }
+
+        return sourceAlbumsByFolder.compactMap { name, albums in
+            let candidateCounts = linkedFolderCandidateCounts(
+                targetAlbumName: name,
+                sourceAlbums: albums,
+                itemsByID: itemsByID
+            )
+            guard !candidateCounts.isEmpty else {
+                return nil
+            }
+            return (name: name, type: typeByFolder[name] ?? .mixed, sourceAlbums: albums)
+        }
+        .sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private func albumPathComponents(_ name: String) -> [String] {
+        name.split(separator: "/").map(String.init)
+    }
+
+    private func combinedAlbumType(_ lhs: AlbumType?, _ rhs: AlbumType) -> AlbumType {
+        guard let lhs else { return rhs }
+        return lhs == rhs ? lhs : .mixed
+    }
+
+    private func isExistingDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        return exists && isDirectory.boolValue
+    }
+
+    private func importLinkedFolderContents(
+        folderURL: URL,
+        as albumType: AlbumType,
+        parentAlbumName: String?,
+        rootAlbumID: UUID? = nil,
+        rootBookmarkData: Data?,
+        existingPaths: Set<String>? = nil,
+        onItemProcessed: @MainActor @escaping () -> Void
+    ) async {
+        let folderName = folderURL.lastPathComponent
+        let albumName = parentAlbumName
+            .map { "\($0)/\(folderName)" }
+            ?? rootAlbumID.flatMap { rootID in albums.first(where: { $0.id == rootID })?.name }
+            ?? folderName
+
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let sortedContents = contents.sorted {
+            $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+        }
+        let mediaFiles = sortedContents.filter { url in
+            !isDirectory(url) && isSupportedMedia(url, for: albumType)
+        }
+
+        var targetAlbumID: UUID?
+        let shouldCreateAlbum = parentAlbumName == nil || !mediaFiles.isEmpty
+        if shouldCreateAlbum {
+            if parentAlbumName == nil, let rootAlbumID, albums.contains(where: { $0.id == rootAlbumID }) {
+                targetAlbumID = rootAlbumID
+            } else if let existingAlbum = albums.first(where: { $0.name == albumName && $0.type == albumType }) {
+                targetAlbumID = existingAlbum.id
+            } else {
+                let newID = UUID()
+                targetAlbumID = newID
+                albums.append(Album(id: newID, name: albumName, videoIDs: [], type: albumType))
+            }
+        }
+
+        if parentAlbumName == nil, let targetAlbumID,
+           let index = albums.firstIndex(where: { $0.id == targetAlbumID }) {
+            albums[index].linkedFolderPath = folderURL.path
+            albums[index].linkedFolderBookmarkData = rootBookmarkData
+        }
+
+        var currentExistingPaths = existingPaths ?? existingImportedSourcePaths()
+
+        if let targetAlbumID {
+            let targets = newMediaFiles(from: mediaFiles, existingPaths: currentExistingPaths)
+            if !targets.isEmpty {
+                await importMediaBatch(urls: targets, to: targetAlbumID, onItemProcessed: onItemProcessed, forceReferenceOriginals: true)
+                for target in targets {
+                    currentExistingPaths.insert(normalizedPath(target))
+                }
+            } else if shouldCreateAlbum {
+                saveData()
+            }
+        }
+
+        for url in sortedContents where isDirectory(url) && !isExcludedFromImport(url) {
+            await importLinkedFolderContents(
+                folderURL: url,
+                as: albumType,
+                parentAlbumName: albumName,
+                rootAlbumID: nil,
+                rootBookmarkData: nil,
+                existingPaths: currentExistingPaths,
+                onItemProcessed: onItemProcessed
+            )
+        }
+    }
+
+    private func scanLinkedFolder(albumID: UUID, onItemProcessed: @MainActor @escaping () -> Void = {}) async {
+        guard let album = albums.first(where: { $0.id == albumID }),
+              let folderURL = resolvedLinkedFolderURL(for: album) else { return }
+
+        let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
+        defer { if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() } }
+
+        await importLinkedFolderContents(
+            folderURL: folderURL,
+            as: album.type,
+            parentAlbumName: nil,
+            rootAlbumID: albumID,
+            rootBookmarkData: album.linkedFolderBookmarkData ?? bookmarkData(for: folderURL),
+            onItemProcessed: onItemProcessed
+        )
+    }
+
+    private func scheduleLinkedFolderScan(albumID: UUID, delayNanoseconds: UInt64 = 1_500_000_000) {
+        linkedFolderScanTasks[albumID]?.cancel()
+        linkedFolderScanTasks[albumID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled else { return }
+            await self?.scanLinkedFolder(albumID: albumID)
+            self?.linkedFolderScanTasks[albumID] = nil
+        }
+    }
+
+    private func scanAllLinkedFolders() async {
+        let linkedAlbumIDs = albums
+            .filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
+            .map(\.id)
+        for albumID in linkedAlbumIDs {
+            if Task.isCancelled { return }
+            await scanLinkedFolder(albumID: albumID)
+        }
+    }
+
+    private func startLinkedFolderPeriodicScan() {
+        guard linkedFolderPeriodicScanTask == nil else { return }
+        linkedFolderPeriodicScanTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.scanAllLinkedFolders()
+            }
+        }
+    }
+
+    private func startLinkedFolderMonitoring() {
+        let linkedAlbums = albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
+        let activeIDs = Set(linkedAlbums.map(\.id))
+
+        let obsoleteMonitorIDs = linkedFolderMonitors.keys.filter { !activeIDs.contains($0) }
+        for albumID in obsoleteMonitorIDs {
+            linkedFolderMonitors[albumID]?.cancel()
+            linkedFolderMonitors[albumID] = nil
+        }
+
+        for album in linkedAlbums where linkedFolderMonitors[album.id] == nil {
+            guard let folderURL = resolvedLinkedFolderURL(for: album) else { continue }
+            let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
+            let fd = open(folderURL.path, O_EVTONLY)
+            guard fd >= 0 else {
+                if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() }
+                continue
+            }
+
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                eventMask: [.write, .extend, .attrib, .link, .rename, .delete],
+                queue: DispatchQueue.global(qos: .utility)
+            )
+            let albumID = album.id
+            source.setEventHandler { [weak self] in
+                Task { @MainActor in
+                    self?.scheduleLinkedFolderScan(albumID: albumID)
+                }
+            }
+            source.setCancelHandler {
+                close(fd)
+                if shouldStopAccessing {
+                    folderURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            linkedFolderMonitors[album.id] = LinkedFolderMonitor(
+                folderURL: folderURL,
+                source: source,
+                fileDescriptor: fd,
+                shouldStopAccessing: shouldStopAccessing
+            )
+            source.resume()
+            scheduleLinkedFolderScan(albumID: album.id, delayNanoseconds: 500_000_000)
+        }
+    }
+
+    private func stopLinkedFolderMonitoring() {
+        linkedFolderPeriodicScanTask?.cancel()
+        linkedFolderPeriodicScanTask = nil
+        linkedFolderScanTasks.values.forEach { $0.cancel() }
+        linkedFolderScanTasks.removeAll()
+        linkedFolderMonitors.values.forEach { $0.cancel() }
+        linkedFolderMonitors.removeAll()
+    }
+
     func scanFolder(folderURL: URL) -> (videoCount: Int, photoCount: Int) {
         let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
         defer { if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() } }
@@ -1033,6 +1581,7 @@ class VideoDataManager: ObservableObject {
         defer { if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() } }
 
         await importFolderContents(folderURL: folderURL, as: albumType, parentAlbumName: parentAlbumName, onItemProcessed: onItemProcessed)
+        reconcileLinkedFoldersFromExistingPaths()
     }
 
     private func importFolderContents(folderURL: URL, as albumType: AlbumType, parentAlbumName: String?, onItemProcessed: @MainActor @escaping () -> Void) async {
@@ -1074,13 +1623,30 @@ class VideoDataManager: ObservableObject {
         // まとまっているフォルダ構成だとトップ階層に対象ファイルが1件も見つからず、
         // アルバムそのものが作られない（＝インポートが何も起きないように見える）ことがあった。
         // 動画・混在でも同様に再帰する。
-        for url in sortedContents where isDirectory(url) {
+        for url in sortedContents where isDirectory(url) && !isExcludedFromImport(url) {
             await importFolderContents(folderURL: url, as: albumType, parentAlbumName: albumName, onItemProcessed: onItemProcessed)
         }
     }
 
     private func isDirectory(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    /// フォルダ再帰インポート時に無視するディレクトリ名。
+    /// Python の venv や node_modules 等は写真フォルダの隣に置かれがちで、
+    /// 中には各パッケージのテスト用画像が大量かつ深く（8階層超）ネストされている。
+    /// これをそのまま再帰すると、数百件の無関係なネストされたアルバムが自動生成され、
+    /// サイドバーのフォルダツリー描画がSwiftUIのレイアウト再帰上限を超えてクラッシュする
+    /// （フォルダ紐づけ候補の自動リンクで実際に発生した障害）。
+    private static let importExcludedDirectoryNames: Set<String> = [
+        "venv", ".venv", "env", ".env",
+        "node_modules", "site-packages",
+        "__pycache__", ".git", ".svn", ".hg",
+        "dist", "build", "Pods", "DerivedData"
+    ]
+
+    private func isExcludedFromImport(_ url: URL) -> Bool {
+        Self.importExcludedDirectoryNames.contains(url.lastPathComponent)
     }
 
     private func isSupportedMedia(_ url: URL, for albumType: AlbumType) -> Bool {
@@ -1117,11 +1683,16 @@ class VideoDataManager: ObservableObject {
     /// - 動画1本ごとの尺・撮影日時の読み込み（AVAsset）を直列に1件ずつ行うと、動画が多いフォルダは
     ///   ファイル数に比例して時間がかかり「固まって進まない」ように見える。そのため同時実行数を
     ///   制限しつつ複数ファイルを並行処理する（ファイル記述子・メモリを使い切らないよう上限を設ける）。
-    private func importMediaBatch(urls: [URL], to albumID: UUID, onItemProcessed: @MainActor @escaping () -> Void = {}) async {
+    private func importMediaBatch(
+        urls: [URL],
+        to albumID: UUID,
+        onItemProcessed: @MainActor @escaping () -> Void = {},
+        forceReferenceOriginals: Bool = false
+    ) async {
         guard let targetAlbum = albums.first(where: { $0.id == albumID }) else { return }
         let targetAlbumType = targetAlbum.type
         let downloadStorageURL = self.downloadStorageURL
-        let managedCopyURL: URL? = importCopiesFiles ? videoStorageURL : nil
+        let managedCopyURL: URL? = forceReferenceOriginals ? nil : (importCopiesFiles ? videoStorageURL : nil)
 
         var pendingItems: [VideoItem] = []
         var failedCount = 0
@@ -1273,7 +1844,9 @@ class VideoDataManager: ObservableObject {
                 return nil
             }
 
-            return VideoItem(id: newID, originalFilename: customFilename ?? originalName, internalFilename: internalFilename, duration: duration, importDate: Date(), creationDate: creationDate, fileHash: "", mediaType: mediaType, externalFilePath: externalPath)
+            return await MainActor.run {
+                VideoItem(id: newID, originalFilename: customFilename ?? originalName, internalFilename: internalFilename, duration: duration, importDate: Date(), creationDate: creationDate, fileHash: "", mediaType: mediaType, externalFilePath: externalPath)
+            }
         } catch {
             print("⚠️ [IMPORT] \(sourceURL.lastPathComponent) のインポートに失敗しました: \(error)")
             return nil
@@ -1372,6 +1945,7 @@ class VideoDataManager: ObservableObject {
             return updated
         }
         saveData()
+        reconcileLinkedFoldersFromExistingPaths()
     }
 
     /// アルバム削除時に中身のメディアをどうするか。
@@ -1401,6 +1975,8 @@ class VideoDataManager: ObservableObject {
         let deletableIDs = Set(albumsToDelete.map { $0.id })
         albums.removeAll { deletableIDs.contains($0.id) }
         saveData()
+        reconcileLinkedFoldersFromExistingPaths()
+        startLinkedFolderMonitoring()
     }
     func moveVideos(videoIDs: [UUID], from sourceAlbumID: UUID, to targetAlbumID: UUID) { guard albums.contains(where: { $0.id == targetAlbumID }) else { return }; if let sourceIndex = albums.firstIndex(where: { $0.id == sourceAlbumID }), albums[sourceIndex].name != VideoDataManager.allVideosAlbumName, albums[sourceIndex].name != VideoDataManager.allPhotosAlbumName { albums[sourceIndex].videoIDs.removeAll { videoIDs.contains($0) } }; if let targetIndex = albums.firstIndex(where: { $0.id == targetAlbumID }) { let existingIDs = Set(albums[targetIndex].videoIDs); let newIDs = videoIDs.filter { !existingIDs.contains($0) }; albums[targetIndex].videoIDs.append(contentsOf: newIDs) }; saveData() }
 
