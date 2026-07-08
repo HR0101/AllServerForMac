@@ -2,6 +2,29 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// インポート進捗の @State 更新を間引くカウンタ。
+/// 1件ごとに @State を更新すると、その回数だけビュー全体（displayedItems の全件
+/// フィルタ+ソート含む）が再評価され、せっかくの一括反映最適化を打ち消してしまう。
+/// 表示は25件刻みで十分なので、まとめて反映する。
+@MainActor
+final class ImportProgressThrottle {
+    private(set) var count = 0
+    private let onUpdate: (Int) -> Void
+
+    init(onUpdate: @escaping (Int) -> Void) {
+        self.onUpdate = onUpdate
+    }
+
+    func tick() {
+        count += 1
+        if count % 25 == 0 { onUpdate(count) }
+    }
+
+    func finish() {
+        onUpdate(count)
+    }
+}
+
 // MARK: - AlbumDetailView
 struct AlbumDetailView: View {
     let album: Album
@@ -13,7 +36,6 @@ struct AlbumDetailView: View {
     @State private var pendingFolderURL: URL?
     @State private var mixedContentInfo = ""
     @State private var lastSelectedVideoID: UUID?
-    @State private var previewItem: VideoItem?
     @State private var searchText = ""
     @State private var showMoveToNewAlbumAlert = false
     @State private var newAlbumNameForMove = ""
@@ -25,12 +47,24 @@ struct AlbumDetailView: View {
     @State private var splitCount: Int = 4
     @State private var splitTargetVideo: VideoItem?
     
-    // 顔認識用
-    @State private var isAnalyzingFaces = false
-    @State private var analyzeProgress: Double = 0
-    @State private var analyzeCurrent: Int = 0
-    @State private var analyzeTotal: Int = 0
-    @State private var showNoUnanalyzedVideosAlert = false
+    @State private var isCheckingDuplicates = false
+    @State private var duplicateCheckProgress: Double = 0
+    @State private var duplicateCheckCurrent = 0
+    @State private var duplicateCheckTotal = 0
+    @State private var duplicateCheckResultMessage = ""
+    @State private var showDuplicateCheckResultAlert = false
+
+    @State private var isImporting = false
+    @State private var importedCount = 0
+
+    @State private var isExporting = false
+    @State private var exportProgress: Double = 0
+    @State private var exportCurrent = 0
+    @State private var exportTotal = 0
+    @State private var exportResultMessage = ""
+    @State private var showExportResultAlert = false
+
+    @State private var showBulkDeleteConfirmation = false
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
@@ -39,10 +73,19 @@ struct AlbumDetailView: View {
         Array(repeating: GridItem(.flexible(), spacing: 12), count: max(2, Int(appSettings.columnCount)))
     }
 
+    private var currentAlbum: Album {
+        dataManager.albums.first(where: { $0.id == album.id }) ?? album
+    }
+
+    private var isLinkedToFolder: Bool {
+        currentAlbum.linkedFolderPath != nil || currentAlbum.linkedFolderBookmarkData != nil
+    }
+
     /// 検索・並べ替えを適用した表示アイテム（動画＋画像、ゴミ箱を除く）
     private var displayedItems: [VideoItem] {
-        dataManager.videos
-            .filter { album.videoIDs.contains($0.id) && !$0.isInTrash }
+        let memberIDs = Set(album.videoIDs)
+        return dataManager.videos
+            .filter { memberIDs.contains($0.id) && !$0.isInTrash }
             .filtered(bySearch: searchText)
             .sorted(by: appSettings.sortOrder)
     }
@@ -57,11 +100,19 @@ struct AlbumDetailView: View {
         displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                let items = displayedItems
+    private var canRemoveItemsFromCurrentAlbum: Bool {
+        album.name != VideoDataManager.allVideosAlbumName && album.name != VideoDataManager.allPhotosAlbumName
+    }
 
+    var body: some View {
+        // displayedItems（フィルタ＋ソート）は件数が多いと軽くないため、1回の描画につき1回だけ計算し、
+        // toolbar/sheet も含めて使い回す（以前は同じ描画の中で何度も呼ばれ、そのたびに再計算されていた）。
+        let items = displayedItems
+        let videoItems = items.filter { $0.mediaType == .video }
+        let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
+
+        return VStack(spacing: 0) {
+            ZStack {
                 // 背景タップで選択解除（カードタップ時は内側のジェスチャーが優先される）
                 Color.clear
                     .contentShape(Rectangle())
@@ -80,25 +131,51 @@ struct AlbumDetailView: View {
                     dropOverlay
                 }
                 
-                if isAnalyzingFaces {
+                if isCheckingDuplicates {
                     Color.black.opacity(0.6).ignoresSafeArea()
                     VStack(spacing: 16) {
-                        ProgressView("顔を解析中...", value: analyzeProgress, total: 1.0)
+                        ProgressView("重複チェック中...", value: duplicateCheckProgress, total: 1.0)
                             .progressViewStyle(.linear)
-                            .frame(width: 200)
+                            .frame(width: 220)
                             .tint(.accentColor)
                             .foregroundColor(.white)
-                        Text("\(analyzeCurrent) / \(analyzeTotal) (\(Int(analyzeProgress * 100))%)")
+                        Text("\(duplicateCheckCurrent) / \(duplicateCheckTotal) (\(Int(duplicateCheckProgress * 100))%)")
                             .foregroundColor(.white)
                             .font(.subheadline)
-                        
-                        Button("キャンセル") {
-                            isAnalyzingFaces = false
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(.red)
-                        .padding(.top, 8)
+                    }
+                    .padding()
+                    .background(.thickMaterial)
+                    .cornerRadius(12)
+                }
+
+                // フォルダの中身が多いと動画の尺・撮影日時の読み込みに時間がかかるため、
+                // 「固まっているように見える」ことがないよう進捗（処理件数）を表示する。
+                if isImporting {
+                    Color.black.opacity(0.6).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.accentColor)
+                        Text("インポート中...（\(importedCount)件処理済み）")
+                            .foregroundColor(.white)
+                            .font(.subheadline)
+                    }
+                    .padding()
+                    .background(.thickMaterial)
+                    .cornerRadius(12)
+                }
+
+                if isExporting {
+                    Color.black.opacity(0.6).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView("エクスポート中...", value: exportProgress, total: 1.0)
+                            .progressViewStyle(.linear)
+                            .frame(width: 220)
+                            .tint(.accentColor)
+                            .foregroundColor(.white)
+                        Text("\(exportCurrent) / \(exportTotal)")
+                            .foregroundColor(.white)
+                            .font(.subheadline)
                     }
                     .padding()
                     .background(.thickMaterial)
@@ -111,51 +188,44 @@ struct AlbumDetailView: View {
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: importFilesViaDialog) {
+                    Label("インポート", systemImage: "plus.circle")
+                }
+                .help("ファイルまたはフォルダをインポート")
+            }
+
+            if canRemoveItemsFromCurrentAlbum {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: isLinkedToFolder ? rescanLinkedFolder : linkFolderViaDialog) {
+                        Label(isLinkedToFolder ? "フォルダ更新" : "フォルダ紐づけ", systemImage: isLinkedToFolder ? "arrow.triangle.2.circlepath" : "folder.badge.plus")
+                    }
+                    .help(isLinkedToFolder ? "紐づけフォルダを再スキャンして新規メディアを取り込みます" : "このアルバムにFinder上のフォルダを紐づけます")
+                    .disabled(isImporting)
+                }
+            }
+
+            // 重複チェックはアルバム単位でのみ意味を持つ（すべての動画/画像には全アルバムのメディアが
+            // 集まっているため、ここで実行すると別アルバム同士のメディアまで重複扱いになってしまう）。
+            if canRemoveItemsFromCurrentAlbum {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: runDuplicateCheck) {
+                        Label("重複チェック", systemImage: "checkmark.seal")
+                    }
+                    .help("このアルバム内の重複メディアを検出してゴミ箱へ移動")
+                    .disabled(isCheckingDuplicates || dataManager.isDuplicateCheckRunning || items.isEmpty)
+                }
+            }
+
             // ランダム再生（選択不要・このアルバムの動画をシャッフルして連続再生）
             ToolbarItem(placement: .primaryAction) {
-                if !albumVideoItems.isEmpty {
+                if !videoItems.isEmpty {
                     Button {
-                        coordinator.playRandom(from: albumVideoItems)
+                        coordinator.playRandom(from: videoItems)
                     } label: {
                         Label("ランダム再生", systemImage: "shuffle")
                     }
                     .help("このアルバムの動画をシャッフルして再生")
-                }
-            }
-            
-            ToolbarItem(placement: .primaryAction) {
-                if !albumVideoItems.isEmpty {
-                    Button {
-                        let unanalyzed = albumVideoItems.filter { !FaceDatabase.shared.isAnalyzed(videoID: $0.id) }
-                        if unanalyzed.isEmpty {
-                            showNoUnanalyzedVideosAlert = true
-                            return
-                        }
-                        
-                        Task {
-                            isAnalyzingFaces = true
-                            analyzeProgress = 0
-                            analyzeCurrent = 0
-                            analyzeTotal = unanalyzed.count
-                            
-                            var count = 0
-                            let total = unanalyzed.count
-                            for video in unanalyzed {
-                                if !isAnalyzingFaces { break } // キャンセルされたら中断
-                                if let url = dataManager.fileURL(for: video) {
-                                    await FaceAnalyzer.analyze(videoID: video.id, url: url)
-                                }
-                                count += 1
-                                analyzeCurrent = count
-                                analyzeProgress = Double(count) / Double(total)
-                            }
-                            isAnalyzingFaces = false
-                        }
-                    } label: {
-                        Label("顔解析", systemImage: "person.crop.circle.badge.plus")
-                    }
-                    .help("未解析の動画から顔を抽出")
-                    .disabled(isAnalyzingFaces)
                 }
             }
 
@@ -166,9 +236,9 @@ struct AlbumDetailView: View {
                         .foregroundStyle(.secondary)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    if selectedVideoItems.count >= 2 {
+                    if selectedItems.count >= 2 {
                         Button {
-                            coordinator.playMulti(selectedVideoItems)
+                            coordinator.playMulti(selectedItems)
                         } label: {
                             Label("同時再生", systemImage: "square.grid.2x2.fill")
                         }
@@ -176,9 +246,9 @@ struct AlbumDetailView: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    if selectedVideoItems.count >= 2 {
+                    if selectedItems.count >= 2 {
                         Button {
-                            coordinator.startSlideshow(selectedVideoItems)
+                            coordinator.startSlideshow(selectedItems)
                         } label: {
                             Label("スライドショー", systemImage: "play.square.stack")
                         }
@@ -186,7 +256,7 @@ struct AlbumDetailView: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    if selectedVideoItems.count == 1, let video = selectedVideoItems.first {
+                    if selectedItems.count == 1, let video = selectedItems.first {
                         Button {
                             splitTargetVideo = video
                             showSplitSheet = true
@@ -197,12 +267,34 @@ struct AlbumDetailView: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button(role: .destructive, action: deleteSelectedVideos) {
+                    Button(action: exportSelectedItems) {
+                        Label("エクスポート", systemImage: "square.and.arrow.up")
+                    }
+                    .help("選択した項目のコピーを指定フォルダへ書き出す（元ファイルが失われた場合の安全弁）")
+                }
+                if canRemoveItemsFromCurrentAlbum {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(action: removeSelectedFromAlbum) {
+                            Label("アルバムから外す", systemImage: "minus.circle")
+                        }
+                        .help("選択した項目をこのアルバムから外す（メディア自体は削除されません）")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(role: .destructive) { showBulkDeleteConfirmation = true } label: {
                         Label("削除", systemImage: "trash")
                     }
-                    .help("選択した項目を完全に削除")
+                    .help("選択した項目をゴミ箱に入れるか完全に削除します")
                 }
             }
+        }
+        // 削除は必ず「ゴミ箱に入れる」か「完全に削除」かを確認してから実行する。
+        .confirmationDialog("削除方法を選んでください", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
+            Button("ゴミ箱に入れる", action: moveSelectedToTrash)
+            Button("完全に削除", role: .destructive, action: deleteSelectedVideos)
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。")
         }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             return handleDrop(providers: providers)
@@ -210,20 +302,30 @@ struct AlbumDetailView: View {
         .alert("異なるメディアタイプの混在", isPresented: $showMixedContentAlert) {
             Button("現在のアルバムのタイプ (\(album.type.displayName)) としてインポート") {
                 if let url = pendingFolderURL {
-                    Task { await dataManager.importFolder(folderURL: url, as: album.type); pendingFolderURL = nil }
+                    Task {
+                        isImporting = true
+                        importedCount = 0
+                        let progress = ImportProgressThrottle { importedCount = $0 }
+                        await dataManager.importAndLinkFolder(folderURL: url, as: album.type) { progress.tick() }
+                        progress.finish()
+                        isImporting = false
+                        pendingFolderURL = nil
+                    }
                 }
             }
             Button("キャンセル", role: .cancel) { pendingFolderURL = nil }
         } message: {
             Text("\(mixedContentInfo)\n指定したタイプ (\(album.type.displayName)) 以外のファイルは無視されます。")
         }
-        .alert("解析済み", isPresented: $showNoUnanalyzedVideosAlert) {
+        .alert("重複チェック完了", isPresented: $showDuplicateCheckResultAlert) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text("このアルバム内のすべての動画はすでに顔解析が完了しています。")
+            Text(duplicateCheckResultMessage)
         }
-        .sheet(item: $previewItem) { item in
-            MediaPreviewView(item: item, dataManager: dataManager)
+        .alert("エクスポート完了", isPresented: $showExportResultAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(exportResultMessage)
         }
         .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
             TextField("アルバム名", text: $newAlbumNameForMove)
@@ -270,6 +372,11 @@ struct AlbumDetailView: View {
             }
             .padding(30)
             .frame(minWidth: 320)
+        }
+        // 他のアルバムに移動したら、このアルバムのデコード済みサムネイルはメモリから解放する。
+        // ディスクキャッシュは消さないので、戻ってきたときの再表示は速いまま。
+        .onDisappear {
+            MacVideoThumbnailView.evictFromMemoryCache(videoIDs: items.map { $0.id })
         }
     }
 
@@ -328,12 +435,18 @@ struct AlbumDetailView: View {
                 }
                 .padding(16)
             }
+            .task(id: coordinator.returnToMediaID) {
+                await restoreReturnTarget(items: items, proxy: proxy)
+            }
             .onKeyPress(phases: .down) { press in
                 handleGridKey(press, items: items, proxy: proxy)
             }
             .onAppear {
                 // グリッドにフォーカスを持たせて onKeyPress を有効化する
                 if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
+                if coordinator.returnToMediaID != nil {
+                    Task { await restoreReturnTarget(items: items, proxy: proxy) }
+                }
             }
         }
     }
@@ -342,14 +455,13 @@ struct AlbumDetailView: View {
     private func handleGridKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         guard !items.isEmpty else { return .ignored }
 
-        // 再生キー（Enter / Option+Space）はフォーカス未確定でも動作させる
-        switch press.key {
-        case .return:
+        if handleLibraryShortcut(press, items: items, proxy: proxy) == .handled {
+            return .handled
+        }
+
+        // Option+Space は既存互換の固定ショートカットとして残す。
+        if press.key == .space, press.modifiers.contains(.option) {
             playFromGrid(items: items); return .handled
-        case .space where press.modifiers.contains(.option):
-            playFromGrid(items: items); return .handled
-        default:
-            break
         }
 
         let cols = max(2, Int(appSettings.columnCount))
@@ -362,12 +474,16 @@ struct AlbumDetailView: View {
         }
 
         var nextIndex: Int?
-        switch press.key {
-        case .upArrow: if index - cols >= 0 { nextIndex = index - cols }
-        case .downArrow: if index + cols < items.count { nextIndex = index + cols }
-        case .leftArrow: if index > 0 { nextIndex = index - 1 }
-        case .rightArrow: if index < items.count - 1 { nextIndex = index + 1 }
-        default: return .ignored
+        if MediaShortcutSettings.matches(.libraryMoveUp, press: press), index - cols >= 0 {
+            nextIndex = index - cols
+        } else if MediaShortcutSettings.matches(.libraryMoveDown, press: press), index + cols < items.count {
+            nextIndex = index + cols
+        } else if MediaShortcutSettings.matches(.libraryMoveLeft, press: press), index > 0 {
+            nextIndex = index - 1
+        } else if MediaShortcutSettings.matches(.libraryMoveRight, press: press), index < items.count - 1 {
+            nextIndex = index + 1
+        } else {
+            return .ignored
         }
 
         if let nextIndex, items.indices.contains(nextIndex) {
@@ -381,6 +497,70 @@ struct AlbumDetailView: View {
         return .ignored
     }
 
+    private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
+        if MediaShortcutSettings.matches(.libraryOpenFocused, press: press) {
+            playFromGrid(items: items)
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryOpenExternal, press: press) {
+            if let item = primaryTarget(in: items) { openFileExternal(item) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRevealInFinder, press: press) {
+            if let item = primaryTarget(in: items) { revealInFinder(item) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryToggleFavorite, press: press) {
+            if let item = primaryTarget(in: items) {
+                dataManager.toggleFavorite(videoIDs: effectiveTargetIDs(for: item))
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryDelete, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { showBulkDeleteConfirmation = true }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMoveToTrash, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { moveSelectedToTrash() }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryExport, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { exportSelectedItems() }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryImport, press: press) {
+            importFilesViaDialog()
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRandomPlay, press: press) {
+            coordinator.playRandom(from: items.filter { $0.mediaType == .video })
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMultiPlay, press: press) {
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.playMulti(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.startSlideshow(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySplitPlay, press: press) {
+            let selected = selectedVideoItems
+            if selected.count == 1, let video = selected.first {
+                splitTargetVideo = video
+                showSplitSheet = true
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryDuplicateCheck, press: press) {
+            if canRemoveItemsFromCurrentAlbum, !items.isEmpty {
+                runDuplicateCheck()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRemoveFromAlbum, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if canRemoveItemsFromCurrentAlbum, !selectedVideoIDs.isEmpty {
+                removeSelectedFromAlbum()
+            }
+            return .handled
+        }
+
+        return .ignored
+    }
+
     /// 選択が複数なら同時再生、単一/フォーカス対象を通常再生
     private func playFromGrid(items: [VideoItem]) {
         let selectedVideos = selectedVideoItems
@@ -391,6 +571,23 @@ struct AlbumDetailView: View {
         } else if let first = items.first {
             openFile(first)
         }
+    }
+
+    private func primaryTarget(in items: [VideoItem]) -> VideoItem? {
+        if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
+            return item
+        }
+        if let selectedID = selectedVideoIDs.first, let item = items.first(where: { $0.id == selectedID }) {
+            return item
+        }
+        return items.first
+    }
+
+    private func ensureSelectionForFocusedItem(in items: [VideoItem]) {
+        guard selectedVideoIDs.isEmpty, let item = primaryTarget(in: items) else { return }
+        selectedVideoIDs = [item.id]
+        lastSelectedVideoID = item.id
+        focusedVideoID = item.id
     }
 
     private var noResultsState: some View {
@@ -446,10 +643,11 @@ struct AlbumDetailView: View {
 
     // アプリ内プレイヤーで開く（動画は全画面プレイヤー、画像はプレビュー）
     private func openFile(_ video: VideoItem) {
+        coordinator.rememberReturnTarget(mediaID: video.id)
         if video.mediaType == .video {
             coordinator.playSingle(playlist: albumVideoItems, current: video)
         } else {
-            previewItem = video
+            coordinator.viewPhotos(playlist: displayedItems.filter { $0.mediaType == .photo }, current: video)
         }
     }
 
@@ -465,37 +663,175 @@ struct AlbumDetailView: View {
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
-                guard let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+        print("📥 [DROP] アルバムへのドロップを受け取りました: providers=\(providers.count)")
+        loadDroppedFileURLs(from: providers) { urls in
+            var folderURLs: [URL] = []
+            var fileURLs: [URL] = []
 
-                DispatchQueue.main.async {
-                    var isDirectory: ObjCBool = false
-                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
-                        if isDirectory.boolValue {
-                            let counts = dataManager.scanFolder(folderURL: url)
+            for url in urls {
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
 
-                            if (album.type == .video && counts.photoCount > 0) || (album.type == .photo && counts.videoCount > 0) {
-                                self.mixedContentInfo = "動画: \(counts.videoCount)件, 画像: \(counts.photoCount)件"
-                                self.pendingFolderURL = url
-                                self.showMixedContentAlert = true
-                            } else {
-                                Task { await dataManager.importFolder(folderURL: url, as: album.type) }
-                            }
-                        } else {
-                            Task { await dataManager.importMedia(from: url, to: album.id) }
-                        }
-                    }
+                if isDirectory.boolValue {
+                    folderURLs.append(url)
+                } else {
+                    fileURLs.append(url)
                 }
+            }
+
+            if folderURLs.count == 1, fileURLs.isEmpty, let folderURL = folderURLs.first {
+                let counts = dataManager.scanFolder(folderURL: folderURL)
+
+                if (album.type == .video && counts.photoCount > 0) || (album.type == .photo && counts.videoCount > 0) {
+                    self.mixedContentInfo = "動画: \(counts.videoCount)件, 画像: \(counts.photoCount)件"
+                    self.pendingFolderURL = folderURL
+                    self.showMixedContentAlert = true
+                    return
+                }
+            }
+
+            Task {
+                isImporting = true
+                importedCount = 0
+                let progress = ImportProgressThrottle { importedCount = $0 }
+                for folderURL in folderURLs {
+                    await dataManager.importAndLinkFolder(folderURL: folderURL, as: album.type) { progress.tick() }
+                }
+                await dataManager.importMediaFiles(from: fileURLs, to: album.id) { progress.tick() }
+                progress.finish()
+                isImporting = false
             }
         }
         return true
+    }
+
+    private func loadDroppedFileURLs(from providers: [NSItemProvider], completion: @escaping ([URL]) -> Void) {
+        var loadedURLs: [URL] = []
+
+        func loadNextProvider(at index: Int) {
+            guard index < providers.count else {
+                if loadedURLs.count != providers.count {
+                    print("⚠️ [DROP] \(providers.count)件中\(loadedURLs.count)件のURLを取得しました。")
+                }
+                completion(loadedURLs)
+                return
+            }
+
+            let provider = providers[index]
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url = droppedFileURL(from: item)
+                DispatchQueue.main.async {
+                    if let url {
+                        loadedURLs.append(url)
+                    }
+                    loadNextProvider(at: index + 1)
+                }
+            }
+        }
+
+        loadNextProvider(at: 0)
+    }
+
+    private func droppedFileURL(from item: NSSecureCoding?) -> URL? {
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        } else if let itemURL = item as? URL {
+            return itemURL
+        } else if let itemURL = item as? NSURL {
+            return itemURL as URL
+        }
+        return nil
     }
 
     private func deleteSelectedVideos() {
         dataManager.deleteVideos(videoIDs: Array(selectedVideoIDs))
         selectedVideoIDs.removeAll()
         lastSelectedVideoID = nil
+    }
+
+    private func removeSelectedFromAlbum() {
+        guard canRemoveItemsFromCurrentAlbum else { return }
+        dataManager.removeVideosFromAlbum(videoIDs: Array(selectedVideoIDs), albumID: album.id)
+        selectedVideoIDs.removeAll()
+        lastSelectedVideoID = nil
+    }
+
+    private func moveSelectedToTrash() {
+        dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
+        selectedVideoIDs.removeAll()
+        lastSelectedVideoID = nil
+    }
+
+    /// 選択した項目のコピーを指定フォルダへ書き出す。フォルダインポートは元ファイルを参照するだけで
+    /// アプリはコピーを持たないため、誤って元ファイルを失っても手元に控えを残せる安全弁として使う。
+    private func exportSelectedItems() {
+        // runModal はネストしたイベントループを回すため、パネル表示中もタイマーやHTTP起因の
+        // 状態変更で selectedVideoIDs が変わりうる。対象はパネルを開く「前」に確定させる。
+        let ids = Array(selectedVideoIDs)
+        guard !ids.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "書き出し先のフォルダを選択してください"
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        Task {
+            isExporting = true
+            exportProgress = 0
+            exportCurrent = 0
+            exportTotal = ids.count
+            let result = await dataManager.exportMedia(videoIDs: ids, to: folderURL) { current, total in
+                exportCurrent = current
+                exportTotal = total
+                exportProgress = total == 0 ? 0 : Double(current) / Double(total)
+            }
+            isExporting = false
+            exportResultMessage = result.failedCount > 0
+                ? "\(result.successCount)件を書き出しました。\(result.failedCount)件は失敗しました。"
+                : "\(result.successCount)件を書き出しました。"
+            showExportResultAlert = true
+        }
+    }
+
+    private func runDuplicateCheck() {
+        guard !isCheckingDuplicates, !dataManager.isDuplicateCheckRunning else { return }
+
+        isCheckingDuplicates = true
+        duplicateCheckProgress = 0
+        duplicateCheckCurrent = 0
+        duplicateCheckTotal = displayedItems.count
+
+        Task {
+            let result = await dataManager.removeDuplicateMedia(in: album.id) { current, total in
+                duplicateCheckCurrent = current
+                duplicateCheckTotal = total
+                duplicateCheckProgress = total == 0 ? 0 : Double(current) / Double(total)
+            }
+
+            duplicateCheckResultMessage = duplicateCheckMessage(for: result)
+            isCheckingDuplicates = false
+            selectedVideoIDs.removeAll()
+            lastSelectedVideoID = nil
+            showDuplicateCheckResultAlert = true
+        }
+    }
+
+    private func duplicateCheckMessage(for result: DuplicateCheckResult) -> String {
+        var lines: [String]
+        if result.duplicateCount > 0 {
+            lines = ["\(result.duplicateCount)件の重複メディアをゴミ箱へ移動しました。"]
+        } else {
+            lines = ["重複メディアは見つかりませんでした。"]
+        }
+
+        lines.append("確認した項目: \(result.checkedCount)件")
+        if result.missingFileCount > 0 {
+            lines.append("ファイルが見つからない項目: \(result.missingFileCount)件")
+        }
+        if result.failedHashCount > 0 {
+            lines.append("ハッシュ計算に失敗した項目: \(result.failedHashCount)件")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// コンテキストメニュー操作の対象（右クリック対象が複数選択に含まれていれば選択全体）
@@ -516,6 +852,117 @@ struct AlbumDetailView: View {
             if selectedVideoIDs.contains(video.id) { selectedVideoIDs.remove(video.id) } else { selectedVideoIDs.insert(video.id); lastSelectedVideoID = video.id }
         } else {
             selectedVideoIDs.removeAll(); selectedVideoIDs.insert(video.id); lastSelectedVideoID = video.id
+        }
+    }
+
+    private func importFilesViaDialog() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.message = "インポートするファイルまたはフォルダを選択してください"
+
+        switch album.type {
+        case .video:
+            panel.allowedContentTypes = [.movie, .video, .folder]
+        case .photo:
+            panel.allowedContentTypes = [.image, .folder]
+        case .mixed:
+            panel.allowedContentTypes = [.movie, .video, .image, .folder]
+        }
+
+        if panel.runModal() == .OK {
+            let urls = panel.urls
+            var folderURLs: [URL] = []
+            var fileURLs: [URL] = []
+
+            for url in urls {
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+
+                if isDirectory.boolValue {
+                    folderURLs.append(url)
+                } else {
+                    fileURLs.append(url)
+                }
+            }
+
+            if folderURLs.count == 1, fileURLs.isEmpty, let folderURL = folderURLs.first {
+                let counts = dataManager.scanFolder(folderURL: folderURL)
+
+                if (album.type == .video && counts.photoCount > 0) || (album.type == .photo && counts.videoCount > 0) {
+                    self.mixedContentInfo = "動画: \(counts.videoCount)件, 画像: \(counts.photoCount)件"
+                    self.pendingFolderURL = folderURL
+                    self.showMixedContentAlert = true
+                    return
+                }
+            }
+
+            Task {
+                isImporting = true
+                importedCount = 0
+                let progress = ImportProgressThrottle { importedCount = $0 }
+                for folderURL in folderURLs {
+                    await dataManager.importAndLinkFolder(folderURL: folderURL, as: album.type) { progress.tick() }
+                }
+                await dataManager.importMediaFiles(from: fileURLs, to: album.id) { progress.tick() }
+                progress.finish()
+                isImporting = false
+            }
+        }
+    }
+
+    private func linkFolderViaDialog() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "このアルバムに紐づけるフォルダを選択してください"
+
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+
+        Task {
+            isImporting = true
+            importedCount = 0
+            let progress = ImportProgressThrottle { importedCount = $0 }
+            await dataManager.linkFolder(folderURL: folderURL, to: album.id) { progress.tick() }
+            progress.finish()
+            isImporting = false
+        }
+    }
+
+    private func rescanLinkedFolder() {
+        Task {
+            isImporting = true
+            importedCount = 0
+            let progress = ImportProgressThrottle { importedCount = $0 }
+            await dataManager.rescanLinkedFolder(albumID: album.id) { progress.tick() }
+            progress.finish()
+            isImporting = false
+        }
+    }
+
+    @MainActor
+    private func restoreReturnTarget(items: [VideoItem], proxy: ScrollViewProxy) async {
+        guard let targetID = coordinator.returnToMediaID else { return }
+
+        for attempt in 0..<4 {
+            if let _ = items.first(where: { $0.id == targetID }) {
+                focusedVideoID = targetID
+                selectedVideoIDs = [targetID]
+                lastSelectedVideoID = targetID
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(targetID, anchor: .center)
+                }
+                coordinator.clearReturnTarget()
+                return
+            }
+
+            if attempt == 3 {
+                coordinator.clearReturnTarget()
+                return
+            }
+            await Task.yield()
         }
     }
 }
@@ -543,6 +990,7 @@ struct MediaGridItem: View {
     var onMoveToNewAlbum: () -> Void = {}
 
     @State private var isHovering = false
+    @State private var showDeleteConfirmation = false
 
     /// 移動先候補（システムアルバム・現在のアルバムを除き、メディアタイプが互換のもの）
     private var moveTargetAlbums: [Album] {
@@ -569,7 +1017,6 @@ struct MediaGridItem: View {
                             .font(.system(size: 17))
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(.white, Color.accentColor)
-                            .shadow(color: .black.opacity(0.3), radius: 2)
                             .padding(7)
                     }
                 }
@@ -586,11 +1033,22 @@ struct MediaGridItem: View {
                     }
                 }
                 .overlay(alignment: .topLeading) {
-                    if video.isFavorite {
+                    // 常時は状態表示のみ（お気に入り済みならハート）。ホバー中は右クリック
+                    // メニューを開かなくてもワンクリックでトグルできるボタンにする。
+                    if isHovering && !isTrashView {
+                        Button(action: onToggleFavorite) {
+                            Image(systemName: video.isFavorite ? "heart.fill" : "heart")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.red)
+                                .padding(7)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(video.isFavorite ? "お気に入りから外す" : "お気に入りに追加")
+                    } else if video.isFavorite {
                         Image(systemName: "heart.fill")
                             .font(.system(size: 13))
                             .foregroundStyle(.red)
-                            .shadow(color: .black.opacity(0.35), radius: 2)
                             .padding(7)
                     }
                 }
@@ -618,7 +1076,9 @@ struct MediaGridItem: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
+            // アニメーション付きだとセルの出入りのたびにトランザクションが発生し、
+            // 大量枚数のグリッドでスクロールがカクつく原因になるため即時反映にしている。
+            isHovering = hovering
         }
         .onTapGesture(count: 2) { onDoubleTap() }
         .onTapGesture(count: 1) {
@@ -628,10 +1088,11 @@ struct MediaGridItem: View {
             Button("開く") { onOpen() }
             Button("外部プレイヤーで開く") { onOpenExternal() }
             Button("Finderで表示") { onReveal() }
+            Button("フォルダにエクスポート…") { exportThisItem() }
             Divider()
             if isTrashView {
                 Button("元に戻す") { onRestore() }
-                Button("完全に削除", role: .destructive) { onDelete() }
+                Button("完全に削除…", role: .destructive) { showDeleteConfirmation = true }
             } else {
                 Button(video.isFavorite ? "お気に入りから外す" : "お気に入りに追加") { onToggleFavorite() }
                 Menu("アルバムに移動") {
@@ -645,9 +1106,35 @@ struct MediaGridItem: View {
                     Button("アルバムから外す") { onRemoveFromAlbum() }
                 }
                 Divider()
-                Button("ゴミ箱に入れる", role: .destructive) { onMoveToTrash() }
+                Button("削除…", role: .destructive) { showDeleteConfirmation = true }
             }
         }
+        // 削除は必ず「ゴミ箱に入れる」か「完全に削除」かを確認してから実行する
+        // （元ファイルの誤削除を繰り返さないための安全策）。
+        .confirmationDialog(
+            isTrashView ? "完全に削除しますか？" : "削除方法を選んでください",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            if !isTrashView {
+                Button("ゴミ箱に入れる") { onMoveToTrash() }
+            }
+            Button("完全に削除", role: .destructive) { onDelete() }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text(isTrashView ? "この操作は取り消せません。" : "「\(video.originalFilename)」をゴミ箱に入れますか？それとも完全に削除しますか？")
+        }
+    }
+
+    /// この1件を選んだフォルダへコピーとして書き出す（元ファイルを万一失っても手元にコピーが残る安全弁）。
+    private func exportThisItem() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "書き出し先のフォルダを選択してください"
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        Task { await dataManager.exportMedia(videoIDs: [video.id], to: folderURL) }
     }
 
     private static let itemFormatter: DateFormatter = {
@@ -719,6 +1206,7 @@ struct MediaGridControlBar: View {
                     .frame(width: 140)
                 Image(systemName: "square.grid.4x3.fill")
             }
+            .help("表示列数: \(Int(appSettings.columnCount))列")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -731,8 +1219,6 @@ struct LibraryCategoryView: View {
     enum Kind: Hashable {
         case favorites
         case trash
-        case year(Int)
-        case month(Int, Int)
     }
     let kind: Kind
     @ObservedObject var dataManager: VideoDataManager
@@ -743,7 +1229,6 @@ struct LibraryCategoryView: View {
     @State private var selectedVideoIDs = Set<UUID>()
     @State private var lastSelectedVideoID: UUID?
     @State private var searchText = ""
-    @State private var previewItem: VideoItem?
     @State private var showEmptyTrashAlert = false
     @State private var showMoveToNewAlbumAlert = false
     @State private var newAlbumNameForMove = ""
@@ -755,23 +1240,23 @@ struct LibraryCategoryView: View {
     @State private var splitCount: Int = 4
     @State private var splitTargetVideo: VideoItem?
 
+    @State private var isExporting = false
+    @State private var exportProgress: Double = 0
+    @State private var exportCurrent = 0
+    @State private var exportTotal = 0
+    @State private var exportResultMessage = ""
+    @State private var showExportResultAlert = false
+
+    @State private var showBulkDeleteConfirmation = false
+
     private var isTrash: Bool { kind == .trash }
 
     private var sourceItems: [VideoItem] {
-        let cal = Calendar.current
         switch kind {
         case .favorites:
             return dataManager.favoriteVideos
         case .trash:
             return dataManager.trashedVideos
-        case .year(let y):
-            return dataManager.videos.filter { !$0.isInTrash && cal.component(.year, from: $0.creationDate ?? $0.importDate) == y }
-        case .month(let y, let m):
-            return dataManager.videos.filter {
-                guard !$0.isInTrash else { return false }
-                let d = $0.creationDate ?? $0.importDate
-                return cal.component(.year, from: d) == y && cal.component(.month, from: d) == m
-            }
         }
     }
     private var displayedItems: [VideoItem] {
@@ -785,9 +1270,13 @@ struct LibraryCategoryView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // displayedItems（フィルタ＋ソート）は1回の描画につき1回だけ計算し、toolbar/sheetも含めて使い回す。
+        let items = displayedItems
+        let videoItems = items.filter { $0.mediaType == .video }
+        let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
+
+        return VStack(spacing: 0) {
             ZStack {
-                let items = displayedItems
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { selectedVideoIDs.removeAll(); lastSelectedVideoID = nil }
@@ -796,6 +1285,23 @@ struct LibraryCategoryView: View {
                     emptyState
                 } else {
                     grid(items)
+                }
+
+                if isExporting {
+                    Color.black.opacity(0.6).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView("エクスポート中...", value: exportProgress, total: 1.0)
+                            .progressViewStyle(.linear)
+                            .frame(width: 220)
+                            .tint(.accentColor)
+                            .foregroundColor(.white)
+                        Text("\(exportCurrent) / \(exportTotal)")
+                            .foregroundColor(.white)
+                            .font(.subheadline)
+                    }
+                    .padding()
+                    .background(.thickMaterial)
+                    .cornerRadius(12)
                 }
             }
             Divider()
@@ -820,25 +1326,32 @@ struct LibraryCategoryView: View {
                 }
             } else {
                 ToolbarItem(placement: .primaryAction) {
-                    if !displayedItems.filter({ $0.mediaType == .video }).isEmpty {
-                        Button { coordinator.playRandom(from: displayedItems.filter { $0.mediaType == .video }) } label: {
+                    if !videoItems.isEmpty {
+                        Button { coordinator.playRandom(from: videoItems) } label: {
                             Label("ランダム再生", systemImage: "shuffle")
                         }
                     }
                 }
-                if selectedVideoItems.count >= 2 {
+                if !selectedVideoIDs.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
-                        Button { coordinator.playMulti(selectedVideoItems) } label: {
+                        Text("\(selectedVideoIDs.count)項目を選択中")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if selectedItems.count >= 2 {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { coordinator.playMulti(selectedItems) } label: {
                             Label("同時再生", systemImage: "square.grid.2x2.fill")
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Button { coordinator.startSlideshow(selectedVideoItems) } label: {
+                        Button { coordinator.startSlideshow(selectedItems) } label: {
                             Label("スライドショー", systemImage: "play.square.stack")
                         }
                     }
                 }
-                if selectedVideoItems.count == 1, let video = selectedVideoItems.first {
+                if selectedItems.count == 1, let video = selectedItems.first {
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             splitTargetVideo = video
@@ -849,14 +1362,50 @@ struct LibraryCategoryView: View {
                         .help("選択した動画を指定数で分割して同時再生")
                     }
                 }
+                if !selectedVideoIDs.isEmpty {
+                    // 以前は右クリックメニューでしか一括削除できず、多数選択後の
+                    // 操作先が分かりにくかったため、他画面と同じ削除ボタンをツールバーにも出す。
+                    // 削除は必ず「ゴミ箱に入れる」か「完全に削除」かを確認してから実行する。
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(role: .destructive) { showBulkDeleteConfirmation = true } label: {
+                            Label("削除", systemImage: "trash")
+                        }
+                        .help("選択した項目をゴミ箱に入れるか完全に削除します")
+                    }
+                }
+            }
+            if !selectedVideoIDs.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: exportSelectedItems) {
+                        Label("エクスポート", systemImage: "square.and.arrow.up")
+                    }
+                    .help("選択した項目のコピーを指定フォルダへ書き出す（元ファイルが失われた場合の安全弁）")
+                }
             }
         }
-        .sheet(item: $previewItem) { MediaPreviewView(item: $0, dataManager: dataManager) }
         .alert("ゴミ箱を空にしますか？", isPresented: $showEmptyTrashAlert) {
             Button("空にする", role: .destructive) { dataManager.emptyTrash() }
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text("この操作は取り消せません。ファイルが完全に削除されます。")
+        }
+        .alert("エクスポート完了", isPresented: $showExportResultAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(exportResultMessage)
+        }
+        .confirmationDialog("削除方法を選んでください", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
+            Button("ゴミ箱に入れる") {
+                dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
+                selectedVideoIDs.removeAll()
+            }
+            Button("完全に削除", role: .destructive) {
+                dataManager.deleteVideos(videoIDs: Array(selectedVideoIDs))
+                selectedVideoIDs.removeAll()
+            }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。")
         }
         .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
             TextField("アルバム名", text: $newAlbumNameForMove)
@@ -903,6 +1452,10 @@ struct LibraryCategoryView: View {
             .padding(30)
             .frame(minWidth: 320)
         }
+        // 他の画面に移動したら、ここで表示していたサムネイルはメモリから解放する。
+        .onDisappear {
+            MacVideoThumbnailView.evictFromMemoryCache(videoIDs: items.map { $0.id })
+        }
     }
 
     private func grid(_ items: [VideoItem]) -> some View {
@@ -946,18 +1499,26 @@ struct LibraryCategoryView: View {
                 }
                 .padding(16)
             }
+            .task(id: coordinator.returnToMediaID) {
+                await restoreReturnTarget(items: items, proxy: proxy)
+            }
             .onKeyPress(phases: .down) { press in handleKey(press, items: items, proxy: proxy) }
             .onAppear {
                 if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
+                if coordinator.returnToMediaID != nil {
+                    Task { await restoreReturnTarget(items: items, proxy: proxy) }
+                }
             }
         }
     }
 
     private func open(_ video: VideoItem) {
+        coordinator.rememberReturnTarget(mediaID: video.id)
         if video.mediaType == .video {
             coordinator.playSingle(playlist: displayedItems.filter { $0.mediaType == .video }, current: video)
         } else {
-            previewItem = video
+            // 画像は最初から「全画面表示（PhotoViewerView）」で開く
+            coordinator.viewPhotos(playlist: displayedItems.filter { $0.mediaType == .photo }, current: video)
         }
     }
 
@@ -982,14 +1543,13 @@ struct LibraryCategoryView: View {
     private func handleKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         guard !items.isEmpty else { return .ignored }
 
-        // 再生キー（Enter / Option+Space）はフォーカス未確定でも動作させる
-        switch press.key {
-        case .return:
+        if handleLibraryShortcut(press, items: items) == .handled {
+            return .handled
+        }
+
+        // Option+Space は既存互換の固定ショートカットとして残す。
+        if press.key == .space, press.modifiers.contains(.option) {
             playFocused(items: items); return .handled
-        case .space where press.modifiers.contains(.option):
-            playFocused(items: items); return .handled
-        default:
-            break
         }
 
         let cols = max(2, Int(appSettings.columnCount))
@@ -999,12 +1559,16 @@ struct LibraryCategoryView: View {
             return .handled
         }
         var nextIndex: Int?
-        switch press.key {
-        case .upArrow: if index - cols >= 0 { nextIndex = index - cols }
-        case .downArrow: if index + cols < items.count { nextIndex = index + cols }
-        case .leftArrow: if index > 0 { nextIndex = index - 1 }
-        case .rightArrow: if index < items.count - 1 { nextIndex = index + 1 }
-        default: return .ignored
+        if MediaShortcutSettings.matches(.libraryMoveUp, press: press), index - cols >= 0 {
+            nextIndex = index - cols
+        } else if MediaShortcutSettings.matches(.libraryMoveDown, press: press), index + cols < items.count {
+            nextIndex = index + cols
+        } else if MediaShortcutSettings.matches(.libraryMoveLeft, press: press), index > 0 {
+            nextIndex = index - 1
+        } else if MediaShortcutSettings.matches(.libraryMoveRight, press: press), index < items.count - 1 {
+            nextIndex = index + 1
+        } else {
+            return .ignored
         }
         if let nextIndex, items.indices.contains(nextIndex) {
             let id = items[nextIndex].id
@@ -1012,6 +1576,81 @@ struct LibraryCategoryView: View {
             withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
             return .handled
         }
+        return .ignored
+    }
+
+    private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem]) -> KeyPress.Result {
+        if MediaShortcutSettings.matches(.libraryOpenFocused, press: press) {
+            playFocused(items: items)
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryOpenExternal, press: press) {
+            if let item = primaryTarget(in: items), let url = dataManager.fileURL(for: item) {
+                NSWorkspace.shared.open(url)
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRevealInFinder, press: press) {
+            if let item = primaryTarget(in: items) {
+                NSWorkspace.shared.activateFileViewerSelecting([dataManager.videoStorageURL.appendingPathComponent(item.internalFilename)])
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryToggleFavorite, press: press) {
+            if !isTrash, let item = primaryTarget(in: items) {
+                dataManager.toggleFavorite(videoIDs: targetIDs(for: item))
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryDelete, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { showBulkDeleteConfirmation = true }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMoveToTrash, press: press) {
+            guard !isTrash else { return .handled }
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty {
+                dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
+                selectedVideoIDs.removeAll()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRestoreFromTrash, press: press) {
+            guard isTrash else { return .handled }
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty {
+                dataManager.restoreFromTrash(videoIDs: Array(selectedVideoIDs))
+                selectedVideoIDs.removeAll()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryExport, press: press) {
+            ensureSelectionForFocusedItem(in: items)
+            if !selectedVideoIDs.isEmpty { exportSelectedItems() }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryRandomPlay, press: press) {
+            guard !isTrash else { return .handled }
+            coordinator.playRandom(from: items.filter { $0.mediaType == .video })
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryMultiPlay, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.playMulti(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count >= 2 { coordinator.startSlideshow(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.librarySplitPlay, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count == 1, let video = selected.first {
+                splitTargetVideo = video
+                showSplitSheet = true
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryEmptyTrash, press: press) {
+            if isTrash, !dataManager.trashedVideos.isEmpty {
+                showEmptyTrashAlert = true
+            }
+            return .handled
+        }
+
         return .ignored
     }
 
@@ -1026,6 +1665,77 @@ struct LibraryCategoryView: View {
         }
     }
 
+    private func primaryTarget(in items: [VideoItem]) -> VideoItem? {
+        if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
+            return item
+        }
+        if let selectedID = selectedVideoIDs.first, let item = items.first(where: { $0.id == selectedID }) {
+            return item
+        }
+        return items.first
+    }
+
+    private func ensureSelectionForFocusedItem(in items: [VideoItem]) {
+        guard selectedVideoIDs.isEmpty, let item = primaryTarget(in: items) else { return }
+        selectedVideoIDs = [item.id]
+        lastSelectedVideoID = item.id
+        focusedVideoID = item.id
+    }
+
+    @MainActor
+    private func restoreReturnTarget(items: [VideoItem], proxy: ScrollViewProxy) async {
+        guard let targetID = coordinator.returnToMediaID else { return }
+
+        for attempt in 0..<4 {
+            if let _ = items.first(where: { $0.id == targetID }) {
+                focusedVideoID = targetID
+                selectedVideoIDs = [targetID]
+                lastSelectedVideoID = targetID
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(targetID, anchor: .center)
+                }
+                coordinator.clearReturnTarget()
+                return
+            }
+
+            if attempt == 3 {
+                coordinator.clearReturnTarget()
+                return
+            }
+            await Task.yield()
+        }
+    }
+
+    /// 選択した項目のコピーを指定フォルダへ書き出す（元ファイルが失われた場合の安全弁）。
+    private func exportSelectedItems() {
+        // runModal はネストしたイベントループを回すため、パネル表示中もタイマーやHTTP起因の
+        // 状態変更で selectedVideoIDs が変わりうる。対象はパネルを開く「前」に確定させる。
+        let ids = Array(selectedVideoIDs)
+        guard !ids.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "書き出し先のフォルダを選択してください"
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        Task {
+            isExporting = true
+            exportProgress = 0
+            exportCurrent = 0
+            exportTotal = ids.count
+            let result = await dataManager.exportMedia(videoIDs: ids, to: folderURL) { current, total in
+                exportCurrent = current
+                exportTotal = total
+                exportProgress = total == 0 ? 0 : Double(current) / Double(total)
+            }
+            isExporting = false
+            exportResultMessage = result.failedCount > 0
+                ? "\(result.successCount)件を書き出しました。\(result.failedCount)件は失敗しました。"
+                : "\(result.successCount)件を書き出しました。"
+            showExportResultAlert = true
+        }
+    }
+
     private var emptyState: some View {
         ContentUnavailableView(
             isTrash ? "ゴミ箱は空です" : "お気に入りはありません",
@@ -1033,195 +1743,5 @@ struct LibraryCategoryView: View {
             description: Text(isTrash ? "削除した項目はここに移動します" : "グリッドの右クリックメニューからお気に入りに追加できます")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-import SwiftUI
-import AVFoundation
-
-struct FaceGalleryView: View {
-    @ObservedObject var dataManager: VideoDataManager
-    @ObservedObject var faceDB = FaceDatabase.shared
-    
-    @State private var selectedCluster: PersonCluster?
-    
-    let columns = [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 16)]
-    
-    var body: some View {
-        ScrollView {
-            if faceDB.clusters.isEmpty {
-                ContentUnavailableView("顔データがありません", systemImage: "person.crop.rectangle", description: Text("アルバム画面から動画の顔解析を実行してください。"))
-                    .padding(.top, 100)
-            } else {
-                LazyVGrid(columns: columns, spacing: 20) {
-                    ForEach(faceDB.clusters) { cluster in
-                        Button {
-                            selectedCluster = cluster
-                        } label: {
-                            FaceClusterCard(cluster: cluster, dataManager: dataManager)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding()
-            }
-        }
-        .navigationTitle("顔認識グループ")
-        .sheet(item: $selectedCluster) { cluster in
-            FaceClusterDetailView(cluster: cluster, dataManager: dataManager)
-        }
-    }
-}
-
-struct FaceClusterCard: View {
-    let cluster: PersonCluster
-    let dataManager: VideoDataManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(NSColor.windowBackgroundColor))
-                    .aspectRatio(1, contentMode: .fit)
-                
-                if let firstApp = cluster.appearances.first,
-                   let video = dataManager.videos.first(where: { $0.id == firstApp.videoID }) {
-                    FaceCropImageView(video: video, boundingBox: firstApp.boundingBox, dataManager: dataManager)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                } else {
-                    Image(systemName: "person.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .padding(30)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 1)
-            
-            Text(cluster.name)
-                .font(.headline)
-                .lineLimit(1)
-            
-            Text("\(cluster.appearances.count) 個の動画")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-    }
-}
-
-struct FaceCropImageView: View {
-    let video: VideoItem
-    let boundingBox: CGRect
-    let dataManager: VideoDataManager
-    
-    @State private var image: NSImage?
-    
-    var body: some View {
-        GeometryReader { geo in
-            if let img = image {
-                Image(nsImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
-            } else {
-                Color.gray.opacity(0.2)
-                    .task {
-                        await loadImage()
-                    }
-            }
-        }
-    }
-    
-    private func loadImage() async {
-        guard let url = dataManager.fileURL(for: video) else { return }
-        
-        let thumbURL = dataManager.thumbnailStorageURL.appendingPathComponent("\(video.id.uuidString)_original.jpg")
-        
-        var nsImage: NSImage?
-        if let data = try? Data(contentsOf: thumbURL) {
-             nsImage = NSImage(data: data)
-        } else {
-            let asset = AVURLAsset(url: url)
-            let gen = AVAssetImageGenerator(asset: asset)
-            gen.appliesPreferredTrackTransform = true
-            if let cgImage = try? await gen.image(at: .zero).image {
-                nsImage = NSImage(cgImage: cgImage, size: .zero)
-            }
-        }
-        
-        guard let sourceImage = nsImage else { return }
-        
-        let imageSize = sourceImage.size
-        let rect = CGRect(
-            x: boundingBox.origin.x * imageSize.width,
-            y: (1 - boundingBox.origin.y - boundingBox.height) * imageSize.height,
-            width: boundingBox.width * imageSize.width,
-            height: boundingBox.height * imageSize.height
-        )
-        
-        if let cgImage = sourceImage.cgImage(forProposedRect: nil, context: nil, hints: nil),
-           let cropped = cgImage.cropping(to: rect) {
-            let result = NSImage(cgImage: cropped, size: rect.size)
-            await MainActor.run {
-                self.image = result
-            }
-        }
-    }
-}
-
-struct FaceClusterDetailView: View {
-    let cluster: PersonCluster
-    let dataManager: VideoDataManager
-    
-    @Environment(\.dismiss) var dismiss
-    
-    @State private var newName: String = ""
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("グループの動画 (\(cluster.appearances.count))")
-                    .font(.headline)
-                Spacer()
-                Button("閉じる") { dismiss() }
-            }
-            .padding()
-            
-            Divider()
-            
-            HStack {
-                Text("名前:")
-                TextField("名前", text: $newName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
-                    .onSubmit {
-                        cluster.name = newName
-                        FaceDatabase.shared.save()
-                    }
-                Button("保存") {
-                    cluster.name = newName
-                    FaceDatabase.shared.save()
-                }
-                Spacer()
-            }
-            .padding()
-            
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 16)], spacing: 16) {
-                    let uniqueVideoIDs = Array(Set(cluster.appearances.map { $0.videoID }))
-                    ForEach(uniqueVideoIDs, id: \.self) { videoID in
-                        if let video = dataManager.videos.first(where: { $0.id == videoID }) {
-                            MacVideoThumbnailView(videoItem: video, dataManager: dataManager)
-                                .frame(height: 120)
-                        }
-                    }
-                }
-                .padding()
-            }
-        }
-        .frame(width: 600, height: 500)
-        .onAppear {
-            newName = cluster.name
-        }
     }
 }

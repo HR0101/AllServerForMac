@@ -8,6 +8,15 @@ import Swifter
 enum ThumbQuality { case high, low }
 
 extension WebServerManager {
+    func thumbnailMaxPixelSize(from queryParams: [(String, String)], isOriginal: Bool) -> Int? {
+        guard isOriginal,
+              let value = queryParams.first(where: { $0.0 == "max" })?.1,
+              let requestedSize = Int(value) else {
+            return nil
+        }
+        return min(max(requestedSize, 400), 3000)
+    }
+
     func serveFile(at url: URL, request: HttpRequest) -> HttpResponse {
         do {
             let attr = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -74,7 +83,11 @@ extension WebServerManager {
     }
 
     func getIPAddress() -> String? {
-        var address: String?
+        // en* の「最初に見つかった」IPv4 を使うと、Parallels/Docker/インターネット共有が作る
+        // 仮想ブリッジ（例: en5 = 192.168.64.1）が拾われ、表示URLに他デバイスから到達できない
+        // ことがある。実LANに繋がっているのは通常 en0/en1 なので、候補を全部集めてから
+        // 番号の小さい enX を優先し、リンクローカル(169.254.*)は除外する。
+        var candidates: [(name: String, ip: String)] = []
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         if getifaddrs(&ifaddr) == 0 {
             var ptr = ifaddr
@@ -88,30 +101,39 @@ extension WebServerManager {
                         var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                         getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len), &hostname, socklen_t(hostname.count), nil, socklen_t(0), NI_NUMERICHOST)
                         let ip = String(cString: hostname)
-                        if !ip.isEmpty {
-                            address = ip
-                            break
+                        if !ip.isEmpty && !ip.hasPrefix("169.254.") {
+                            candidates.append((cStringName, ip))
                         }
                     }
                 }
             }
             freeifaddrs(ifaddr)
         }
-        return address
+
+        func interfaceNumber(_ name: String) -> Int {
+            Int(name.dropFirst(2)) ?? Int.max
+        }
+        return candidates.min(by: { interfaceNumber($0.name) < interfaceNumber($1.name) })?.ip
     }
     
-    func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false, requestedTime: Double? = nil) async -> Data? {
-        let size: CGSize = quality == .high ? CGSize(width: 400, height: 400) : CGSize(width: 50, height: 50)
+    func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false, requestedTime: Double? = nil, maxPixelSize: Int? = nil) async -> Data? {
+        let defaultSize: CGFloat = quality == .high ? 400 : 50
+        let requestedSize = CGFloat(maxPixelSize ?? Int(defaultSize))
+        let size = CGSize(width: requestedSize, height: requestedSize)
         let compression = quality == .high ? 0.8 : 0.1
-        
+
         if type == .photo {
-            return generateImageThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
+            // 元画像の読み込み・デコード・リサイズはメインスレッド（アプリ全体）をブロックしうる重い同期処理のため、
+            // バックグラウンドで実行する。
+            return await Task.detached(priority: .utility) {
+                WebServerManager.generateImageThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
+            }.value
         } else {
             return await generateVideoThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal, requestedTime: requestedTime)
         }
     }
-    
-    private func generateImageThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool) -> Data? {
+
+    nonisolated private static func generateImageThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool) -> Data? {
         guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: max(targetSize.width, targetSize.height),
@@ -119,8 +141,13 @@ extension WebServerManager {
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return nil }
-        let nsImage = NSImage(cgImage: cgImage, size: .zero)
-        return isOriginal ? resizeToFit(nsImage: nsImage, maxSize: targetSize, compression: compression) : cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
+        if isOriginal {
+            guard let resized = resizedToFitCGImage(cgImage, maxSize: targetSize) else { return nil }
+            return jpegData(from: resized, compression: compression)
+        } else {
+            guard let cropped = squareCroppedCGImage(cgImage, side: Int(max(targetSize.width, targetSize.height))) else { return nil }
+            return jpegData(from: cropped, compression: compression)
+        }
     }
 
     private func generateVideoThumbnail(url: URL, targetSize: CGSize, compression: Double, isOriginal: Bool, requestedTime: Double?) async -> Data? {
@@ -162,44 +189,25 @@ extension WebServerManager {
             }
         }
         
-        if let cgImage = bestCGImage ?? fallbackImage {
-            let nsImage = NSImage(cgImage: cgImage, size: .zero)
-            return isOriginal ? resizeToFit(nsImage: nsImage, maxSize: targetSize, compression: compression) : cropAndResize(nsImage: nsImage, targetSize: targetSize, compression: compression)
-        }
-        return nil
+        guard let cgImage = bestCGImage ?? fallbackImage else { return nil }
+        return await Task.detached(priority: .utility) {
+            if isOriginal {
+                guard let resized = resizedToFitCGImage(cgImage, maxSize: targetSize) else { return nil }
+                return jpegData(from: resized, compression: compression)
+            } else {
+                guard let cropped = squareCroppedCGImage(cgImage, side: Int(max(targetSize.width, targetSize.height))) else { return nil }
+                return jpegData(from: cropped, compression: compression)
+            }
+        }.value
     }
-    
-    private func cropAndResize(nsImage: NSImage, targetSize: CGSize, compression: Double) -> Data? {
-        let newImage = NSImage(size: targetSize)
-        newImage.lockFocus()
-        let originalSize = nsImage.size
-        let dim = min(originalSize.width, originalSize.height)
-        let x = (originalSize.width - dim) / 2
-        let y = (originalSize.height - dim) / 2
-        let cropRect = CGRect(x: x, y: y, width: dim, height: dim)
-        nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: cropRect, operation: .copy, fraction: 1.0)
-        newImage.unlockFocus()
-        
-        guard let tiff = newImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: compression])
-    }
-    
-    private func resizeToFit(nsImage: NSImage, maxSize: CGSize, compression: Double) -> Data? {
-        let originalSize = nsImage.size
-        let ratio = min(maxSize.width / originalSize.width, maxSize.height / originalSize.height)
-        let targetSize = CGSize(width: originalSize.width * ratio, height: originalSize.height * ratio)
-        
-        let newImage = NSImage(size: targetSize)
-        newImage.lockFocus()
-        nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: CGRect(origin: .zero, size: originalSize), operation: .copy, fraction: 1.0)
-        newImage.unlockFocus()
-        
-        guard let tiff = newImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: compression])
-    }
-    
+
     var placeholderData: Data {
         let img = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)!
-        return img.tiffRepresentation!
+        guard let tiffData = img.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else {
+            return Data()
+        }
+        return jpegData
     }
 }

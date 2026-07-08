@@ -14,19 +14,14 @@ extension WebServerManager {
         
         server["/albums"] = protected { [weak self] _ -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
-            var albumInfos: [RemoteAlbumInfo] = []
-            DispatchQueue.main.sync {
-                let trashedIDs = Set(dataManager.videos.filter { $0.isInTrash }.map { $0.id })
-                albumInfos = dataManager.albums.map { album in
-                    let validVideos = album.videoIDs.filter { !trashedIDs.contains($0) }
-                    return RemoteAlbumInfo(id: album.id.uuidString, name: album.name, videoCount: validVideos.count, type: album.type.rawValue, coverVideoID: validVideos.first?.uuidString)
-                }
-                
-                let faceAlbums = FaceDatabase.shared.getAlbums()
-                albumInfos += faceAlbums.map { album in
-                    let validVideos = album.videoIDs.filter { !trashedIDs.contains($0) }
-                    return RemoteAlbumInfo(id: album.id.uuidString, name: album.name, videoCount: validVideos.count, type: album.type.rawValue, coverVideoID: validVideos.first?.uuidString)
-                }
+            // メインスレッドを経由せずスナップショットから応答する。
+            // Mac UI が忙しくても応答が遅れず、リクエストラッシュが UI を乱すこともない。
+            let snapshot = dataManager.snapshotLibrary.value
+            let trashedIDs = Set(snapshot.videos.filter { $0.isInTrash }.map { $0.id })
+            let allAlbums = snapshot.albums
+            let albumInfos = allAlbums.map { album in
+                let validVideos = album.videoIDs.filter { !trashedIDs.contains($0) }
+                return RemoteAlbumInfo(id: album.id.uuidString, name: album.name, videoCount: validVideos.count, type: album.type.rawValue, coverVideoID: validVideos.first?.uuidString)
             }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -41,32 +36,33 @@ extension WebServerManager {
             guard let albumIDString = request.params[":id"], let albumID = UUID(uuidString: albumIDString) else {
                 return .badRequest(.text("Invalid album ID"))
             }
-            var videoInfos: [RemoteVideoInfo] = []
-            var found = false
-            DispatchQueue.main.sync {
-                let allAlbums = dataManager.albums + FaceDatabase.shared.getAlbums()
-                if let album = allAlbums.first(where: { $0.id == albumID }) {
-                    found = true
-                    let videoItems = dataManager.videos.filter { album.videoIDs.contains($0.id) && !$0.isInTrash }
-                    videoInfos = videoItems.map { video in
-                        let customAlbum = dataManager.albums.first { a in
-                            a.name != VideoDataManager.allVideosAlbumName &&
-                            a.name != VideoDataManager.allPhotosAlbumName &&
-                            a.videoIDs.contains(video.id)
-                        }
-                        return RemoteVideoInfo(
-                            id: video.id.uuidString,
-                            filename: video.originalFilename,
-                            duration: video.duration,
-                            importDate: video.importDate,
-                            creationDate: video.creationDate,
-                            mediaType: video.mediaType.rawValue,
-                            parentAlbumID: customAlbum?.id.uuidString
-                        )
-                    }
+            // スナップショットから応答（メインスレッド非経由）
+            let snapshot = dataManager.snapshotLibrary.value
+            let albums = snapshot.albums
+            guard let album = albums.first(where: { $0.id == albumID }) else { return .notFound }
+
+            let memberIDs = Set(album.videoIDs)
+            let videoItems = snapshot.videos.filter { memberIDs.contains($0.id) && !$0.isInTrash }
+
+            // 動画ごとの「カスタムアルバム」を1回の走査で構築（各アルバム内で最初に見つかったものを優先＝albums の順序を保つ）
+            var customAlbumByVideoID: [UUID: Album] = [:]
+            for a in albums where a.name != VideoDataManager.allVideosAlbumName && a.name != VideoDataManager.allPhotosAlbumName {
+                for vid in a.videoIDs where customAlbumByVideoID[vid] == nil {
+                    customAlbumByVideoID[vid] = a
                 }
             }
-            guard found else { return .notFound }
+
+            let videoInfos = videoItems.map { video in
+                return RemoteVideoInfo(
+                    id: video.id.uuidString,
+                    filename: video.originalFilename,
+                    duration: video.duration,
+                    importDate: video.importDate,
+                    creationDate: video.creationDate,
+                    mediaType: video.mediaType.rawValue,
+                    parentAlbumID: customAlbumByVideoID[video.id]?.id.uuidString
+                )
+            }
             do {
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .iso8601
@@ -77,19 +73,21 @@ extension WebServerManager {
         
         server["/server/status"] = protected { [weak self] _ -> HttpResponse in
             var uptime = 0
-            DispatchQueue.main.sync {
-                if let start = self?.serverStartTime {
-                    uptime = Int(Date().timeIntervalSince(start))
-                }
+            if let start = self?.snapshotServerStartTime.value {
+                uptime = Int(Date().timeIntervalSince(start))
             }
-            struct StatusData: Codable { let uptime: Int }
-            if let data = try? JSONEncoder().encode(StatusData(uptime: uptime)) {
+            // Swifter はボディを全てメモリへ展開してからハンドラを呼ぶため、サーバー側の
+            // サイズチェックはメモリ枯渇を防げない。クライアントがアップロード前に
+            // 自分でサイズ判定できるよう、上限を公開しておく。
+            struct StatusData: Codable { let uptime: Int; let maxUploadBytes: Int }
+            let status = StatusData(uptime: uptime, maxUploadBytes: self?.maxUploadBytes ?? 0)
+            if let data = try? JSONEncoder().encode(status) {
                 return .ok(.data(data, contentType: "application/json"))
             }
             return .internalServerError
         }
 
-        server.post["/server/shutdown"] = protected { [weak self] _ -> HttpResponse in
+        server.post["/server/shutdown"] = protectedDestructive { [weak self] _ -> HttpResponse in
             DispatchQueue.main.async {
                 self?.stopServerInternal()
                 NSApplication.shared.terminate(nil)
@@ -103,54 +101,20 @@ extension WebServerManager {
             do {
                 let req = try JSONDecoder().decode(CreateReq.self, from: Data(request.body))
                 let albumType = AlbumType(rawValue: req.type) ?? .video
-                DispatchQueue.main.async { dataManager.createAlbum(name: req.name, type: albumType) }
+                // 予約(async)だけして即OKを返すと、直後の一覧取得に反映前の状態が返る。
+                // 変更系は低頻度なので、メインスレッドでの反映完了を待ってから応答する。
+                _ = DispatchQueue.main.sync { dataManager.createAlbum(name: req.name, type: albumType) }
                 return .ok(.text("Created"))
             } catch { return .badRequest(.text("Invalid request")) }
         }
 
-        server.delete["/albums/:id"] = protected { [weak self] request -> HttpResponse in
+        server.delete["/albums/:id"] = protectedDestructive { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let idStr = request.params[":id"], let id = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
-            DispatchQueue.main.async { dataManager.deleteAlbum(albumID: id) }
+            DispatchQueue.main.sync { dataManager.deleteAlbum(albumID: id) }
             return .ok(.text("Deleted"))
         }
         
-        server.post["/albums/:id/analyzeFaces"] = protected { [weak self] request -> HttpResponse in
-            guard let self = self, let dataManager = self.dataManager,
-                  let idStr = request.params[":id"], let albumID = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
-            
-            DispatchQueue.main.async {
-                let allAlbums = dataManager.albums + FaceDatabase.shared.getAlbums()
-                guard let album = allAlbums.first(where: { $0.id == albumID }) else { return }
-                
-                let unanalyzed = dataManager.videos.filter { album.videoIDs.contains($0.id) && !$0.isInTrash && !FaceDatabase.shared.isAnalyzed(videoID: $0.id) }
-                
-                Task {
-                    for video in unanalyzed {
-                        if let url = dataManager.fileURL(for: video) {
-                            await FaceAnalyzer.analyze(videoID: video.id, url: url)
-                        }
-                    }
-                }
-            }
-            return .ok(.text("Analysis started"))
-        }
-
-        server.post["/faces/:id/rename"] = protected { request -> HttpResponse in
-            guard let idStr = request.params[":id"], let clusterID = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
-            struct RenameReq: Codable { let name: String }
-            do {
-                let req = try JSONDecoder().decode(RenameReq.self, from: Data(request.body))
-                DispatchQueue.main.async {
-                    if let cluster = FaceDatabase.shared.clusters.first(where: { $0.id == clusterID }) {
-                        cluster.name = req.name
-                        FaceDatabase.shared.save()
-                    }
-                }
-                return .ok(.text("Renamed"))
-            } catch { return .badRequest(.text("Invalid request")) }
-        }
-
         server.post["/move"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct MoveRequest: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
@@ -159,7 +123,7 @@ extension WebServerManager {
                 let videoUUIDs = moveRequest.videoIds.compactMap { UUID(uuidString: $0) }
                 guard let sourceUUID = UUID(uuidString: moveRequest.sourceAlbumId),
                       let targetUUID = UUID(uuidString: moveRequest.targetAlbumId) else { return .badRequest(.text("Invalid IDs")) }
-                DispatchQueue.main.async { dataManager.moveVideos(videoIDs: videoUUIDs, from: sourceUUID, to: targetUUID) }
+                DispatchQueue.main.sync { dataManager.moveVideos(videoIDs: videoUUIDs, from: sourceUUID, to: targetUUID) }
                 return .ok(.text("Moved successfully"))
             } catch { return .badRequest(.text("Invalid request body")) }
         }
@@ -171,8 +135,19 @@ extension WebServerManager {
                 let req = try JSONDecoder().decode(DelRequest.self, from: Data(request.body))
                 let videoUUIDs = req.videoIds.compactMap { UUID(uuidString: $0) }
                 guard let albumUUID = UUID(uuidString: req.albumId) else { return .badRequest(.text("Invalid Album ID")) }
-                DispatchQueue.main.async { dataManager.removeVideosFromAlbum(videoIDs: videoUUIDs, albumID: albumUUID) }
+                DispatchQueue.main.sync { dataManager.removeVideosFromAlbum(videoIDs: videoUUIDs, albumID: albumUUID) }
                 return .ok(.text("Deleted successfully"))
+            } catch { return .badRequest(.text("Invalid request body")) }
+        }
+
+        server.post["/deleteVideosCompletely"] = protectedDestructive { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
+            struct DelRequest: Codable { let videoIds: [String] }
+            do {
+                let req = try JSONDecoder().decode(DelRequest.self, from: Data(request.body))
+                let videoUUIDs = req.videoIds.compactMap { UUID(uuidString: $0) }
+                DispatchQueue.main.sync { dataManager.deleteVideos(videoIDs: videoUUIDs) }
+                return .ok(.text("Deleted completely successfully"))
             } catch { return .badRequest(.text("Invalid request body")) }
         }
 
@@ -227,31 +202,23 @@ extension WebServerManager {
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
             
             let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "original"
-            
-            var extPath: String?
-            var internalFilename = ""
-            var videoStorageURL: URL?
-            var downloadStorageURL: URL?
-            var proxyStorageURL: URL?
-            
-            DispatchQueue.main.sync {
-                if let videoItem = dataManager.videos.first(where: { $0.id == videoID }) {
-                    extPath = videoItem.externalFilePath
-                    internalFilename = videoItem.internalFilename
-                    videoStorageURL = dataManager.videoStorageURL
-                    downloadStorageURL = dataManager.downloadStorageURL
-                    proxyStorageURL = dataManager.proxyStorageURL
-                }
-            }
-            
-            guard let vURL = videoStorageURL, let dURL = downloadStorageURL, let pURL = proxyStorageURL else { return .notFound }
+
+            // スナップショットから解決（メインスレッド非経由）。再生開始が Mac UI の状態に左右されない。
+            guard let videoItem = dataManager.snapshotLibrary.value.videos.first(where: { $0.id == videoID }) else { return .notFound }
+            let extPath = videoItem.externalFilePath
+            let internalFilename = videoItem.internalFilename
+            let vURL = dataManager.videoStorageURL
+            let dURL = dataManager.downloadStorageURL
+            let pURL = dataManager.proxyStorageURL
             
             var videoURL: URL?
             if quality == "1080p" {
-                let proxyURL = pURL.appendingPathComponent("\(videoIDString)_1080p.mp4")
+                // クライアントが小文字UUIDで送ってきても、Mac側で生成したファイル名（大文字）と
+                // 一致するよう正規化したUUID文字列を使う（大文字小文字を区別するボリューム対策）。
+                let proxyURL = pURL.appendingPathComponent("\(videoID.uuidString)_1080p.mp4")
                 if FileManager.default.fileExists(atPath: proxyURL.path) { videoURL = proxyURL }
             } else if quality == "540p" {
-                let proxyURL = pURL.appendingPathComponent("\(videoIDString)_540p.mp4")
+                let proxyURL = pURL.appendingPathComponent("\(videoID.uuidString)_540p.mp4")
                 if FileManager.default.fileExists(atPath: proxyURL.path) { videoURL = proxyURL }
             }
             
@@ -275,7 +242,8 @@ extension WebServerManager {
 
         server["/video/:id/prepare"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
-                  let idStr = request.params[":id"] else { return .notFound }
+                  let rawIDStr = request.params[":id"], let parsedID = UUID(uuidString: rawIDStr) else { return .notFound }
+            let idStr = parsedID.uuidString
             let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "1080p"
             var state = "generating"
             var progress = 0.0
@@ -298,7 +266,7 @@ extension WebServerManager {
 
         server.delete["/video/:id/proxy"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
-            DispatchQueue.main.async { dataManager.deleteAllProxies() }
+            DispatchQueue.main.sync { dataManager.deleteAllProxies() }
             return .ok(.text("Deleted"))
         }
 
@@ -310,34 +278,45 @@ extension WebServerManager {
             let isOriginal = request.queryParams.contains(where: { $0.0 == "original" && $0.1 == "true" })
             let timeString = request.queryParams.first(where: { $0.0 == "time" })?.1
             let timeParam = timeString.flatMap { Double($0) }
+            let maxPixelSize = self.thumbnailMaxPixelSize(from: request.queryParams, isOriginal: isOriginal)
             
             let fileName: String
             if let t = timeParam {
-                fileName = "\(videoIDString)_t\(Int(t)).jpg"
+                fileName = "\(videoID.uuidString)_t\(Int(t)).jpg"
+            } else if isOriginal, let maxPixelSize {
+                fileName = "\(videoID.uuidString)_fit\(maxPixelSize).jpg"
             } else {
-                fileName = isOriginal ? "\(videoIDString)_original.jpg" : "\(videoIDString).jpg"
+                fileName = isOriginal ? "\(videoID.uuidString)_original.jpg" : "\(videoID.uuidString).jpg"
             }
             let thumbnailURL = dataManager.thumbnailStorageURL.appendingPathComponent(fileName)
 
+            // サムネイルはID単位で実質不変なのでクライアント側キャッシュを許可する。
+            // これがないと iOS はスクロールのたびに同じ画像を再取得する。
+            let thumbnailCacheHeaders = [
+                "Content-Type": "image/jpeg",
+                "Cache-Control": "max-age=3600"
+            ]
+
             if let cachedData = try? Data(contentsOf: thumbnailURL) {
-                return .ok(.data(cachedData, contentType: "image/jpeg"))
+                return .raw(200, "OK", thumbnailCacheHeaders, { writer in
+                    try? writer.write(cachedData)
+                })
             }
             
-            var targetItem: VideoItem?
-            var videoFileUrl: URL?
-            DispatchQueue.main.sync {
-                if let item = dataManager.videos.first(where: { $0.id == videoID }) {
-                    targetItem = item
-                    videoFileUrl = dataManager.fileURL(for: item)
-                }
-            }
-            guard let item = targetItem, let fileUrl = videoFileUrl else { return .notFound }
+            // スナップショットから解決（メインスレッド非経由）。スクロール中のサムネイル要求
+            // ラッシュが Mac UI をカクつかせず、Mac UI が忙しくてもサムネ応答が遅れない。
+            guard let item = dataManager.snapshotLibrary.value.videos.first(where: { $0.id == videoID }),
+                  let fileUrl = VideoDataManager.resolveFileURL(
+                    for: item,
+                    videoStorageURL: dataManager.videoStorageURL,
+                    downloadStorageURL: dataManager.downloadStorageURL
+                  ) else { return .notFound }
 
             let semaphore = DispatchSemaphore(value: 0)
             var generatedData: Data? = nil
 
             Task {
-                if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high, isOriginal: isOriginal, requestedTime: timeParam) {
+                if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high, isOriginal: isOriginal, requestedTime: timeParam, maxPixelSize: maxPixelSize) {
                     try? data.write(to: thumbnailURL)
                     generatedData = data
                 }
@@ -347,9 +326,12 @@ extension WebServerManager {
             let result = semaphore.wait(timeout: .now() + 5.0)
 
             if result == .success, let data = generatedData {
-                return .ok(.data(data, contentType: "image/jpeg"))
+                return .raw(200, "OK", thumbnailCacheHeaders, { writer in
+                    try? writer.write(data)
+                })
             } else {
-                let headers = ["Content-Type": "image/jpeg"]
+                // 仮画像がキャッシュされると本物のサムネイルに置き換わらなくなるため no-store
+                let headers = ["Content-Type": "image/jpeg", "Cache-Control": "no-store"]
                 return .raw(202, "Accepted", headers, { writer in
                     try? writer.write(self.placeholderData)
                 })

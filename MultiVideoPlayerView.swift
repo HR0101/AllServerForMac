@@ -39,8 +39,8 @@ final class MultiVideoPlayerViewModel: ObservableObject {
         leadPlayerTimeObserver = leadPlayer.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
-            Task { @MainActor in
-                guard let self = self, !self.isSliderEditing else { return }
+            Task { @MainActor [weak self] in
+                guard let self, !self.isSliderEditing else { return }
                 self.commonCurrentTime = time.seconds
             }
         }
@@ -54,10 +54,12 @@ final class MultiVideoPlayerViewModel: ObservableObject {
         }
     }
 
+    var isPlaying: Bool { players.contains { $0.rate > 0 } }
+
     func playAll() { players.forEach { $0.play() } }
 
     func togglePlayPauseAll() {
-        if players.contains(where: { $0.rate > 0 }) {
+        if isPlaying {
             players.forEach { $0.pause() }
         } else {
             players.forEach { $0.play() }
@@ -124,6 +126,8 @@ struct MultiVideoPlayerView: View {
     @StateObject private var viewModel: MultiVideoPlayerViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @FocusState private var isFocused: Bool
+    @State private var showShortcutHelp = false
+    @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let videoCount: Int
 
     init(videos: [VideoItem], dataManager: VideoDataManager) {
@@ -131,10 +135,40 @@ struct MultiVideoPlayerView: View {
         self.videoCount = videos.count
     }
 
+    private var shortcutList: [(key: String, action: String)] {
+        _ = shortcutSettingsVersion
+        return MediaShortcutSettings.shortcutList(
+            for: [
+                .videoPlayPause,
+                .videoSeekBack10,
+                .videoSeekBack5,
+                .videoSeekForward5,
+                .videoSeekForward10,
+                .videoRandomSeek
+            ],
+            extraItems: [
+                ("0〜9", "0%〜90% の位置へ同時ジャンプ"),
+                ("?", "ショートカット一覧を表示"),
+                ("Esc", "プレイヤーを閉じる")
+            ]
+        )
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            grid
-            controls
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 0) {
+                grid
+                controls
+            }
+            PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                coordinator.close()
+            }
+            if showShortcutHelp {
+                ShortcutHelpPanel(title: "同時再生のショートカット", shortcuts: shortcutList) {
+                    showShortcutHelp = false
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -241,6 +275,17 @@ struct MultiVideoPlayerView: View {
 
     private var controls: some View {
         HStack {
+            Button {
+                viewModel.togglePlayPauseAll()
+            } label: {
+                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 16))
+                    .frame(width: 20)
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.isPlaying ? "一時停止（Space）" : "再生（Space）")
+            .accessibilityLabel(viewModel.isPlaying ? "一時停止" : "再生")
+
             Text(formatTime(viewModel.commonCurrentTime))
                 .font(.caption.monospacedDigit())
             Slider(value: $viewModel.commonCurrentTime, in: 0...max(viewModel.commonDuration, 0.1)) { isEditing in
@@ -260,20 +305,42 @@ struct MultiVideoPlayerView: View {
         }
         switch press.key {
         case .escape:
-            coordinator.close()
+            if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
+            return .handled
+        case "?":
+            showShortcutHelp.toggle()
             return .handled
         case .space:
-            if press.modifiers.contains(.option) { coordinator.close(); return .handled }
+            if press.modifiers.contains(.option) {
+                coordinator.close()
+                return .handled
+            }
+            break
+        default:
+            break
+        }
+
+        if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
             viewModel.togglePlayPauseAll()
             return .handled
-        case "r": viewModel.seekAllToRandomTime(); return .handled
-        case "h": viewModel.seekAll(by: -10); return .handled
-        case "j": viewModel.seekAll(by: -5); return .handled
-        case "k": viewModel.togglePlayPauseAll(); return .handled
-        case "l": viewModel.seekAll(by: 5); return .handled
-        case ";": viewModel.seekAll(by: 10); return .handled
-        default: return .ignored
+        } else if MediaShortcutSettings.matches(.videoRandomSeek, press: press) {
+            viewModel.seekAllToRandomTime()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack10, press: press) {
+            viewModel.seekAll(by: -10)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekBack5, press: press) {
+            viewModel.seekAll(by: -5)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward5, press: press) {
+            viewModel.seekAll(by: 5)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
+            viewModel.seekAll(by: 10)
+            return .handled
         }
+
+        return .ignored
     }
 
     private func formatTime(_ time: Double) -> String {

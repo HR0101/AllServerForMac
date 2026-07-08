@@ -2,11 +2,66 @@ import SwiftUI
 import AVFoundation
 import AppKit
 
+actor ThumbnailDecodeLimiter {
+    static let shared = ThumbnailDecodeLimiter(limit: 3)
+
+    private let limit: Int
+    private var runningCount = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    func acquire() async {
+        if runningCount < limit {
+            runningCount += 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            runningCount = max(0, runningCount - 1)
+        } else {
+            let continuation = waiters.removeFirst()
+            continuation.resume()
+        }
+    }
+}
+
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
     let dataManager: VideoDataManager
     @EnvironmentObject private var appSettings: AppSettings
     @State private var thumbnail: NSImage?
+
+    /// ディスクキャッシュの前段のプロセス共有メモリキャッシュ。
+    /// LazyVGrid でセルが画面外に出て戻るたびにディスクから再読込・再デコードするのを防ぐ。
+    private static let memoryCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = UserDefaults.standard.object(forKey: "thumbnailMemoryCacheLimit") as? Int ?? 600
+        return cache
+    }()
+
+    /// 詳細設定からキャッシュ上限を変更したときに即時反映するための入口。
+    static func updateMemoryCacheLimit(_ limit: Int) {
+        memoryCache.countLimit = max(100, limit)
+    }
+
+    /// 指定した動画IDのデコード済みサムネイルをメモリキャッシュから解放する。
+    /// アルバム画面を離れるときに呼び、他のアルバムを見ている間はそのアルバムの
+    /// デコード済み画像をメモリに残さないようにする（ディスクキャッシュ自体は消さないので、
+    /// 同じアルバムに戻ればすぐ再表示できる）。
+    static func evictFromMemoryCache<S: Sequence>(videoIDs: S) where S.Element == UUID {
+        for id in videoIDs {
+            memoryCache.removeObject(forKey: id.uuidString as NSString)
+        }
+    }
 
     var body: some View {
         Color.clear
@@ -16,7 +71,6 @@ struct MacVideoThumbnailView: View {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .scaledToFill()
-                        .transition(.opacity)
                 } else {
                     ZStack {
                         LinearGradient(
@@ -39,8 +93,8 @@ struct MacVideoThumbnailView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
-            .animation(.easeOut(duration: 0.25), value: thumbnail != nil)
+            // 影とフェードインアニメーションはセルごとにオフスクリーン描画・アニメーショントランザクションを発生させ、
+            // 大量枚数のグリッドではスクロールのカクつきに直結するため外している。
             .task { await generateThumbnail(forceRegenerate: false) }
             .onChange(of: appSettings.thumbnailOption) { _, _ in
                 guard videoItem.mediaType == .video else { return }
@@ -53,16 +107,24 @@ struct MacVideoThumbnailView: View {
     }
 
     private func generateThumbnail(forceRegenerate: Bool) async {
+        let cacheKey = videoItem.id.uuidString as NSString
         let cacheURL = dataManager.thumbnailStorageURL
             .appendingPathComponent(videoItem.id.uuidString)
             .appendingPathExtension("jpg")
 
         if !forceRegenerate {
-            let cached: NSImage? = await Task.detached(priority: .userInitiated) {
-                guard let data = try? Data(contentsOf: cacheURL) else { return nil }
-                return NSImage(data: data)
+            if let cached = Self.memoryCache.object(forKey: cacheKey) {
+                thumbnail = cached
+                return
+            }
+
+            let cached: NSImage? = await Task.detached(priority: .utility) {
+                await ThumbnailDecodeLimiter.shared.acquire()
+                defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+                return NSImage(contentsOf: cacheURL)
             }.value
             if let img = cached {
+                Self.memoryCache.setObject(img, forKey: cacheKey)
                 thumbnail = img
                 return
             }
@@ -78,15 +140,32 @@ struct MacVideoThumbnailView: View {
     }
 
     private func generatePhotoThumbnail(fileURL: URL, cacheURL: URL) async {
-        guard let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else { return }
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: 300,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return }
-        let nsImage = squareCropped(NSImage(cgImage: cgImage, size: .zero))
-        saveToCache(nsImage, url: cacheURL)
+        // 元画像の読み込み・デコード・切り抜き・JPEG書き出しは重い同期処理のため、
+        // メインスレッド（UIスレッド）をブロックしないようバックグラウンドで実行する。
+        let nsImage: NSImage? = await Task.detached(priority: .utility) {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+
+            let sourceOptions: [CFString: Any] = [
+                kCGImageSourceShouldCache: false
+            ]
+            guard let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions as CFDictionary) else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceThumbnailMaxPixelSize: 300,
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary),
+                  let cropped = squareCroppedCGImage(cgImage, side: 400) else { return nil }
+            if let data = jpegData(from: cropped, compression: 0.7) {
+                try? data.write(to: cacheURL)
+            }
+            return NSImage(cgImage: cropped, size: .zero)
+        }.value
+
+        guard let nsImage else { return }
+        Self.memoryCache.setObject(nsImage, forKey: videoItem.id.uuidString as NSString)
         thumbnail = nsImage
     }
 
@@ -124,34 +203,23 @@ struct MacVideoThumbnailView: View {
             }
         }
 
-        if let cgImage = bestImage ?? fallbackImage {
-            let nsImage = squareCropped(NSImage(cgImage: cgImage, size: .zero))
-            saveToCache(nsImage, url: cacheURL)
-            thumbnail = nsImage
-        }
-    }
+        guard let cgImage = bestImage ?? fallbackImage else { return }
 
-    /// 中央を正方形に切り抜いて指定サイズへリサイズする。
-    /// Web サーバー（WebServerManager.cropAndResize）と共有のキャッシュへ書き込むため、
-    /// クライアントに配信される .jpg が常に正方形になるよう揃える。
-    private func squareCropped(_ nsImage: NSImage, side: CGFloat = 400) -> NSImage {
-        let targetSize = CGSize(width: side, height: side)
-        let newImage = NSImage(size: targetSize)
-        newImage.lockFocus()
-        let originalSize = nsImage.size
-        let dim = min(originalSize.width, originalSize.height)
-        let x = (originalSize.width - dim) / 2
-        let y = (originalSize.height - dim) / 2
-        let cropRect = CGRect(x: x, y: y, width: dim, height: dim)
-        nsImage.draw(in: CGRect(origin: .zero, size: targetSize), from: cropRect, operation: .copy, fraction: 1.0)
-        newImage.unlockFocus()
-        return newImage
-    }
+        // 切り抜き・JPEG書き出しはバックグラウンドで実行する（AVAssetImageGenerator 自体は非同期だが、
+        // その後の後処理は同期処理でメインスレッドをブロックしうるため）。
+        let nsImage: NSImage? = await Task.detached(priority: .utility) {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
 
-    private func saveToCache(_ image: NSImage, url: URL) {
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { return }
-        try? data.write(to: url)
+            guard let cropped = squareCroppedCGImage(cgImage, side: 400) else { return nil }
+            if let data = jpegData(from: cropped, compression: 0.7) {
+                try? data.write(to: cacheURL)
+            }
+            return NSImage(cgImage: cropped, size: .zero)
+        }.value
+
+        guard let nsImage else { return }
+        Self.memoryCache.setObject(nsImage, forKey: videoItem.id.uuidString as NSString)
+        thumbnail = nsImage
     }
 }

@@ -6,9 +6,6 @@ enum NavigationSelection: Hashable {
     case favorites
     case trash
     case album(UUID)
-    case year(Int)
-    case month(Int, Int)
-    case faces
 }
 
 // MARK: - メインビュー
@@ -32,8 +29,13 @@ struct ContentView: View {
             // 再生中はライブラリ画面（サイドバー/ツールバー含む）ごとプレイヤーに差し替え、
             // 他のUIが前面に残らない完全な全画面にする（元アプリと同じ方式）。
             if let mode = coordinator.mode {
-                playerOverlay(for: mode)
-                    .ignoresSafeArea()
+                switch mode {
+                case .photos:
+                    playerOverlay(for: mode)
+                default:
+                    playerOverlay(for: mode)
+                        .ignoresSafeArea()
+                }
             } else {
                 libraryView
             }
@@ -54,12 +56,14 @@ struct ContentView: View {
             SlideshowPlayerView(videos: videos, dataManager: dataManager)
         case .splitPlay(let video, let splitCount):
             SplitVideoPlayerView(video: video, splitCount: splitCount, dataManager: dataManager)
+        case .photos(let playlist, let current):
+            PhotoViewerView(photos: playlist, current: current, dataManager: dataManager)
         }
     }
 
     private var libraryView: some View {
         NavigationSplitView {
-            MainSidebarView(dataManager: dataManager, selection: $selection)
+            MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
         } detail: {
             NavigationStack {
                 switch selection {
@@ -72,12 +76,6 @@ struct ContentView: View {
                 case .trash:
                     LibraryCategoryView(kind: .trash, dataManager: dataManager)
                         .navigationTitle("ゴミ箱")
-                case .year(let year):
-                    LibraryCategoryView(kind: .year(year), dataManager: dataManager)
-                        .navigationTitle("\(String(year))年")
-                case .month(let year, let month):
-                    LibraryCategoryView(kind: .month(year, month), dataManager: dataManager)
-                        .navigationTitle("\(String(year))年\(month)月")
                 case .album(let albumID):
                     if let album = dataManager.albums.first(where: { $0.id == albumID }) {
                         AlbumDetailView(album: album, dataManager: dataManager)
@@ -85,8 +83,6 @@ struct ContentView: View {
                     } else {
                         ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
                     }
-                case .faces:
-                    FaceGalleryView(dataManager: dataManager)
                 case .none:
                     ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                 }
