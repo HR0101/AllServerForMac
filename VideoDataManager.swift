@@ -199,22 +199,13 @@ struct DuplicateCheckResult {
     let failedHashCount: Int
 }
 
-private final class LinkedFolderMonitor {
-    let folderURL: URL
-    let source: DispatchSourceFileSystemObject
-    let fileDescriptor: Int32
-    let shouldStopAccessing: Bool
-
-    init(folderURL: URL, source: DispatchSourceFileSystemObject, fileDescriptor: Int32, shouldStopAccessing: Bool) {
-        self.folderURL = folderURL
-        self.source = source
-        self.fileDescriptor = fileDescriptor
-        self.shouldStopAccessing = shouldStopAccessing
-    }
-
-    func cancel() {
-        source.cancel()
-    }
+/// リンクフォルダの手動更新（ホーム画面のボタン）の進捗状態。VideoDataManager 本体とは別の
+/// ObservableObject に分離することで、スキャン中に更新される statusMessage が、写真・動画一覧を
+/// 表示する巨大なギャラリービュー（videos/albums を @Published で購読している側）まで
+/// 再描画させないようにする（DuplicateCheckStatus と同じ理由）。
+final class LinkedFolderScanStatus: ObservableObject {
+    @Published var isScanning = false
+    @Published var statusMessage = ""
 }
 
 /// 自動重複チェックの進捗状態。VideoDataManager 本体とは別の ObservableObject に分離することで、
@@ -325,9 +316,11 @@ class VideoDataManager: ObservableObject {
     private var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     private var isGeneratingProxy = false
     private var duplicateAutoCheckTask: Task<Void, Never>?
-    private var linkedFolderMonitors: [UUID: LinkedFolderMonitor] = [:]
     private var linkedFolderScanTasks: [UUID: Task<Void, Never>] = [:]
-    private var linkedFolderPeriodicScanTask: Task<Void, Never>?
+
+    /// リンクフォルダの手動更新（ホーム画面のボタン）の進捗。ギャラリーを巻き込んで
+    /// 再描画しないよう本体とは別の ObservableObject に分離している。
+    let linkedFolderScanStatus = LinkedFolderScanStatus()
 
     // key: "<videoID>_<quality>", 値: 0...1 の進捗、nil = 生成していない
     private var proxyProgressMap: [String: Double] = [:]
@@ -405,13 +398,14 @@ class VideoDataManager: ObservableObject {
             runAutomaticMissingFileCleanup()
         }
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
-        startLinkedFolderPeriodicScan()
+        // リンクフォルダの取り込みは、60秒ごとの自動ポーリング＋ファイル監視をやめ、
+        // ホーム画面の「リンクフォルダを更新」ボタンによる手動実行に切り替えた。
+        // 件数が多いと自動スキャンがメインスレッドを圧迫してUIがカクつくため。
 
         // 保存はデバウンスされているため、終了時に保留中の分を確実に書き込む
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.stopLinkedFolderMonitoring()
+                self?.cancelPendingLinkedFolderScans()
                 self?.flushPendingSave()
             }
         }
@@ -1124,7 +1118,6 @@ class VideoDataManager: ObservableObject {
             onItemProcessed: onItemProcessed
         )
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
     }
 
     func linkFolder(
@@ -1145,7 +1138,6 @@ class VideoDataManager: ObservableObject {
             onItemProcessed: onItemProcessed
         )
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
     }
 
     func rescanLinkedFolder(
@@ -1169,7 +1161,6 @@ class VideoDataManager: ObservableObject {
         albums[index].linkedFolderPath = folderURL.path
         albums[index].linkedFolderBookmarkData = bookmarkData(for: folderURL)
         saveData()
-        startLinkedFolderMonitoring()
     }
 
     private func existingOrCreateAlbumID(name: String, type: AlbumType, preferredID: UUID? = nil) -> UUID? {
@@ -1466,82 +1457,41 @@ class VideoDataManager: ObservableObject {
         }
     }
 
-    private func scanAllLinkedFolders() async {
-        let linkedAlbumIDs = albums
-            .filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
-            .map(\.id)
-        for albumID in linkedAlbumIDs {
-            if Task.isCancelled { return }
-            await scanLinkedFolder(albumID: albumID)
-        }
+    /// 現在フォルダに紐づいているアルバムの件数（ホーム画面の手動更新カードで使う）。
+    var linkedFolderCount: Int {
+        albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }.count
     }
 
-    private func startLinkedFolderPeriodicScan() {
-        guard linkedFolderPeriodicScanTask == nil else { return }
-        linkedFolderPeriodicScanTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
-                guard !Task.isCancelled else { return }
-                await self?.scanAllLinkedFolders()
-            }
-        }
-    }
-
-    private func startLinkedFolderMonitoring() {
+    /// ホーム画面の「リンクフォルダを更新」ボタンから呼ぶ。紐づけ済みフォルダを1つずつ
+    /// 再スキャンし、Finder側で追加された新規メディアを取り込む。
+    /// 以前は60秒ごとの自動ポーリング＋ファイル監視で自動更新していたが、件数が多いと
+    /// メインスレッドを圧迫してUIがカクつくため、この明示的な手動実行に切り替えた。
+    func rescanAllLinkedFolders() async {
+        guard !linkedFolderScanStatus.isScanning else { return }
         let linkedAlbums = albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
-        let activeIDs = Set(linkedAlbums.map(\.id))
-
-        let obsoleteMonitorIDs = linkedFolderMonitors.keys.filter { !activeIDs.contains($0) }
-        for albumID in obsoleteMonitorIDs {
-            linkedFolderMonitors[albumID]?.cancel()
-            linkedFolderMonitors[albumID] = nil
+        guard !linkedAlbums.isEmpty else {
+            linkedFolderScanStatus.statusMessage = "リンクされたフォルダはありません。"
+            return
         }
 
-        for album in linkedAlbums where linkedFolderMonitors[album.id] == nil {
-            guard let folderURL = resolvedLinkedFolderURL(for: album) else { continue }
-            let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
-            let fd = open(folderURL.path, O_EVTONLY)
-            guard fd >= 0 else {
-                if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() }
-                continue
-            }
+        linkedFolderScanStatus.isScanning = true
+        linkedFolderScanStatus.statusMessage = "更新を開始しています…"
 
-            let source = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: fd,
-                eventMask: [.write, .extend, .attrib, .link, .rename, .delete],
-                queue: DispatchQueue.global(qos: .utility)
-            )
-            let albumID = album.id
-            source.setEventHandler { [weak self] in
-                Task { @MainActor in
-                    self?.scheduleLinkedFolderScan(albumID: albumID)
-                }
-            }
-            source.setCancelHandler {
-                close(fd)
-                if shouldStopAccessing {
-                    folderURL.stopAccessingSecurityScopedResource()
-                }
-            }
-
-            linkedFolderMonitors[album.id] = LinkedFolderMonitor(
-                folderURL: folderURL,
-                source: source,
-                fileDescriptor: fd,
-                shouldStopAccessing: shouldStopAccessing
-            )
-            source.resume()
-            scheduleLinkedFolderScan(albumID: album.id, delayNanoseconds: 500_000_000)
+        var scanned = 0
+        for album in linkedAlbums {
+            scanned += 1
+            linkedFolderScanStatus.statusMessage = "「\(album.name)」を確認中…（\(scanned)/\(linkedAlbums.count)）"
+            await scanLinkedFolder(albumID: album.id)
         }
+
+        linkedFolderScanStatus.isScanning = false
+        linkedFolderScanStatus.statusMessage = "\(linkedAlbums.count)件のフォルダを更新しました。"
     }
 
-    private func stopLinkedFolderMonitoring() {
-        linkedFolderPeriodicScanTask?.cancel()
-        linkedFolderPeriodicScanTask = nil
+    /// 予約済みの単発スキャン（フォルダ紐づけ直後などに走るもの）を取り消す。アプリ終了時に呼ぶ。
+    private func cancelPendingLinkedFolderScans() {
         linkedFolderScanTasks.values.forEach { $0.cancel() }
         linkedFolderScanTasks.removeAll()
-        linkedFolderMonitors.values.forEach { $0.cancel() }
-        linkedFolderMonitors.removeAll()
     }
 
     func scanFolder(folderURL: URL) -> (videoCount: Int, photoCount: Int) {
@@ -1976,7 +1926,6 @@ class VideoDataManager: ObservableObject {
         albums.removeAll { deletableIDs.contains($0.id) }
         saveData()
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
     }
     func moveVideos(videoIDs: [UUID], from sourceAlbumID: UUID, to targetAlbumID: UUID) { guard albums.contains(where: { $0.id == targetAlbumID }) else { return }; if let sourceIndex = albums.firstIndex(where: { $0.id == sourceAlbumID }), albums[sourceIndex].name != VideoDataManager.allVideosAlbumName, albums[sourceIndex].name != VideoDataManager.allPhotosAlbumName { albums[sourceIndex].videoIDs.removeAll { videoIDs.contains($0) } }; if let targetIndex = albums.firstIndex(where: { $0.id == targetAlbumID }) { let existingIDs = Set(albums[targetIndex].videoIDs); let newIDs = videoIDs.filter { !existingIDs.contains($0) }; albums[targetIndex].videoIDs.append(contentsOf: newIDs) }; saveData() }
 

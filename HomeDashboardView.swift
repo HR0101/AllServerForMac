@@ -7,6 +7,7 @@ struct HomeView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
     @ObservedObject private var duplicateCheckStatus: DuplicateCheckStatus
+    @ObservedObject private var linkedFolderScanStatus: LinkedFolderScanStatus
     @StateObject private var systemMonitor = SystemMonitor()
 
     @State private var isShowingAccessLog = false
@@ -19,6 +20,7 @@ struct HomeView: View {
         self.dataManager = dataManager
         self.webServerManager = webServerManager
         self.duplicateCheckStatus = dataManager.duplicateCheckStatus
+        self.linkedFolderScanStatus = dataManager.linkedFolderScanStatus
     }
 
     var body: some View {
@@ -32,6 +34,7 @@ struct HomeView: View {
                     scheduleCard
                     resourcesCard
                     duplicateCheckCard
+                    linkedFolderCard
                     if !dataManager.linkedFolderConflicts.isEmpty {
                         linkedFolderConflictCard
                     }
@@ -101,6 +104,60 @@ struct HomeView: View {
 
             duplicateAlbumList(title: "未チェック", albums: uncheckedAlbums, emptyMessage: "未チェックのアルバムはありません。")
             duplicateAlbumList(title: "チェック済み", albums: checkedAlbums, emptyMessage: "チェック済みのアルバムはありません。")
+        }
+        .dashboardCard()
+    }
+
+    // MARK: リンクフォルダ更新カード
+    private var linkedFolderCard: some View {
+        let count = dataManager.linkedFolderCount
+        return VStack(alignment: .leading, spacing: 12) {
+            CardHeader(icon: "folder.badge.gearshape", tint: .cyan, title: "リンクフォルダ", subtitle: "Finderフォルダとの同期")
+
+            SettingRow(label: "リンク中のフォルダ") {
+                Text("\(count)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .monospacedDigit()
+            }
+
+            Text("紐づけたフォルダに追加・削除したメディアは、下のボタンを押したときに取り込まれます。")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if linkedFolderScanStatus.isScanning {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(linkedFolderScanStatus.statusMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            } else if !linkedFolderScanStatus.statusMessage.isEmpty {
+                Text(linkedFolderScanStatus.statusMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            Button {
+                Task { await dataManager.rescanAllLinkedFolders() }
+            } label: {
+                Label("リンクフォルダを更新", systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.cyan)
+            .disabled(linkedFolderScanStatus.isScanning || count == 0)
+
+            if count == 0 {
+                Text("フォルダを紐づけるには、アルバムを開いてツールバーの「フォルダ紐づけ」を使ってください。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .dashboardCard()
     }
