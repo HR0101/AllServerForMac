@@ -317,6 +317,7 @@ class VideoDataManager: ObservableObject {
     private var isGeneratingProxy = false
     private var duplicateAutoCheckTask: Task<Void, Never>?
     private var linkedFolderScanTasks: [UUID: Task<Void, Never>] = [:]
+    private var initialLinkedFolderScanTask: Task<Void, Never>?
 
     /// リンクフォルダの手動更新（ホーム画面のボタン）の進捗。ギャラリーを巻き込んで
     /// 再描画しないよう本体とは別の ObservableObject に分離している。
@@ -401,6 +402,9 @@ class VideoDataManager: ObservableObject {
         // リンクフォルダの取り込みは、60秒ごとの自動ポーリング＋ファイル監視をやめ、
         // ホーム画面の「リンクフォルダを更新」ボタンによる手動実行に切り替えた。
         // 件数が多いと自動スキャンがメインスレッドを圧迫してUIがカクつくため。
+        // ただし、アプリを閉じている間にFinder側で増減したメディアを反映するため、
+        // 起動時だけは一度自動スキャンする（以降の更新は手動ボタン）。
+        startInitialLinkedFolderScan()
 
         // 保存はデバウンスされているため、終了時に保留中の分を確実に書き込む
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -1462,6 +1466,17 @@ class VideoDataManager: ObservableObject {
         albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }.count
     }
 
+    /// 起動時に一度だけリンクフォルダを自動スキャンする。起動直後のUI描画や他の初期化処理と
+    /// 競合しないよう数秒待ってから実行し、以降は自動スキャンしない（更新は手動ボタン）。
+    /// リンクフォルダが無い場合は何もしない（ホーム画面に不要な状態メッセージを出さないため）。
+    private func startInitialLinkedFolderScan() {
+        initialLinkedFolderScanTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self, !Task.isCancelled, self.linkedFolderCount > 0 else { return }
+            await self.rescanAllLinkedFolders()
+        }
+    }
+
     /// ホーム画面の「リンクフォルダを更新」ボタンから呼ぶ。紐づけ済みフォルダを1つずつ
     /// 再スキャンし、Finder側で追加された新規メディアを取り込む。
     /// 以前は60秒ごとの自動ポーリング＋ファイル監視で自動更新していたが、件数が多いと
@@ -1488,8 +1503,10 @@ class VideoDataManager: ObservableObject {
         linkedFolderScanStatus.statusMessage = "\(linkedAlbums.count)件のフォルダを更新しました。"
     }
 
-    /// 予約済みの単発スキャン（フォルダ紐づけ直後などに走るもの）を取り消す。アプリ終了時に呼ぶ。
+    /// 予約済みの単発スキャン（起動時の初回スキャン・フォルダ紐づけ直後などに走るもの）を取り消す。アプリ終了時に呼ぶ。
     private func cancelPendingLinkedFolderScans() {
+        initialLinkedFolderScanTask?.cancel()
+        initialLinkedFolderScanTask = nil
         linkedFolderScanTasks.values.forEach { $0.cancel() }
         linkedFolderScanTasks.removeAll()
     }
