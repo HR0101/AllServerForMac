@@ -243,6 +243,9 @@ struct MainSidebarView: View {
             }
         }
         .listStyle(SidebarListStyle())
+        .scrollContentBackground(.hidden)
+        .background(CommandDeckBackground())
+        .tint(DS.cyan)
         .onAppear {
             refreshSidebarCaches()
             revealSelectedAlbumInSidebar()
@@ -298,11 +301,12 @@ struct MainSidebarView: View {
     private func sidebarRowLabel(_ title: String, systemImage: String, count: Int) -> some View {
         HStack {
             Label(title, systemImage: systemImage)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
             Spacer()
             Text("\(count)")
-                .font(.caption)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.cyan.opacity(0.75))
         }
     }
 

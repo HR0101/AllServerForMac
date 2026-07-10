@@ -57,6 +57,9 @@ final class AppSettings: ObservableObject {
     @Published var showTitles: Bool {
         didSet { defaults.set(showTitles, forKey: Keys.showTitles) }
     }
+    @Published var showImportDates: Bool {
+        didSet { defaults.set(showImportDates, forKey: Keys.showImportDates) }
+    }
 
     private let defaults = UserDefaults.standard
     private enum Keys {
@@ -65,6 +68,7 @@ final class AppSettings: ObservableObject {
         static let sortOrder = "library.sortOrder"
         static let columnCount = "library.columnCount"
         static let showTitles = "library.showTitles"
+        static let showImportDates = "library.showImportDates"
     }
 
     init() {
@@ -73,7 +77,11 @@ final class AppSettings: ObservableObject {
         self.customThumbnailTime = d.object(forKey: Keys.customThumbnailTime) as? TimeInterval ?? 60
         self.sortOrder = (d.string(forKey: Keys.sortOrder).flatMap(SortOrder.init)) ?? .byImport
         self.columnCount = d.object(forKey: Keys.columnCount) as? Double ?? 5
-        self.showTitles = d.object(forKey: Keys.showTitles) as? Bool ?? true
+        let savedShowTitles = d.object(forKey: Keys.showTitles) as? Bool ?? true
+        self.showTitles = savedShowTitles
+        // 既存の「タイトルを表示」がオフなら，従来は日付も非表示だったため，
+        // 新しい日付設定がまだ保存されていない場合は同じ状態を引き継ぐ。
+        self.showImportDates = d.object(forKey: Keys.showImportDates) as? Bool ?? savedShowTitles
     }
 }
 

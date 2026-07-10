@@ -62,31 +62,39 @@ struct ContentView: View {
     }
 
     private var libraryView: some View {
-        NavigationSplitView {
-            MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
-        } detail: {
-            NavigationStack {
-                switch selection {
-                case .home:
-                    HomeView(dataManager: dataManager, webServerManager: webServerManager)
-                        .navigationTitle("ホーム")
-                case .favorites:
-                    LibraryCategoryView(kind: .favorites, dataManager: dataManager)
-                        .navigationTitle("お気に入り")
-                case .trash:
-                    LibraryCategoryView(kind: .trash, dataManager: dataManager)
-                        .navigationTitle("ゴミ箱")
-                case .album(let albumID):
-                    if let album = dataManager.albums.first(where: { $0.id == albumID }) {
-                        AlbumDetailView(album: album, dataManager: dataManager)
-                            .navigationTitle(album.name)
-                    } else {
-                        ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
+        ZStack {
+            // ツールバーの背後まで同じ背景を広げ，フルスクリーン時の色の段差をなくす。
+            CommandDeckBackground()
+
+            NavigationSplitView {
+                MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
+            } detail: {
+                NavigationStack {
+                    switch selection {
+                    case .home:
+                        HomeView(dataManager: dataManager, webServerManager: webServerManager)
+                            .navigationTitle("ホーム")
+                    case .favorites:
+                        LibraryCategoryView(kind: .favorites, dataManager: dataManager)
+                            .navigationTitle("お気に入り")
+                    case .trash:
+                        LibraryCategoryView(kind: .trash, dataManager: dataManager)
+                            .navigationTitle("ゴミ箱")
+                    case .album(let albumID):
+                        if let album = dataManager.albums.first(where: { $0.id == albumID }) {
+                            AlbumDetailView(album: album, dataManager: dataManager)
+                                .navigationTitle(album.name)
+                        } else {
+                            ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
+                        }
+                    case .none:
+                        ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                     }
-                case .none:
-                    ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                 }
             }
         }
+        .tint(DS.cyan)
+        .preferredColorScheme(.dark)
+        .toolbarBackground(.hidden, for: .windowToolbar)
     }
 }

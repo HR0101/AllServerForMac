@@ -249,7 +249,14 @@ struct VideoPlayerView: View {
         ZStack(alignment: .trailing) {
             ZStack {
                 Color.black
-                PlayerContainerView(player: viewModel.player)
+                // 左上にはアプリ独自の「ヘルプ／閉じる」操作を配置しているため、
+                // AVKit標準のPiP／フルスクリーン操作を非表示にして重なりを防ぐ。
+                // 再生・シークなどのインラインコントロールはそのまま使用する。
+                PlayerContainerView(
+                    player: viewModel.player,
+                    showsFullScreenToggleButton: false,
+                    allowsPictureInPicturePlayback: false
+                )
             }
             sidebar
 

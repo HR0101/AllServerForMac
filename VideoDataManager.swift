@@ -205,6 +205,15 @@ struct DuplicateCheckResult {
 /// 再描画させないようにする（DuplicateCheckStatus と同じ理由）。
 final class LinkedFolderScanStatus: ObservableObject {
     @Published var isScanning = false
+    /// これまでに確認し終えたフォルダ数（進捗バーの分子）。
+    @Published var processedCount = 0
+    /// 今回の更新で対象になったフォルダ総数（進捗バーの分母）。
+    @Published var totalCount = 0
+    /// 現在スキャン中のフォルダ（アルバム）名。
+    @Published var currentFolderName: String?
+    /// 現在のフォルダで新しく取り込んだメディア件数（単一フォルダでも進捗が動いて見えるように）。
+    @Published var processedItemsInCurrentFolder = 0
+    /// スキャン完了後などに表示するメッセージ。
     @Published var statusMessage = ""
 }
 
@@ -486,18 +495,48 @@ class VideoDataManager: ObservableObject {
     /// 画面の再描画のたびに呼ぶのではなく、この関数を低頻度（自動チェックループやチェック完了時）で呼んで
     /// 結果をキャッシュする。
     private func refreshDuplicateCheckAlbumCaches() {
-        let target = duplicateCheckTargetAlbums
-        duplicateCheckStatus.checkedAlbums = target.filter { !albumNeedsDuplicateCheck($0) }
-        duplicateCheckStatus.uncheckedAlbums = target.filter { albumNeedsDuplicateCheck($0) }
+        // trashedIDs / activeIDs をここで1回だけ作り、全アルバムで使い回す。
+        // 以前はアルバムごとに albumNeedsDuplicateCheck → duplicateCheckSignature が
+        // videos 全件を走査して trashedIDs を作り直し、さらに checked/unchecked で2回フィルタしていたため、
+        // O(アルバム数 × ライブラリ全件 × 2) のコストが30秒ごとにメインスレッドで走り、周期的な引っかかりの原因になっていた。
+        var trashedIDs = Set<UUID>()
+        var activeIDs = Set<UUID>()
+        for video in videos {
+            if video.isInTrash { trashedIDs.insert(video.id) } else { activeIDs.insert(video.id) }
+        }
+
+        var checked: [Album] = []
+        var unchecked: [Album] = []
+        for album in albums {
+            guard album.name != Self.allVideosAlbumName,
+                  album.name != Self.allPhotosAlbumName,
+                  album.videoIDs.contains(where: { activeIDs.contains($0) }) else { continue }
+            if albumNeedsDuplicateCheck(album, trashedIDs: trashedIDs) {
+                unchecked.append(album)
+            } else {
+                checked.append(album)
+            }
+        }
+        duplicateCheckStatus.checkedAlbums = checked
+        duplicateCheckStatus.uncheckedAlbums = unchecked
     }
 
     func albumNeedsDuplicateCheck(_ album: Album) -> Bool {
+        albumNeedsDuplicateCheck(album, trashedIDs: Set(videos.filter { $0.isInTrash }.map { $0.id }))
+    }
+
+    /// trashedIDs を呼び出し側で1回だけ計算して渡す版。多数のアルバムを一括判定する
+    /// refreshDuplicateCheckAlbumCaches から使い、アルバムごとに videos 全件を走査し直すのを避ける。
+    private func albumNeedsDuplicateCheck(_ album: Album, trashedIDs: Set<UUID>) -> Bool {
         guard let state = duplicateCheckStates[album.id] else { return true }
-        return state.albumSignature != duplicateCheckSignature(for: album)
+        return state.albumSignature != duplicateCheckSignature(for: album, trashedIDs: trashedIDs)
     }
 
     private func duplicateCheckSignature(for album: Album) -> String {
-        let trashedIDs = Set(videos.filter { $0.isInTrash }.map { $0.id })
+        duplicateCheckSignature(for: album, trashedIDs: Set(videos.filter { $0.isInTrash }.map { $0.id }))
+    }
+
+    private func duplicateCheckSignature(for album: Album, trashedIDs: Set<UUID>) -> String {
         let mediaSignature = album.videoIDs
             .filter { !trashedIDs.contains($0) }
             .map { $0.uuidString }
@@ -522,29 +561,38 @@ class VideoDataManager: ObservableObject {
 
             while !Task.isCancelled {
                 guard let self else { return }
-                self.refreshDuplicateCheckAlbumCaches()
 
                 if !self.isAutoDuplicateCheckEnabled {
-                    self.duplicateCheckStatus.isAutoChecking = false
-                    self.duplicateCheckStatus.currentAlbumName = nil
-                    self.duplicateCheckStatus.progress = 0
-                    self.duplicateCheckStatus.statusMessage = "自動チェックはオフです"
-                } else if !self.isDuplicateCheckRunning, let album = self.duplicateUncheckedAlbums.first {
-                    self.duplicateCheckStatus.isAutoChecking = true
-                    self.duplicateCheckStatus.currentAlbumName = album.name
-                    self.duplicateCheckStatus.progress = 0
-                    self.duplicateCheckStatus.statusMessage = "「\(album.name)」を確認中"
-
-                    _ = await self.removeDuplicateMedia(in: album.id) { current, total in
-                        self.duplicateCheckStatus.progress = total == 0 ? 0 : Double(current) / Double(total)
+                    // 自動チェックがオフのときは、重い署名計算（refreshDuplicateCheckAlbumCaches）を
+                    // 一切行わずにアイドルする。以前はオフでも毎ループ先頭で refresh を呼んでいたため、
+                    // オフにしても30秒ごとにライブラリ全件走査が走り、UIが定期的に引っかかっていた。
+                    // 状態表示は初回に一度だけ更新すれば足りるので、既にオフ表示なら何もしない。
+                    if self.duplicateCheckStatus.statusMessage != "自動チェックはオフです" {
+                        self.duplicateCheckStatus.isAutoChecking = false
+                        self.duplicateCheckStatus.currentAlbumName = nil
+                        self.duplicateCheckStatus.progress = 0
+                        self.duplicateCheckStatus.statusMessage = "自動チェックはオフです"
                     }
-
-                    self.duplicateCheckStatus.isAutoChecking = false
-                    self.duplicateCheckStatus.currentAlbumName = nil
-                    self.duplicateCheckStatus.progress = 0
-                    self.duplicateCheckStatus.statusMessage = self.duplicateUncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
                 } else {
-                    self.duplicateCheckStatus.statusMessage = self.duplicateUncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
+                    self.refreshDuplicateCheckAlbumCaches()
+
+                    if !self.isDuplicateCheckRunning, let album = self.duplicateCheckStatus.uncheckedAlbums.first {
+                        self.duplicateCheckStatus.isAutoChecking = true
+                        self.duplicateCheckStatus.currentAlbumName = album.name
+                        self.duplicateCheckStatus.progress = 0
+                        self.duplicateCheckStatus.statusMessage = "「\(album.name)」を確認中"
+
+                        _ = await self.removeDuplicateMedia(in: album.id) { current, total in
+                            self.duplicateCheckStatus.progress = total == 0 ? 0 : Double(current) / Double(total)
+                        }
+
+                        self.duplicateCheckStatus.isAutoChecking = false
+                        self.duplicateCheckStatus.currentAlbumName = nil
+                        self.duplicateCheckStatus.progress = 0
+                        self.duplicateCheckStatus.statusMessage = self.duplicateCheckStatus.uncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
+                    } else {
+                        self.duplicateCheckStatus.statusMessage = self.duplicateCheckStatus.uncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
+                    }
                 }
 
                 let intervalSeconds = UInt64(max(10, self.duplicateCheckIntervalSeconds))
@@ -553,6 +601,45 @@ class VideoDataManager: ObservableObject {
         }
     }
     
+    /// ホーム画面の「今すぐすべてチェック」ボタン用。対象アルバムをまとめて一括で重複チェックする。
+    /// 自動チェックのオン/オフとは独立して動くので、自動チェックをオフにしていてもこのボタンで実行できる。
+    /// 30秒ごとに1アルバムずつ処理する自動モードに対して、これは押した瞬間に全アルバムをまとめて処理する。
+    func checkAllAlbumsForDuplicatesNow() async {
+        guard !isDuplicateCheckRunning else { return }
+
+        let targets = duplicateCheckTargetAlbums
+        guard !targets.isEmpty else {
+            duplicateCheckStatus.statusMessage = "対象アルバムはありません"
+            return
+        }
+
+        isDuplicateCheckRunning = true
+        duplicateCheckStatus.isAutoChecking = true
+        duplicateCheckStatus.progress = 0
+
+        let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
+        for (index, album) in targets.enumerated() {
+            duplicateCheckStatus.currentAlbumName = album.name
+            duplicateCheckStatus.statusMessage = "「\(album.name)」を確認中（\(index + 1)/\(targets.count)）"
+            duplicateCheckStatus.progress = 0
+
+            let targetItems = album.videoIDs.compactMap { itemsByID[$0] }.filter { !$0.isInTrash }
+            _ = await runDuplicateScan(targetItems: targetItems) { current, total in
+                self.duplicateCheckStatus.progress = total == 0 ? 0 : Double(current) / Double(total)
+            }
+            markDuplicateCheckCompleted(for: album.id)
+        }
+
+        saveData()
+
+        isDuplicateCheckRunning = false
+        duplicateCheckStatus.isAutoChecking = false
+        duplicateCheckStatus.currentAlbumName = nil
+        duplicateCheckStatus.progress = 0
+        refreshDuplicateCheckAlbumCaches()
+        duplicateCheckStatus.statusMessage = "すべて確認済み"
+    }
+
     func removeDuplicateVideos() async -> Int {
         let result = await removeDuplicateMedia(in: nil)
         cleanUpOrphanedFiles()
@@ -1489,18 +1576,31 @@ class VideoDataManager: ObservableObject {
             return
         }
 
-        linkedFolderScanStatus.isScanning = true
-        linkedFolderScanStatus.statusMessage = "更新を開始しています…"
+        let beforeCount = videos.count
 
-        var scanned = 0
+        linkedFolderScanStatus.isScanning = true
+        linkedFolderScanStatus.totalCount = linkedAlbums.count
+        linkedFolderScanStatus.processedCount = 0
+        linkedFolderScanStatus.currentFolderName = nil
+        linkedFolderScanStatus.processedItemsInCurrentFolder = 0
+        linkedFolderScanStatus.statusMessage = ""
+
         for album in linkedAlbums {
-            scanned += 1
-            linkedFolderScanStatus.statusMessage = "「\(album.name)」を確認中…（\(scanned)/\(linkedAlbums.count)）"
-            await scanLinkedFolder(albumID: album.id)
+            linkedFolderScanStatus.currentFolderName = album.name
+            linkedFolderScanStatus.processedItemsInCurrentFolder = 0
+            await scanLinkedFolder(albumID: album.id) { [weak self] in
+                self?.linkedFolderScanStatus.processedItemsInCurrentFolder += 1
+            }
+            linkedFolderScanStatus.processedCount += 1
         }
 
+        let imported = max(0, videos.count - beforeCount)
         linkedFolderScanStatus.isScanning = false
-        linkedFolderScanStatus.statusMessage = "\(linkedAlbums.count)件のフォルダを更新しました。"
+        linkedFolderScanStatus.currentFolderName = nil
+        linkedFolderScanStatus.processedItemsInCurrentFolder = 0
+        linkedFolderScanStatus.statusMessage = imported > 0
+            ? "\(linkedAlbums.count)件のフォルダを更新し、\(imported)件の新しいメディアを取り込みました。"
+            : "\(linkedAlbums.count)件のフォルダを更新しました（新規メディアはありません）。"
     }
 
     /// 予約済みの単発スキャン（起動時の初回スキャン・フォルダ紐づけ直後などに走るもの）を取り消す。アプリ終了時に呼ぶ。
