@@ -66,6 +66,19 @@ struct MainSidebarView: View {
     @State private var cachedTrashedVideoIDs: Set<UUID> = []
     @State private var cachedVideoAlbumNodes: [SidebarAlbumNode] = []
     @State private var cachedPhotoAlbumNodes: [SidebarAlbumNode] = []
+    private let sidebarContentPadding: CGFloat = 10
+    private let sidebarTopPadding: CGFloat = 42
+    private let sidebarRowHeight: CGFloat = 28
+    private let sidebarRowCornerRadius: CGFloat = 7
+    private let sidebarIconWidth: CGFloat = 16
+
+    // サイドバー行の横幅。`.frame(maxWidth: .infinity)` や HStack 内の `Spacer`、
+    // `.overlay(alignment:)`、GeometryReader での実測、DisclosureGroup など、
+    // 「利用可能な幅いっぱいに広げる」系のAPIを使うと、このビルド環境ではなぜか
+    // 行の中身（アイコン・文字）が描画位置ごと画面外に飛んでしまう現象があった。
+    // そのため、ContentView 側で決めているサイドバー列の幅（300〜360pt、標準320pt）に
+    // 合わせた固定値を `.frame(width:)` に渡すことで回避している。
+    private let sidebarRowWidth: CGFloat = 300
 
     /// 展開中のフォルダ（動画/画像ツリーで独立させるため dropKey と同じキーを使う）。
     /// DisclosureGroup 標準の「＞」は当たり判定が小さいため、タイトルをクリックしても
@@ -74,30 +87,35 @@ struct MainSidebarView: View {
 
     var body: some View {
         ZStack {
+            CommandDeckBackground()
             sidebarList
             if isSidebarTargeted {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.08))
+                    .fill(NeomorphicTheme.accent.opacity(0.08))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                            .strokeBorder(NeomorphicTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
                     )
                     .padding(6)
                     .allowsHitTesting(false)
             }
             if isExportingFromSidebar {
-                Color.black.opacity(0.6).ignoresSafeArea()
+                NeomorphicTheme.ink.opacity(0.18).ignoresSafeArea()
                 VStack(spacing: 12) {
                     ProgressView()
                         .progressViewStyle(.circular)
-                        .tint(.white)
+                        .tint(NeomorphicTheme.accent)
                     Text("エクスポート中... \(sidebarExportCurrent) / \(sidebarExportTotal)")
-                        .foregroundColor(.white)
+                        .foregroundColor(NeomorphicTheme.ink)
                         .font(.caption)
                 }
                 .padding()
-                .background(.thickMaterial)
-                .cornerRadius(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(NeomorphicTheme.surface)
+                        .shadow(color: .white.opacity(0.9), radius: 7, x: -5, y: -5)
+                        .shadow(color: NeomorphicTheme.shadow.opacity(0.3), radius: 12, x: 7, y: 7)
+                )
             }
         }
         .alert("エクスポート完了", isPresented: $showSidebarExportResultAlert) {
@@ -146,15 +164,19 @@ struct MainSidebarView: View {
     }
 
     private var albumSectionHeader: some View {
-        HStack {
+        HStack(spacing: 0) {
             Text("アルバム")
-            Spacer()
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(NeomorphicTheme.muted)
+                .padding(.leading, 10)
+                .frame(width: sidebarRowWidth - 60, alignment: .leading)
             albumSectionHeaderButtons
+                .frame(width: 60, alignment: .trailing)
         }
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(dropTargetFolderID == "" ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(dropTargetFolderID == "" ? NeomorphicTheme.accent.opacity(0.12) : Color.clear)
         )
         // フォルダの外（ルート）へドラッグして戻すためのドロップ領域
         .dropDestination(for: AlbumDragPayload.self) { payloads, _ in
@@ -202,50 +224,47 @@ struct MainSidebarView: View {
     }
 
     private var sidebarList: some View {
-        List(selection: $selection) {
-            Section {
-                NavigationLink(value: NavigationSelection.home) {
-                    Label("ホーム", systemImage: "house.fill")
-                }
-            }
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 10) {
+                sidebarNavigationButton(.home, title: "ホーム", systemImage: "house.fill")
 
-            Section(header: Text("ライブラリ")) {
+                VStack(alignment: .leading, spacing: 5) {
+                    sidebarSectionTitle("ライブラリ")
+
                 if let allVideos = dataManager.albums.first(where: { $0.name == VideoDataManager.allVideosAlbumName }) {
-                    NavigationLink(value: NavigationSelection.album(allVideos.id)) {
-                        sidebarRowLabel("すべての動画", systemImage: "film.stack", count: nonTrashedCount(in: allVideos))
-                    }
+                    sidebarNavigationButton(.album(allVideos.id), title: "すべての動画", systemImage: "film.stack", count: nonTrashedCount(in: allVideos))
                 }
                 if let allPhotos = dataManager.albums.first(where: { $0.name == VideoDataManager.allPhotosAlbumName }) {
-                    NavigationLink(value: NavigationSelection.album(allPhotos.id)) {
-                        sidebarRowLabel("すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
+                    sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
+                }
+                    sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
+                    sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    albumSectionHeader
+
+                    // 動画アルバムと画像アルバムは別々のツリーとして棲み分ける
+                    // （フォルダはアルバム名の "/" 区切りだけで表現されるため、混在すると
+                    // 同名フォルダで動画と画像が同じ階層に混ざって見えてしまう）。
+                    // ツリー自体は cachedVideoAlbumNodes / cachedPhotoAlbumNodes （refreshSidebarCaches() で更新）を使う。
+                    ForEach(cachedVideoAlbumNodes) { node in
+                        sidebarAlbumNodeRow(node, isPhotoTree: false)
+                    }
+
+                    ForEach(cachedPhotoAlbumNodes) { node in
+                        sidebarAlbumNodeRow(node, isPhotoTree: true)
                     }
                 }
-                NavigationLink(value: NavigationSelection.favorites) {
-                    sidebarRowLabel("お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
-                }
-                NavigationLink(value: NavigationSelection.trash) {
-                    sidebarRowLabel("ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
-                }
             }
-
-            Section(header: albumSectionHeader) {
-                // 動画アルバムと画像アルバムは別々のツリーとして棲み分ける
-                // （フォルダはアルバム名の "/" 区切りだけで表現されるため、混在すると
-                // 同名フォルダで動画と画像が同じ階層に混ざって見えてしまう）。
-                // ツリー自体は cachedVideoAlbumNodes / cachedPhotoAlbumNodes （refreshSidebarCaches() で更新）を使う。
-                ForEach(cachedVideoAlbumNodes) { node in
-                    sidebarAlbumNodeRow(node, isPhotoTree: false)
-                }
-
-                ForEach(cachedPhotoAlbumNodes) { node in
-                    sidebarAlbumNodeRow(node, isPhotoTree: true)
-                }
-            }
+            .padding(.horizontal, sidebarContentPadding)
+            .padding(.top, sidebarTopPadding)
+            .padding(.bottom, 14)
         }
-        .listStyle(SidebarListStyle())
-        .scrollContentBackground(.hidden)
-        .background(CommandDeckBackground())
-        .tint(DS.cyan)
+        .background(Color.clear)
+        .tint(NeomorphicTheme.accent)
+        .foregroundStyle(NeomorphicTheme.ink)
+        .environment(\.colorScheme, .light)
         .onAppear {
             refreshSidebarCaches()
             revealSelectedAlbumInSidebar()
@@ -298,29 +317,92 @@ struct MainSidebarView: View {
         }
     }
 
-    private func sidebarRowLabel(_ title: String, systemImage: String, count: Int) -> some View {
-        HStack {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-            Spacer()
-            Text("\(count)")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .monospacedDigit()
-                .foregroundStyle(DS.cyan.opacity(0.75))
+    private func sidebarNavigationButton(_ target: NavigationSelection, title: String, systemImage: String, count: Int? = nil) -> some View {
+        Button {
+            selection = target
+        } label: {
+            sidebarRowLabel(title, systemImage: systemImage, count: count, isActive: selection == target)
         }
+        .buttonStyle(.plain)
+    }
+
+    private func sidebarRowLabel(_ title: String, systemImage: String, count: Int? = nil, isActive: Bool = false, isExpanded: Bool? = nil) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NeomorphicTheme.ink)
+                .frame(width: sidebarIconWidth)
+            Text(title)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(NeomorphicTheme.ink)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let count {
+                sidebarCountBadge(count, tint: NeomorphicTheme.accent)
+            }
+            if let isExpanded {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(NeomorphicTheme.muted)
+                    .frame(width: 12)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(width: sidebarRowWidth, height: sidebarRowHeight, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous)
+                .fill(isActive ? NeomorphicTheme.accent.opacity(0.16) : Color.clear)
+        )
+    }
+
+    private func sidebarPlainLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(NeomorphicTheme.ink)
+    }
+
+    private func sidebarSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(NeomorphicTheme.muted)
+            .padding(.horizontal, 10)
+            .frame(width: sidebarRowWidth, alignment: .leading)
     }
 
     private func sidebarSelectableRowLabel(_ title: String, systemImage: String, count: Int, isSelected: Bool) -> some View {
-        HStack {
+        HStack(spacing: 8) {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-            Label(title, systemImage: systemImage)
-            Spacer()
-            Text("\(count)")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? NeomorphicTheme.accent : NeomorphicTheme.muted)
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NeomorphicTheme.ink)
+                .frame(width: sidebarIconWidth)
+            Text(title)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(NeomorphicTheme.ink)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            sidebarCountBadge(count, tint: NeomorphicTheme.muted)
         }
+        .padding(.horizontal, 10)
+        .frame(width: sidebarRowWidth, height: sidebarRowHeight, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous))
+    }
+
+    private func sidebarCountBadge(_ count: Int, tint: Color) -> some View {
+        Text("\(count)")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(NeomorphicTheme.surface)
+                    .shadow(color: .white.opacity(0.8), radius: 2, x: -1, y: -1)
+                    .shadow(color: NeomorphicTheme.shadow.opacity(0.18), radius: 3, x: 2, y: 2)
+            )
     }
 
     private func sidebarAlbumRow(album: Album, title: String, systemImage: String) -> AnyView {
@@ -333,9 +415,12 @@ struct MainSidebarView: View {
             .buttonStyle(.plain))
         }
 
-        return AnyView(NavigationLink(value: NavigationSelection.album(album.id)) {
-            sidebarRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album))
+        return AnyView(Button {
+            selection = .album(album.id)
+        } label: {
+            sidebarRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album), isActive: selection == .album(album.id))
         }
+        .buttonStyle(.plain)
         .draggable(AlbumDragPayload(albumIDs: [album.id], sourceFolderPath: nil))
         .contextMenu {
             Button("フォルダにエクスポート…") {
@@ -369,36 +454,46 @@ struct MainSidebarView: View {
             return sidebarAlbumRow(album: album, title: node.name, systemImage: iconForAlbum(album))
         } else {
             let key = dropKey(forPath: node.id, isPhotoTree: isPhotoTree)
-            return AnyView(DisclosureGroup(isExpanded: expandedBinding(for: key)) {
-                if let album = node.album {
-                    sidebarAlbumRow(album: album, title: "このフォルダ内のメディア", systemImage: iconForAlbum(album))
-                }
+            // SwiftUI 標準の DisclosureGroup を使うと、このビルド環境では中身（アイコン・文字）が
+            // 描画位置ごと画面外に飛んでしまう現象があったため、開閉状態を自前の VStack + 条件分岐で
+            // 表現している（folderRowLabel 側にシェブロンを描いてタップで開閉する）。
+            return AnyView(
+                VStack(alignment: .leading, spacing: 2) {
+                    folderRowLabel(node, isPhotoTree: isPhotoTree)
 
-                ForEach(node.children) { child in
-                    sidebarAlbumNodeRow(child, isPhotoTree: isPhotoTree)
-                }
-            } label: {
-                folderRowLabel(node, isPhotoTree: isPhotoTree)
-            }
-            .contextMenu {
-                if let album = node.album, album.linkedFolderPath != nil || album.linkedFolderBookmarkData != nil {
-                    Button("紐づけフォルダを更新") {
-                        rescanLinkedFolder(albumID: album.id)
-                    }
-                } else {
-                    Button("フォルダを紐づけ…") {
-                        linkFolderToNode(node, isPhotoTree: isPhotoTree)
+                    if expandedFolderIDs.contains(key) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let album = node.album {
+                                sidebarAlbumRow(album: album, title: "このフォルダ内のメディア", systemImage: iconForAlbum(album))
+                            }
+
+                            ForEach(node.children) { child in
+                                sidebarAlbumNodeRow(child, isPhotoTree: isPhotoTree)
+                            }
+                        }
+                        .padding(.leading, 14)
                     }
                 }
-                Divider()
-                Button("フォルダにエクスポート…") {
-                    exportAlbums(albumIDs: albumIDs(in: node))
+                .contextMenu {
+                    if let album = node.album, album.linkedFolderPath != nil || album.linkedFolderBookmarkData != nil {
+                        Button("紐づけフォルダを更新") {
+                            rescanLinkedFolder(albumID: album.id)
+                        }
+                    } else {
+                        Button("フォルダを紐づけ…") {
+                            linkFolderToNode(node, isPhotoTree: isPhotoTree)
+                        }
+                    }
+                    Divider()
+                    Button("フォルダにエクスポート…") {
+                        exportAlbums(albumIDs: albumIDs(in: node))
+                    }
+                    Divider()
+                    Button("削除", role: .destructive) {
+                        requestAlbumDeletion(albumIDs: albumIDs(in: node))
+                    }
                 }
-                Divider()
-                Button("削除", role: .destructive) {
-                    requestAlbumDeletion(albumIDs: albumIDs(in: node))
-                }
-            })
+            )
         }
     }
 
@@ -469,15 +564,6 @@ struct MainSidebarView: View {
         (isPhotoTree ? "photo:" : "video:") + path
     }
 
-    private func expandedBinding(for key: String) -> Binding<Bool> {
-        Binding(
-            get: { expandedFolderIDs.contains(key) },
-            set: { isExpanded in
-                if isExpanded { expandedFolderIDs.insert(key) } else { expandedFolderIDs.remove(key) }
-            }
-        )
-    }
-
     @ViewBuilder
     private func folderRowLabel(_ node: SidebarAlbumNode, isPhotoTree: Bool) -> some View {
         let key = dropKey(forPath: node.id, isPhotoTree: isPhotoTree)
@@ -489,7 +575,7 @@ struct MainSidebarView: View {
                         toggleAlbumNodeSelection(node)
                     }
             } else {
-                sidebarRowLabel(node.name, systemImage: "folder.fill", count: nonTrashedCount(in: node))
+                sidebarRowLabel(node.name, systemImage: "folder.fill", count: nonTrashedCount(in: node), isExpanded: expandedFolderIDs.contains(key))
                     .contentShape(Rectangle())
                     // 標準の「＞」だけだと当たり判定が小さいため、タイトル行全体のクリックでも開閉できるようにする。
                     .onTapGesture {
@@ -500,7 +586,7 @@ struct MainSidebarView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(dropTargetFolderID == key ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(dropTargetFolderID == key ? NeomorphicTheme.accent.opacity(0.12) : Color.clear)
         )
         // 既存フォルダへドラッグしたアルバム（単体・別フォルダごと）を受け取る。
         // 動画ツリー/画像ツリーをまたぐドロップは handleAlbumDrop 内の型チェックで無視される。

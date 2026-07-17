@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 
@@ -17,6 +18,9 @@ struct ContentView: View {
 
     @StateObject private var coordinator = PlaybackCoordinator()
     @StateObject private var appSettings = AppSettings()
+    private let sidebarMinWidth: CGFloat = 300
+    private let sidebarIdealWidth: CGFloat = 320
+    private let sidebarMaxWidth: CGFloat = 360
 
     init() {
         let manager = VideoDataManager()
@@ -68,6 +72,11 @@ struct ContentView: View {
 
             NavigationSplitView {
                 MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
+                    .navigationSplitViewColumnWidth(
+                        min: sidebarMinWidth,
+                        ideal: sidebarIdealWidth,
+                        max: sidebarMaxWidth
+                    )
             } detail: {
                 NavigationStack {
                     switch selection {
@@ -93,8 +102,44 @@ struct ContentView: View {
                 }
             }
         }
-        .tint(DS.cyan)
-        .preferredColorScheme(.dark)
+        .tint(NeomorphicTheme.accent)
+        .preferredColorScheme(.light)
         .toolbarBackground(.hidden, for: .windowToolbar)
+        .background(WindowChromeConfigurator())
+        .ignoresSafeArea()
+    }
+}
+
+/// macOS標準のタイトルバーをコンテンツと同じ黒い背景に重ねるための設定です。
+/// toolbarBackgroundだけではタイトルバー領域の外観を完全に消せないため，
+/// NSWindowをフルサイズコンテンツビューとして明示的に構成します。
+private struct WindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowChromeView {
+        WindowChromeView()
+    }
+
+    func updateNSView(_ nsView: WindowChromeView, context: Context) {
+        nsView.applyWindowChrome()
+    }
+}
+
+private final class WindowChromeView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyWindowChrome()
+    }
+
+    func applyWindowChrome() {
+        guard let window else { return }
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = NSColor(
+            red: 0.89,
+            green: 0.92,
+            blue: 0.93,
+            alpha: 1.0
+        )
+        window.toolbarStyle = .unifiedCompact
     }
 }

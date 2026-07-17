@@ -740,7 +740,7 @@ private struct FlowLayout<Content: View>: View {
 /// プレイヤーサイドバーに表示するチャプター情報を表す構造体
 struct ChapterPoint: Identifiable, Hashable {
     let id = UUID()
-    let percentage: Double // 0.1, 0.2 ... 0.9
+    let percentage: Double // 0.0, 0.1 ... 0.9
     let time: CMTime
     let thumbnail: Image?
 
