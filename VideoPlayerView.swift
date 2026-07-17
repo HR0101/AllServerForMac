@@ -438,6 +438,94 @@ private struct PlaybackVideoThumbnailButton: View {
     }
 }
 
+/// 関連動画パネルの1行（YouTubeの「次の動画」リストと同じ、サムネイル＋タイトルの横並び）。
+private struct UpNextVideoRow: View {
+    let video: VideoItem
+    let thumbnailURL: URL
+    let action: () -> Void
+
+    @State private var thumbnail: NSImage?
+
+    private let thumbnailWidth: CGFloat = 158
+    private let thumbnailHeight: CGFloat = 89
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack(alignment: .bottomTrailing) {
+                    thumbnailImage
+                        .frame(width: thumbnailWidth, height: thumbnailHeight)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                    Text(durationString)
+                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .padding(4)
+                }
+
+                Text(displayName)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .padding(.top, 2)
+
+                Spacer(minLength: 0)
+            }
+            .padding(6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(displayName)
+        .task(id: video.id) {
+            await loadThumbnail()
+        }
+    }
+
+    private var thumbnailImage: some View {
+        Group {
+            if let thumbnail {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Rectangle().fill(.white.opacity(0.08))
+                    Image(systemName: "film")
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+        }
+    }
+
+    private var displayName: String {
+        (video.originalFilename as NSString).deletingPathExtension
+    }
+
+    private var durationString: String {
+        let totalSeconds = Int(video.duration)
+        guard totalSeconds >= 0 else { return "0:00" }
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+        return hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func loadThumbnail() async {
+        let url = thumbnailURL
+        let loadedThumbnail: NSImage? = await Task.detached(priority: .utility) {
+            NSImage(contentsOf: url)
+        }.value
+        guard let loadedThumbnail else { return }
+        thumbnail = loadedThumbnail
+    }
+}
+
 private struct ScrollWheelDetector: NSViewRepresentable {
     let onVerticalScroll: (CGFloat) -> Void
 
@@ -492,6 +580,64 @@ private final class ScrollWheelDetectorView: NSView {
     }
 }
 
+/// 数字キー(0〜9)による位置ジャンプ用の検出ビュー。
+/// SwiftUIの.onKeyPressは再生ボタンなどをクリックした後にフォーカスがそちらへ移ると
+/// 反応しなくなるため、ScrollWheelDetectorと同じくウィンドウレベルのイベント監視で拾う。
+private struct DigitSeekDetector: NSViewRepresentable {
+    let onDigit: (Int) -> Void
+
+    func makeNSView(context: Context) -> DigitSeekDetectorView {
+        let view = DigitSeekDetectorView()
+        view.onDigit = onDigit
+        return view
+    }
+
+    func updateNSView(_ nsView: DigitSeekDetectorView, context: Context) {
+        nsView.onDigit = onDigit
+    }
+}
+
+private final class DigitSeekDetectorView: NSView {
+    var onDigit: ((Int) -> Void)?
+    private var eventMonitor: Any?
+
+    deinit {
+        removeEventMonitor()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            removeEventMonitor()
+        } else {
+            installEventMonitor()
+        }
+    }
+
+    private func installEventMonitor() {
+        guard eventMonitor == nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  let window = self.window,
+                  event.window === window else { return event }
+            guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+            guard let characters = event.charactersIgnoringModifiers,
+                  characters.count == 1,
+                  let digit = characters.first?.wholeNumberValue else { return event }
+
+            self.onDigit?(digit)
+            return nil
+        }
+    }
+
+    private func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+}
+
 struct VideoPlayerView: View {
     @StateObject private var viewModel: VideoPlayerViewModel
     private let dataManager: VideoDataManager
@@ -503,9 +649,14 @@ struct VideoPlayerView: View {
     @State private var showShortcutHelp = false
     @State private var areCornerControlsVisible = false
     @State private var cornerControlsActivityID = UUID()
+    @State private var isUpNextPanelVisible = false
+    @State private var isMiniControlsVisible = false
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let sidebarWidth: CGFloat = 240
     private let triggerWidth: CGFloat = 10
+    private let upNextPanelWidth: CGFloat = 360
+    private let miniPlayerWidth: CGFloat = 300
+    private let miniPlayerHeight: CGFloat = 169
     private let cornerControlsAutoHideNanoseconds: UInt64 = 2_500_000_000
     private let playbackControlsMaxWidth: CGFloat = 780
     private let playbackControlsHorizontalPadding: CGFloat = 28
@@ -534,7 +685,9 @@ struct VideoPlayerView: View {
                 .videoSeekForward5,
                 .videoSeekForward10,
                 .videoSeekForward15,
-                .videoRandomSeek
+                .videoRandomSeek,
+                .videoToggleUpNextPanel,
+                .videoToggleMiniPlayer
             ],
             extraItems: [
                 ("0〜9", "動画の 0%〜90% の位置へジャンプ"),
@@ -547,6 +700,155 @@ struct VideoPlayerView: View {
     }
 
     var body: some View {
+        Group {
+            if coordinator.isMiniPlayerActive {
+                miniPlayerView
+            } else {
+                fullPlayerView
+            }
+        }
+        .onAppear {
+            isViewFocused = true
+            areCornerControlsVisible = false
+            isVideoStripVisible = false
+            isUpNextPanelVisible = false
+            viewModel.setupPlayer()
+        }
+        .onDisappear { viewModel.cleanup() }
+    }
+
+    /// 通常のフルサイズ再生画面。
+    private var fullPlayerView: some View {
+        ZStack(alignment: .topTrailing) {
+            HStack(spacing: 0) {
+                videoPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if isUpNextPanelVisible {
+                    upNextPanel
+                        .frame(width: upNextPanelWidth, alignment: .top)
+                        .frame(maxHeight: .infinity)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+
+            // シークバーと同じく，カーソル操作中だけ右上の補助操作を表示する。
+            // パネルの開閉に関わらず常にウィンドウ右上端に留める。
+            if areCornerControlsVisible || showShortcutHelp {
+                PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                    coordinator.close()
+                }
+                .transition(.opacity)
+            }
+
+            if showShortcutHelp {
+                ShortcutHelpPanel(title: "通常再生のショートカット", shortcuts: shortcutList) {
+                    showShortcutHelp = false
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .ignoresSafeArea()
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isViewFocused)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                revealCornerControls()
+            case .ended:
+                hideCornerControls()
+            }
+        }
+        .task(id: cornerControlsActivityID) {
+            try? await Task.sleep(nanoseconds: cornerControlsAutoHideNanoseconds)
+            guard !Task.isCancelled, !showShortcutHelp else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                areCornerControlsVisible = false
+            }
+        }
+        .onKeyPress(phases: .down, action: handleKeyPress)
+    }
+
+    /// Iキーで切り替える、右下に小さく表示するミニプレイヤー。
+    /// アルバム一覧側を操作できるよう、キーボードフォーカスは奪わない。
+    private var miniPlayerView: some View {
+        ZStack(alignment: .bottom) {
+            Color.black
+            PlayerContainerView(
+                player: viewModel.player,
+                controlsStyle: .none,
+                showsFullScreenToggleButton: false,
+                allowsPictureInPicturePlayback: false
+            )
+
+            if isMiniControlsVisible {
+                HStack(spacing: 8) {
+                    Button {
+                        viewModel.playPause()
+                    } label: {
+                        Image(systemName: viewModel.isPlaybackPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 26, height: 26)
+                            .background(Circle().fill(.black.opacity(0.55)))
+                    }
+                    .buttonStyle(.plain)
+                    .help(viewModel.isPlaybackPlaying ? "一時停止" : "再生")
+
+                    Spacer()
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            coordinator.isMiniPlayerActive = false
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(.black.opacity(0.55)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("フルスクリーンに戻す")
+
+                    Button {
+                        coordinator.close()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(.black.opacity(0.55)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("閉じる")
+                }
+                .padding(8)
+            }
+        }
+        .frame(width: miniPlayerWidth, height: miniPlayerHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.4), radius: 16, x: 0, y: 8)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isMiniControlsVisible = hovering }
+        }
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                coordinator.isMiniPlayerActive = false
+            }
+        }
+        .padding(20)
+    }
+
+    /// 動画本体・シークバー・チャプターサイドバーをまとめた左側のペイン。
+    /// 関連動画パネルが開くとこのペインだけが幅を縮めて左に寄る。
+    private var videoPane: some View {
         ZStack(alignment: .leading) {
             ZStack {
                 Color.black
@@ -567,6 +869,14 @@ struct VideoPlayerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .allowsHitTesting(false)
 
+            // 再生・前後移動などのボタンをクリックするとSwiftUIのフォーカスがそちらへ移り、
+            // .onKeyPress側の数字キー判定が届かなくなるため、ウィンドウレベルのイベント監視で拾う。
+            DigitSeekDetector { digit in
+                viewModel.seek(toPercentage: Double(digit) / 10.0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+
             if areCornerControlsVisible || showShortcutHelp || isVideoStripVisible {
                 VStack(spacing: 10) {
                     Spacer()
@@ -580,52 +890,55 @@ struct VideoPlayerView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .clipped()
+    }
 
-            // シークバーと同じく，カーソル操作中だけ左上の補助操作を表示する。
-            if areCornerControlsVisible || showShortcutHelp {
-                VStack {
-                    HStack {
-                        Spacer()
-                        PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
-                            coordinator.close()
+    /// Tキーで開閉する、YouTubeの「次の動画」風の同じアルバムの動画一覧パネル。
+    private var upNextPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("同じアルバムの動画")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+                .padding(.horizontal, 16)
+                .padding(.top, 22)
+                .padding(.bottom, 12)
+
+            if viewModel.otherVideos.isEmpty {
+                Spacer()
+                Text("他に動画がありません")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(viewModel.otherVideos) { video in
+                            UpNextVideoRow(
+                                video: video,
+                                thumbnailURL: thumbnailURL(for: video)
+                            ) {
+                                viewModel.playVideo(video)
+                            }
                         }
                     }
-                    Spacer()
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 20)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(.opacity)
             }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(red: 0.07, green: 0.07, blue: 0.08))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
+        }
+    }
 
-            if showShortcutHelp {
-                ShortcutHelpPanel(title: "通常再生のショートカット", shortcuts: shortcutList) {
-                    showShortcutHelp = false
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .ignoresSafeArea()
-        .focusable()
-        .focused($isViewFocused)
-        .onAppear {
-            isViewFocused = true
-            areCornerControlsVisible = false
-            isVideoStripVisible = false
-            viewModel.setupPlayer()
-        }
-        .onDisappear { viewModel.cleanup() }
-        .onContinuousHover { phase in
-            if case .active = phase {
-                revealCornerControls()
-            }
-        }
-        .task(id: cornerControlsActivityID) {
-            try? await Task.sleep(nanoseconds: cornerControlsAutoHideNanoseconds)
-            guard !Task.isCancelled, !showShortcutHelp else { return }
-            withAnimation(.easeOut(duration: 0.2)) {
-                areCornerControlsVisible = false
-            }
-        }
-        .onKeyPress(phases: .down, action: handleKeyPress)
+    private func thumbnailURL(for video: VideoItem) -> URL {
+        dataManager.thumbnailStorageURL
+            .appendingPathComponent(video.id.uuidString)
+            .appendingPathExtension("jpg")
     }
 
     /// カーソル移動が続くたびに自動非表示タイマーを更新する。
@@ -636,6 +949,14 @@ struct VideoPlayerView: View {
             }
         }
         cornerControlsActivityID = UUID()
+    }
+
+    /// マウスカーソルがウィンドウ外（別スクリーンなど）へ出たら即座にシークバーを閉じる。
+    private func hideCornerControls() {
+        guard areCornerControlsVisible, !showShortcutHelp else { return }
+        withAnimation(.easeOut(duration: 0.16)) {
+            areCornerControlsVisible = false
+        }
     }
 
     private func handlePlaybackScroll(deltaY: CGFloat) {
@@ -754,11 +1075,6 @@ struct VideoPlayerView: View {
     }
 
     private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
-        if let digit = press.key.character.wholeNumberValue {
-            viewModel.seek(toPercentage: Double(digit) / 10.0)
-            return .handled
-        }
-
         switch press.key {
         case .escape:
             if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
@@ -805,6 +1121,16 @@ struct VideoPlayerView: View {
             return .handled
         } else if MediaShortcutSettings.matches(.videoSeekForward15, press: press) {
             viewModel.seek(by: 15)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleUpNextPanel, press: press) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                isUpNextPanelVisible.toggle()
+            }
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleMiniPlayer, press: press) {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                coordinator.isMiniPlayerActive = true
+            }
             return .handled
         }
 

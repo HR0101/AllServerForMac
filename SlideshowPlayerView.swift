@@ -391,6 +391,7 @@ private struct SlideshowContentView: View {
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
         .focusable()
+        .focusEffectDisabled()
         .focused($isFocused)
         .onAppear { isFocused = true }
         .onDisappear { viewModel.cleanup() }

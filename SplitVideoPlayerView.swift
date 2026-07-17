@@ -218,6 +218,7 @@ struct SplitVideoPlayerView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .ignoresSafeArea()
         .focusable()
+        .focusEffectDisabled()
         .focused($isFocused)
         .onKeyPress(phases: .down, action: handleKeyPress)
         .onAppear {

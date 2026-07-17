@@ -29,26 +29,37 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            // 再生中はライブラリ画面（サイドバー/ツールバー含む）ごとプレイヤーに差し替え、
-            // 他のUIが前面に残らない完全な全画面にする（元アプリと同じ方式）。
-            if let mode = coordinator.mode {
-                switch mode {
-                case .photos:
-                    playerOverlay(for: mode)
-                default:
-                    playerOverlay(for: mode)
-                        .ignoresSafeArea()
-                }
-            } else {
+        // 再生中はライブラリ画面（サイドバー/ツールバー含む）ごとプレイヤーに差し替え、
+        // 他のUIが前面に残らない完全な全画面にする（元アプリと同じ方式）。
+        // ただし通常再生をIキーでミニプレイヤー化した間はアルバム一覧を操作できるよう裏に残す。
+        ZStack(alignment: .bottomTrailing) {
+            if shouldShowLibraryView {
                 libraryView
             }
+
+            if let mode = coordinator.mode {
+                playerOverlay(for: mode)
+            }
         }
+        .toolbar(isToolbarHidden ? .hidden : .automatic, for: .windowToolbar)
         .environmentObject(coordinator)
         .environmentObject(appSettings)
     }
 
-    /// 再生中はウィンドウ全体を占有するプレイヤー
+    /// ミニプレイヤー表示中は通常再生の裏でライブラリも操作できるようにする。
+    private var shouldShowLibraryView: Bool {
+        guard let mode = coordinator.mode else { return true }
+        if case .single = mode {
+            return coordinator.isMiniPlayerActive
+        }
+        return false
+    }
+
+    private var isToolbarHidden: Bool {
+        coordinator.mode != nil && !shouldShowLibraryView
+    }
+
+    /// 再生中はウィンドウ全体を占有するプレイヤー（通常再生はIキーでミニプレイヤー化できる）
     @ViewBuilder
     private func playerOverlay(for mode: PlaybackCoordinator.Mode) -> some View {
         switch mode {
@@ -56,10 +67,13 @@ struct ContentView: View {
             VideoPlayerView(videos: playlist, currentVideo: current, dataManager: dataManager)
         case .multi(let videos):
             MultiVideoPlayerView(videos: videos, dataManager: dataManager)
+                .ignoresSafeArea()
         case .slideshow(let videos):
             SlideshowPlayerView(videos: videos, dataManager: dataManager)
+                .ignoresSafeArea()
         case .splitPlay(let video, let splitCount):
             SplitVideoPlayerView(video: video, splitCount: splitCount, dataManager: dataManager)
+                .ignoresSafeArea()
         case .photos(let playlist, let current):
             PhotoViewerView(photos: playlist, current: current, dataManager: dataManager)
         }
