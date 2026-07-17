@@ -103,6 +103,7 @@ struct PhotoViewerView: View {
             }
         }
         .focusable()
+        .focusEffectDisabled()
         .focused($isFocused)
         .onAppear {
             isFocused = true

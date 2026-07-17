@@ -930,13 +930,9 @@ private struct ServerArcGauge: View {
             }
 
             VStack(spacing: 2) {
-                Text(isRunning ? "24°" : "18°")
-                    .font(.system(size: 45, weight: .bold, design: .rounded))
-                    .foregroundStyle(NeomorphicTheme.ink)
-                    .monospacedDigit()
                 Text(isRunning ? "Streaming" : "Standby")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(NeomorphicTheme.muted)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(NeomorphicTheme.ink)
             }
             .offset(y: 28)
         }

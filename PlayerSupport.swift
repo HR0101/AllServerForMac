@@ -20,6 +20,8 @@ final class PlaybackCoordinator: ObservableObject {
 
     @Published var mode: Mode?
     @Published var returnToMediaID: UUID?
+    /// 通常再生をIキーで右下に小さくたたみ、アルバム一覧を裏に表示している間 true。
+    @Published var isMiniPlayerActive = false
 
     var isPresenting: Bool { mode != nil }
 
@@ -27,6 +29,7 @@ final class PlaybackCoordinator: ObservableObject {
     func playSingle(playlist: [VideoItem], current: VideoItem) {
         let videos = playlist.filter { $0.mediaType == .video }
         let start = (videos.contains(current) ? current : videos.first) ?? current
+        isMiniPlayerActive = false
         mode = .single(playlist: videos.isEmpty ? [current] : videos, current: start)
     }
 
@@ -34,6 +37,7 @@ final class PlaybackCoordinator: ObservableObject {
     func playRandom(from videos: [VideoItem]) {
         let shuffled = videos.filter { $0.mediaType == .video }.shuffled()
         guard let first = shuffled.first else { return }
+        isMiniPlayerActive = false
         mode = .single(playlist: shuffled, current: first)
     }
 
@@ -64,7 +68,10 @@ final class PlaybackCoordinator: ObservableObject {
         mode = .photos(playlist: photos.isEmpty ? [current] : photos, current: start)
     }
 
-    func close() { mode = nil }
+    func close() {
+        mode = nil
+        isMiniPlayerActive = false
+    }
 
     /// プレイヤーを閉じたあとに一覧側で復帰させたい項目を記録する。
     func rememberReturnTarget(mediaID: UUID) {
@@ -307,6 +314,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case videoSeekForward10
     case videoSeekForward15
     case videoRandomSeek
+    case videoToggleUpNextPanel
+    case videoToggleMiniPlayer
     case photoPrevious
     case photoNext
     case photoToggleMangaMode
@@ -351,6 +360,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoSeekForward10: return "動画: 10秒進む"
         case .videoSeekForward15: return "動画: 15秒進む"
         case .videoRandomSeek: return "動画: ランダム位置"
+        case .videoToggleUpNextPanel: return "動画: 関連動画パネル切替"
+        case .videoToggleMiniPlayer: return "動画: ミニプレイヤー"
         case .photoPrevious: return "画像: 前の画像"
         case .photoNext: return "画像: 次の画像"
         case .photoToggleMangaMode: return "画像: 漫画モード切替"
@@ -391,6 +402,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoSeekForward10: return "10秒進む"
         case .videoSeekForward15: return "15秒進む"
         case .videoRandomSeek: return "ランダムな位置へジャンプ"
+        case .videoToggleUpNextPanel: return "同じアルバムの動画パネルを表示/非表示"
+        case .videoToggleMiniPlayer: return "小さい画面で再生しながらアルバム一覧を表示"
         case .photoPrevious: return "前の画像へ"
         case .photoNext: return "次の画像へ"
         case .photoToggleMangaMode: return "漫画モードを切り替え"
@@ -435,6 +448,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoSeekForward10: return [.semicolon]
         case .videoSeekForward15: return [.quote]
         case .videoRandomSeek: return [.r]
+        case .videoToggleUpNextPanel: return [MediaShortcutKey(rawValue: "t")]
+        case .videoToggleMiniPlayer: return [MediaShortcutKey(rawValue: "i")]
         case .photoPrevious: return [.leftArrow]
         case .photoNext: return [.rightArrow]
         case .photoToggleMangaMode: return [.m]
@@ -473,7 +488,9 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         .videoSeekForward5,
         .videoSeekForward10,
         .videoSeekForward15,
-        .videoRandomSeek
+        .videoRandomSeek,
+        .videoToggleUpNextPanel,
+        .videoToggleMiniPlayer
     ]
 
     static let photoActions: [MediaShortcutAction] = [
