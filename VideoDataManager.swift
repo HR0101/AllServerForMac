@@ -199,22 +199,22 @@ struct DuplicateCheckResult {
     let failedHashCount: Int
 }
 
-private final class LinkedFolderMonitor {
-    let folderURL: URL
-    let source: DispatchSourceFileSystemObject
-    let fileDescriptor: Int32
-    let shouldStopAccessing: Bool
-
-    init(folderURL: URL, source: DispatchSourceFileSystemObject, fileDescriptor: Int32, shouldStopAccessing: Bool) {
-        self.folderURL = folderURL
-        self.source = source
-        self.fileDescriptor = fileDescriptor
-        self.shouldStopAccessing = shouldStopAccessing
-    }
-
-    func cancel() {
-        source.cancel()
-    }
+/// リンクフォルダの手動更新（ホーム画面のボタン）の進捗状態。VideoDataManager 本体とは別の
+/// ObservableObject に分離することで、スキャン中に更新される statusMessage が、写真・動画一覧を
+/// 表示する巨大なギャラリービュー（videos/albums を @Published で購読している側）まで
+/// 再描画させないようにする（DuplicateCheckStatus と同じ理由）。
+final class LinkedFolderScanStatus: ObservableObject {
+    @Published var isScanning = false
+    /// これまでに確認し終えたフォルダ数（進捗バーの分子）。
+    @Published var processedCount = 0
+    /// 今回の更新で対象になったフォルダ総数（進捗バーの分母）。
+    @Published var totalCount = 0
+    /// 現在スキャン中のフォルダ（アルバム）名。
+    @Published var currentFolderName: String?
+    /// 現在のフォルダで新しく取り込んだメディア件数（単一フォルダでも進捗が動いて見えるように）。
+    @Published var processedItemsInCurrentFolder = 0
+    /// スキャン完了後などに表示するメッセージ。
+    @Published var statusMessage = ""
 }
 
 /// 自動重複チェックの進捗状態。VideoDataManager 本体とは別の ObservableObject に分離することで、
@@ -325,9 +325,12 @@ class VideoDataManager: ObservableObject {
     private var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     private var isGeneratingProxy = false
     private var duplicateAutoCheckTask: Task<Void, Never>?
-    private var linkedFolderMonitors: [UUID: LinkedFolderMonitor] = [:]
     private var linkedFolderScanTasks: [UUID: Task<Void, Never>] = [:]
-    private var linkedFolderPeriodicScanTask: Task<Void, Never>?
+    private var initialLinkedFolderScanTask: Task<Void, Never>?
+
+    /// リンクフォルダの手動更新（ホーム画面のボタン）の進捗。ギャラリーを巻き込んで
+    /// 再描画しないよう本体とは別の ObservableObject に分離している。
+    let linkedFolderScanStatus = LinkedFolderScanStatus()
 
     // key: "<videoID>_<quality>", 値: 0...1 の進捗、nil = 生成していない
     private var proxyProgressMap: [String: Double] = [:]
@@ -405,13 +408,17 @@ class VideoDataManager: ObservableObject {
             runAutomaticMissingFileCleanup()
         }
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
-        startLinkedFolderPeriodicScan()
+        // リンクフォルダの取り込みは、60秒ごとの自動ポーリング＋ファイル監視をやめ、
+        // ホーム画面の「リンクフォルダを更新」ボタンによる手動実行に切り替えた。
+        // 件数が多いと自動スキャンがメインスレッドを圧迫してUIがカクつくため。
+        // ただし、アプリを閉じている間にFinder側で増減したメディアを反映するため、
+        // 起動時だけは一度自動スキャンする（以降の更新は手動ボタン）。
+        startInitialLinkedFolderScan()
 
         // 保存はデバウンスされているため、終了時に保留中の分を確実に書き込む
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.stopLinkedFolderMonitoring()
+                self?.cancelPendingLinkedFolderScans()
                 self?.flushPendingSave()
             }
         }
@@ -488,18 +495,48 @@ class VideoDataManager: ObservableObject {
     /// 画面の再描画のたびに呼ぶのではなく、この関数を低頻度（自動チェックループやチェック完了時）で呼んで
     /// 結果をキャッシュする。
     private func refreshDuplicateCheckAlbumCaches() {
-        let target = duplicateCheckTargetAlbums
-        duplicateCheckStatus.checkedAlbums = target.filter { !albumNeedsDuplicateCheck($0) }
-        duplicateCheckStatus.uncheckedAlbums = target.filter { albumNeedsDuplicateCheck($0) }
+        // trashedIDs / activeIDs をここで1回だけ作り、全アルバムで使い回す。
+        // 以前はアルバムごとに albumNeedsDuplicateCheck → duplicateCheckSignature が
+        // videos 全件を走査して trashedIDs を作り直し、さらに checked/unchecked で2回フィルタしていたため、
+        // O(アルバム数 × ライブラリ全件 × 2) のコストが30秒ごとにメインスレッドで走り、周期的な引っかかりの原因になっていた。
+        var trashedIDs = Set<UUID>()
+        var activeIDs = Set<UUID>()
+        for video in videos {
+            if video.isInTrash { trashedIDs.insert(video.id) } else { activeIDs.insert(video.id) }
+        }
+
+        var checked: [Album] = []
+        var unchecked: [Album] = []
+        for album in albums {
+            guard album.name != Self.allVideosAlbumName,
+                  album.name != Self.allPhotosAlbumName,
+                  album.videoIDs.contains(where: { activeIDs.contains($0) }) else { continue }
+            if albumNeedsDuplicateCheck(album, trashedIDs: trashedIDs) {
+                unchecked.append(album)
+            } else {
+                checked.append(album)
+            }
+        }
+        duplicateCheckStatus.checkedAlbums = checked
+        duplicateCheckStatus.uncheckedAlbums = unchecked
     }
 
     func albumNeedsDuplicateCheck(_ album: Album) -> Bool {
+        albumNeedsDuplicateCheck(album, trashedIDs: Set(videos.filter { $0.isInTrash }.map { $0.id }))
+    }
+
+    /// trashedIDs を呼び出し側で1回だけ計算して渡す版。多数のアルバムを一括判定する
+    /// refreshDuplicateCheckAlbumCaches から使い、アルバムごとに videos 全件を走査し直すのを避ける。
+    private func albumNeedsDuplicateCheck(_ album: Album, trashedIDs: Set<UUID>) -> Bool {
         guard let state = duplicateCheckStates[album.id] else { return true }
-        return state.albumSignature != duplicateCheckSignature(for: album)
+        return state.albumSignature != duplicateCheckSignature(for: album, trashedIDs: trashedIDs)
     }
 
     private func duplicateCheckSignature(for album: Album) -> String {
-        let trashedIDs = Set(videos.filter { $0.isInTrash }.map { $0.id })
+        duplicateCheckSignature(for: album, trashedIDs: Set(videos.filter { $0.isInTrash }.map { $0.id }))
+    }
+
+    private func duplicateCheckSignature(for album: Album, trashedIDs: Set<UUID>) -> String {
         let mediaSignature = album.videoIDs
             .filter { !trashedIDs.contains($0) }
             .map { $0.uuidString }
@@ -524,29 +561,38 @@ class VideoDataManager: ObservableObject {
 
             while !Task.isCancelled {
                 guard let self else { return }
-                self.refreshDuplicateCheckAlbumCaches()
 
                 if !self.isAutoDuplicateCheckEnabled {
-                    self.duplicateCheckStatus.isAutoChecking = false
-                    self.duplicateCheckStatus.currentAlbumName = nil
-                    self.duplicateCheckStatus.progress = 0
-                    self.duplicateCheckStatus.statusMessage = "自動チェックはオフです"
-                } else if !self.isDuplicateCheckRunning, let album = self.duplicateUncheckedAlbums.first {
-                    self.duplicateCheckStatus.isAutoChecking = true
-                    self.duplicateCheckStatus.currentAlbumName = album.name
-                    self.duplicateCheckStatus.progress = 0
-                    self.duplicateCheckStatus.statusMessage = "「\(album.name)」を確認中"
-
-                    _ = await self.removeDuplicateMedia(in: album.id) { current, total in
-                        self.duplicateCheckStatus.progress = total == 0 ? 0 : Double(current) / Double(total)
+                    // 自動チェックがオフのときは、重い署名計算（refreshDuplicateCheckAlbumCaches）を
+                    // 一切行わずにアイドルする。以前はオフでも毎ループ先頭で refresh を呼んでいたため、
+                    // オフにしても30秒ごとにライブラリ全件走査が走り、UIが定期的に引っかかっていた。
+                    // 状態表示は初回に一度だけ更新すれば足りるので、既にオフ表示なら何もしない。
+                    if self.duplicateCheckStatus.statusMessage != "自動チェックはオフです" {
+                        self.duplicateCheckStatus.isAutoChecking = false
+                        self.duplicateCheckStatus.currentAlbumName = nil
+                        self.duplicateCheckStatus.progress = 0
+                        self.duplicateCheckStatus.statusMessage = "自動チェックはオフです"
                     }
-
-                    self.duplicateCheckStatus.isAutoChecking = false
-                    self.duplicateCheckStatus.currentAlbumName = nil
-                    self.duplicateCheckStatus.progress = 0
-                    self.duplicateCheckStatus.statusMessage = self.duplicateUncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
                 } else {
-                    self.duplicateCheckStatus.statusMessage = self.duplicateUncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
+                    self.refreshDuplicateCheckAlbumCaches()
+
+                    if !self.isDuplicateCheckRunning, let album = self.duplicateCheckStatus.uncheckedAlbums.first {
+                        self.duplicateCheckStatus.isAutoChecking = true
+                        self.duplicateCheckStatus.currentAlbumName = album.name
+                        self.duplicateCheckStatus.progress = 0
+                        self.duplicateCheckStatus.statusMessage = "「\(album.name)」を確認中"
+
+                        _ = await self.removeDuplicateMedia(in: album.id) { current, total in
+                            self.duplicateCheckStatus.progress = total == 0 ? 0 : Double(current) / Double(total)
+                        }
+
+                        self.duplicateCheckStatus.isAutoChecking = false
+                        self.duplicateCheckStatus.currentAlbumName = nil
+                        self.duplicateCheckStatus.progress = 0
+                        self.duplicateCheckStatus.statusMessage = self.duplicateCheckStatus.uncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
+                    } else {
+                        self.duplicateCheckStatus.statusMessage = self.duplicateCheckStatus.uncheckedAlbums.isEmpty ? "すべて確認済み" : "待機中"
+                    }
                 }
 
                 let intervalSeconds = UInt64(max(10, self.duplicateCheckIntervalSeconds))
@@ -555,6 +601,45 @@ class VideoDataManager: ObservableObject {
         }
     }
     
+    /// ホーム画面の「今すぐすべてチェック」ボタン用。対象アルバムをまとめて一括で重複チェックする。
+    /// 自動チェックのオン/オフとは独立して動くので、自動チェックをオフにしていてもこのボタンで実行できる。
+    /// 30秒ごとに1アルバムずつ処理する自動モードに対して、これは押した瞬間に全アルバムをまとめて処理する。
+    func checkAllAlbumsForDuplicatesNow() async {
+        guard !isDuplicateCheckRunning else { return }
+
+        let targets = duplicateCheckTargetAlbums
+        guard !targets.isEmpty else {
+            duplicateCheckStatus.statusMessage = "対象アルバムはありません"
+            return
+        }
+
+        isDuplicateCheckRunning = true
+        duplicateCheckStatus.isAutoChecking = true
+        duplicateCheckStatus.progress = 0
+
+        let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
+        for (index, album) in targets.enumerated() {
+            duplicateCheckStatus.currentAlbumName = album.name
+            duplicateCheckStatus.statusMessage = "「\(album.name)」を確認中（\(index + 1)/\(targets.count)）"
+            duplicateCheckStatus.progress = 0
+
+            let targetItems = album.videoIDs.compactMap { itemsByID[$0] }.filter { !$0.isInTrash }
+            _ = await runDuplicateScan(targetItems: targetItems) { current, total in
+                self.duplicateCheckStatus.progress = total == 0 ? 0 : Double(current) / Double(total)
+            }
+            markDuplicateCheckCompleted(for: album.id)
+        }
+
+        saveData()
+
+        isDuplicateCheckRunning = false
+        duplicateCheckStatus.isAutoChecking = false
+        duplicateCheckStatus.currentAlbumName = nil
+        duplicateCheckStatus.progress = 0
+        refreshDuplicateCheckAlbumCaches()
+        duplicateCheckStatus.statusMessage = "すべて確認済み"
+    }
+
     func removeDuplicateVideos() async -> Int {
         let result = await removeDuplicateMedia(in: nil)
         cleanUpOrphanedFiles()
@@ -1124,7 +1209,6 @@ class VideoDataManager: ObservableObject {
             onItemProcessed: onItemProcessed
         )
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
     }
 
     func linkFolder(
@@ -1145,7 +1229,6 @@ class VideoDataManager: ObservableObject {
             onItemProcessed: onItemProcessed
         )
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
     }
 
     func rescanLinkedFolder(
@@ -1169,7 +1252,6 @@ class VideoDataManager: ObservableObject {
         albums[index].linkedFolderPath = folderURL.path
         albums[index].linkedFolderBookmarkData = bookmarkData(for: folderURL)
         saveData()
-        startLinkedFolderMonitoring()
     }
 
     private func existingOrCreateAlbumID(name: String, type: AlbumType, preferredID: UUID? = nil) -> UUID? {
@@ -1466,82 +1548,67 @@ class VideoDataManager: ObservableObject {
         }
     }
 
-    private func scanAllLinkedFolders() async {
-        let linkedAlbumIDs = albums
-            .filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
-            .map(\.id)
-        for albumID in linkedAlbumIDs {
-            if Task.isCancelled { return }
-            await scanLinkedFolder(albumID: albumID)
+    /// 現在フォルダに紐づいているアルバムの件数（ホーム画面の手動更新カードで使う）。
+    var linkedFolderCount: Int {
+        albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }.count
+    }
+
+    /// 起動時に一度だけリンクフォルダを自動スキャンする。起動直後のUI描画や他の初期化処理と
+    /// 競合しないよう数秒待ってから実行し、以降は自動スキャンしない（更新は手動ボタン）。
+    /// リンクフォルダが無い場合は何もしない（ホーム画面に不要な状態メッセージを出さないため）。
+    private func startInitialLinkedFolderScan() {
+        initialLinkedFolderScanTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self, !Task.isCancelled, self.linkedFolderCount > 0 else { return }
+            await self.rescanAllLinkedFolders()
         }
     }
 
-    private func startLinkedFolderPeriodicScan() {
-        guard linkedFolderPeriodicScanTask == nil else { return }
-        linkedFolderPeriodicScanTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
-                guard !Task.isCancelled else { return }
-                await self?.scanAllLinkedFolders()
-            }
-        }
-    }
-
-    private func startLinkedFolderMonitoring() {
+    /// ホーム画面の「リンクフォルダを更新」ボタンから呼ぶ。紐づけ済みフォルダを1つずつ
+    /// 再スキャンし、Finder側で追加された新規メディアを取り込む。
+    /// 以前は60秒ごとの自動ポーリング＋ファイル監視で自動更新していたが、件数が多いと
+    /// メインスレッドを圧迫してUIがカクつくため、この明示的な手動実行に切り替えた。
+    func rescanAllLinkedFolders() async {
+        guard !linkedFolderScanStatus.isScanning else { return }
         let linkedAlbums = albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
-        let activeIDs = Set(linkedAlbums.map(\.id))
-
-        let obsoleteMonitorIDs = linkedFolderMonitors.keys.filter { !activeIDs.contains($0) }
-        for albumID in obsoleteMonitorIDs {
-            linkedFolderMonitors[albumID]?.cancel()
-            linkedFolderMonitors[albumID] = nil
+        guard !linkedAlbums.isEmpty else {
+            linkedFolderScanStatus.statusMessage = "リンクされたフォルダはありません。"
+            return
         }
 
-        for album in linkedAlbums where linkedFolderMonitors[album.id] == nil {
-            guard let folderURL = resolvedLinkedFolderURL(for: album) else { continue }
-            let shouldStopAccessing = folderURL.startAccessingSecurityScopedResource()
-            let fd = open(folderURL.path, O_EVTONLY)
-            guard fd >= 0 else {
-                if shouldStopAccessing { folderURL.stopAccessingSecurityScopedResource() }
-                continue
-            }
+        let beforeCount = videos.count
 
-            let source = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: fd,
-                eventMask: [.write, .extend, .attrib, .link, .rename, .delete],
-                queue: DispatchQueue.global(qos: .utility)
-            )
-            let albumID = album.id
-            source.setEventHandler { [weak self] in
-                Task { @MainActor in
-                    self?.scheduleLinkedFolderScan(albumID: albumID)
-                }
-            }
-            source.setCancelHandler {
-                close(fd)
-                if shouldStopAccessing {
-                    folderURL.stopAccessingSecurityScopedResource()
-                }
-            }
+        linkedFolderScanStatus.isScanning = true
+        linkedFolderScanStatus.totalCount = linkedAlbums.count
+        linkedFolderScanStatus.processedCount = 0
+        linkedFolderScanStatus.currentFolderName = nil
+        linkedFolderScanStatus.processedItemsInCurrentFolder = 0
+        linkedFolderScanStatus.statusMessage = ""
 
-            linkedFolderMonitors[album.id] = LinkedFolderMonitor(
-                folderURL: folderURL,
-                source: source,
-                fileDescriptor: fd,
-                shouldStopAccessing: shouldStopAccessing
-            )
-            source.resume()
-            scheduleLinkedFolderScan(albumID: album.id, delayNanoseconds: 500_000_000)
+        for album in linkedAlbums {
+            linkedFolderScanStatus.currentFolderName = album.name
+            linkedFolderScanStatus.processedItemsInCurrentFolder = 0
+            await scanLinkedFolder(albumID: album.id) { [weak self] in
+                self?.linkedFolderScanStatus.processedItemsInCurrentFolder += 1
+            }
+            linkedFolderScanStatus.processedCount += 1
         }
+
+        let imported = max(0, videos.count - beforeCount)
+        linkedFolderScanStatus.isScanning = false
+        linkedFolderScanStatus.currentFolderName = nil
+        linkedFolderScanStatus.processedItemsInCurrentFolder = 0
+        linkedFolderScanStatus.statusMessage = imported > 0
+            ? "\(linkedAlbums.count)件のフォルダを更新し、\(imported)件の新しいメディアを取り込みました。"
+            : "\(linkedAlbums.count)件のフォルダを更新しました（新規メディアはありません）。"
     }
 
-    private func stopLinkedFolderMonitoring() {
-        linkedFolderPeriodicScanTask?.cancel()
-        linkedFolderPeriodicScanTask = nil
+    /// 予約済みの単発スキャン（起動時の初回スキャン・フォルダ紐づけ直後などに走るもの）を取り消す。アプリ終了時に呼ぶ。
+    private func cancelPendingLinkedFolderScans() {
+        initialLinkedFolderScanTask?.cancel()
+        initialLinkedFolderScanTask = nil
         linkedFolderScanTasks.values.forEach { $0.cancel() }
         linkedFolderScanTasks.removeAll()
-        linkedFolderMonitors.values.forEach { $0.cancel() }
-        linkedFolderMonitors.removeAll()
     }
 
     func scanFolder(folderURL: URL) -> (videoCount: Int, photoCount: Int) {
@@ -1976,7 +2043,6 @@ class VideoDataManager: ObservableObject {
         albums.removeAll { deletableIDs.contains($0.id) }
         saveData()
         reconcileLinkedFoldersFromExistingPaths()
-        startLinkedFolderMonitoring()
     }
     func moveVideos(videoIDs: [UUID], from sourceAlbumID: UUID, to targetAlbumID: UUID) { guard albums.contains(where: { $0.id == targetAlbumID }) else { return }; if let sourceIndex = albums.firstIndex(where: { $0.id == sourceAlbumID }), albums[sourceIndex].name != VideoDataManager.allVideosAlbumName, albums[sourceIndex].name != VideoDataManager.allPhotosAlbumName { albums[sourceIndex].videoIDs.removeAll { videoIDs.contains($0) } }; if let targetIndex = albums.firstIndex(where: { $0.id == targetAlbumID }) { let existingIDs = Set(albums[targetIndex].videoIDs); let newIDs = videoIDs.filter { !existingIDs.contains($0) }; albums[targetIndex].videoIDs.append(contentsOf: newIDs) }; saveData() }
 

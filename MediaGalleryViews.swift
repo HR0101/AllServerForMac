@@ -2,6 +2,13 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// サムネイル一覧の余白。密度を高めつつ，選択枠とホバー状態を見分けられる最小限の間隔を保つ。
+private enum MediaGridLayout {
+    static let spacing: CGFloat = 3
+    static let itemInset: CGFloat = 1
+    static let contentInset: CGFloat = 5
+}
+
 /// インポート進捗の @State 更新を間引くカウンタ。
 /// 1件ごとに @State を更新すると、その回数だけビュー全体（displayedItems の全件
 /// フィルタ+ソート含む）が再評価され、せっかくの一括反映最適化を打ち消してしまう。
@@ -70,7 +77,7 @@ struct AlbumDetailView: View {
     @EnvironmentObject private var appSettings: AppSettings
 
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: max(2, Int(appSettings.columnCount)))
+        Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: max(2, Int(appSettings.columnCount)))
     }
 
     private var currentAlbum: Album {
@@ -186,6 +193,7 @@ struct AlbumDetailView: View {
             Divider()
             MediaGridControlBar()
         }
+        .background(CommandDeckBackground())
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -385,13 +393,14 @@ struct AlbumDetailView: View {
     private func grid(_ items: [VideoItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: gridColumns, spacing: 12) {
+                LazyVGrid(columns: gridColumns, spacing: MediaGridLayout.spacing) {
                     ForEach(items) { video in
                         MediaGridItem(
                             video: video,
                             dataManager: dataManager,
                             isSelected: selectedVideoIDs.contains(video.id),
                             showTitle: appSettings.showTitles,
+                            showImportDate: appSettings.showImportDates,
                             showRemoveFromAlbum: album.name != VideoDataManager.allVideosAlbumName && album.name != VideoDataManager.allPhotosAlbumName,
                             onSingleTap: { flags in
                                 handleGridSelection(for: video, in: items, flags: flags)
@@ -433,7 +442,7 @@ struct AlbumDetailView: View {
                         .focused($focusedVideoID, equals: video.id)
                     }
                 }
-                .padding(16)
+                .padding(MediaGridLayout.contentInset)
             }
             .task(id: coordinator.returnToMediaID) {
                 await restoreReturnTarget(items: items, proxy: proxy)
@@ -973,6 +982,7 @@ struct MediaGridItem: View {
     let dataManager: VideoDataManager
     let isSelected: Bool
     var showTitle: Bool = true
+    var showImportDate: Bool = true
     let showRemoveFromAlbum: Bool
     let onSingleTap: (NSEvent.ModifierFlags) -> Void
     let onDoubleTap: () -> Void
@@ -1053,21 +1063,25 @@ struct MediaGridItem: View {
                     }
                 }
 
-            if showTitle {
+            if showTitle || showImportDate {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(video.originalFilename)
-                        .font(.caption)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    if showTitle {
+                        Text(video.originalFilename)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
 
-                    Text(MediaGridItem.itemFormatter.string(from: video.importDate))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    if showImportDate {
+                        Text(MediaGridItem.itemFormatter.string(from: video.importDate))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.horizontal, 4)
             }
         }
-        .padding(6)
+        .padding(MediaGridLayout.itemInset)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(isSelected
@@ -1195,10 +1209,13 @@ struct MediaGridControlBar: View {
 
             Spacer()
 
-            Button { appSettings.showTitles.toggle() } label: {
-                Image(systemName: appSettings.showTitles ? "text.below.photo.fill" : "text.below.photo")
+            Menu {
+                Toggle("タイトルを表示", isOn: $appSettings.showTitles)
+                Toggle("インポート日を表示", isOn: $appSettings.showImportDates)
+            } label: {
+                Image(systemName: appSettings.showTitles || appSettings.showImportDates ? "text.below.photo.fill" : "text.below.photo")
             }
-            .help(appSettings.showTitles ? "タイトルを非表示" : "タイトルを表示")
+            .help("サムネイル下の表示項目を設定")
 
             HStack(spacing: 6) {
                 Image(systemName: "square.grid.2x2")
@@ -1266,7 +1283,7 @@ struct LibraryCategoryView: View {
         displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
     }
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: max(2, Int(appSettings.columnCount)))
+        Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: max(2, Int(appSettings.columnCount)))
     }
 
     var body: some View {
@@ -1461,13 +1478,14 @@ struct LibraryCategoryView: View {
     private func grid(_ items: [VideoItem]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: gridColumns, spacing: 12) {
+                LazyVGrid(columns: gridColumns, spacing: MediaGridLayout.spacing) {
                     ForEach(items) { video in
                         MediaGridItem(
                             video: video,
                             dataManager: dataManager,
                             isSelected: selectedVideoIDs.contains(video.id),
                             showTitle: appSettings.showTitles,
+                            showImportDate: appSettings.showImportDates,
                             showRemoveFromAlbum: false,
                             onSingleTap: { flags in handleSelection(for: video, in: items, flags: flags); focusedVideoID = video.id },
                             onDoubleTap: { open(video) },
@@ -1497,7 +1515,7 @@ struct LibraryCategoryView: View {
                         .focused($focusedVideoID, equals: video.id)
                     }
                 }
-                .padding(16)
+                .padding(MediaGridLayout.contentInset)
             }
             .task(id: coordinator.returnToMediaID) {
                 await restoreReturnTarget(items: items, proxy: proxy)

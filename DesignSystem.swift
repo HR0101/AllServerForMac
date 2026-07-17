@@ -4,26 +4,94 @@ import SwiftUI
 // MARK: - デザイントークン
 
 enum DS {
-    static let cardCornerRadius: CGFloat = 14
+    static let cardCornerRadius: CGFloat = 8
     static let cardPadding: CGFloat = 18
-    static let cardSpacing: CGFloat = 16
+    static let cardSpacing: CGFloat = 18
+    static let cyan = Color(red: 0.18, green: 0.86, blue: 1.0)
+    static let violet = Color(red: 0.52, green: 0.42, blue: 1.0)
+    static let lime = Color(red: 0.42, green: 1.0, blue: 0.63)
+    static let signalRed = Color(red: 1.0, green: 0.19, blue: 0.18)
+    static let signalAmber = Color(red: 1.0, green: 0.65, blue: 0.16)
+    static let tallyGreen = Color(red: 0.49, green: 0.9, blue: 0.13)
+    static let surface = Color.black
+    static let surfaceRaised = Color(white: 0.028)
+}
+
+enum NeomorphicTheme {
+    static let background = Color(red: 0.89, green: 0.92, blue: 0.93)
+    static let surface = Color(red: 0.91, green: 0.93, blue: 0.93)
+    static let ink = Color(red: 0.16, green: 0.18, blue: 0.19)
+    static let muted = Color(red: 0.48, green: 0.52, blue: 0.54)
+    static let accent = Color(red: 0.14, green: 0.59, blue: 0.66)
+    static let shadow = Color(red: 0.62, green: 0.67, blue: 0.69)
+}
+
+struct NeomorphicWavePattern: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let lineCount = 22
+        for index in 0..<lineCount {
+            let progress = CGFloat(index) / CGFloat(max(lineCount - 1, 1))
+            let baseY = rect.minY + rect.height * progress
+            path.move(to: CGPoint(x: rect.minX, y: baseY))
+            for step in 0...64 {
+                let xProgress = CGFloat(step) / 64
+                let x = rect.minX + rect.width * xProgress
+                let wave = sin((xProgress * 2.2 + progress * 0.7) * .pi * 2)
+                let y = baseY + wave * 18
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        return path
+    }
+}
+
+// MARK: - コマンドデッキ背景
+
+/// ホームとライブラリに共通で使う背景です。
+/// 背景を常時動かすと内容より演出が目立つため，ここは静的に保ちます。
+/// 動きはカードへのホバーやサーバーの稼働状態など，意味のある箇所だけで見せます。
+struct CommandDeckBackground: View {
+    var body: some View {
+        ZStack {
+            NeomorphicTheme.background
+
+            NeomorphicWavePattern()
+                .stroke(Color.white.opacity(0.48), lineWidth: 1)
+                .frame(width: 540, height: 260)
+                .offset(x: -300, y: -240)
+
+            NeomorphicWavePattern()
+                .stroke(Color(red: 0.72, green: 0.79, blue: 0.83).opacity(0.38), lineWidth: 1)
+                .frame(width: 700, height: 340)
+                .rotationEffect(.degrees(8))
+                .offset(x: 330, y: 270)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
 }
 
 // MARK: - カード
 
 struct CardBackground: ViewModifier {
+    @State private var isHovering = false
+
     func body(content: Content) -> some View {
         content
             .padding(DS.cardPadding)
             .background(
                 RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor))
-                    .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 2)
+                    .fill(NeomorphicTheme.surface)
+                    .shadow(color: .white.opacity(0.9), radius: isHovering ? 10 : 7, x: -6, y: -6)
+                    .shadow(color: NeomorphicTheme.shadow.opacity(isHovering ? 0.36 : 0.28), radius: isHovering ? 16 : 11, x: 8, y: 8)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                    .strokeBorder(.white.opacity(isHovering ? 0.76 : 0.58), lineWidth: 1)
             )
+            .animation(.easeOut(duration: 0.18), value: isHovering)
+            .onHover { isHovering = $0 }
     }
 }
 
@@ -46,11 +114,12 @@ struct CardHeader: View {
             IconTile(icon: icon, tint: tint)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(NeomorphicTheme.ink)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(NeomorphicTheme.muted)
                 }
             }
             Spacer(minLength: 0)
@@ -64,20 +133,20 @@ struct IconTile: View {
     var size: CGFloat = 26
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [tint.opacity(0.95), tint.opacity(0.7)],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(NeomorphicTheme.surface)
             .frame(width: size, height: size)
+            .shadow(color: .white.opacity(0.9), radius: 3, x: -2, y: -2)
+            .shadow(color: NeomorphicTheme.shadow.opacity(0.24), radius: 5, x: 3, y: 3)
             .overlay(
                 safeSystemImage(named: icon)
                     .font(.system(size: size * 0.5, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(tint)
             )
-            .shadow(color: tint.opacity(0.35), radius: 3, x: 0, y: 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(.white.opacity(0.64), lineWidth: 1)
+            )
     }
 
     private func safeSystemImage(named name: String) -> Image {
@@ -177,7 +246,7 @@ struct ProminentActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 13, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
             .padding(.horizontal, 22)
             .padding(.vertical, 9)
@@ -191,7 +260,7 @@ struct ProminentActionButtonStyle: ButtonStyle {
                             startPoint: .top, endPoint: .bottom
                         )
                     )
-                    .shadow(color: isEnabled ? tint.opacity(0.4) : .clear, radius: 5, x: 0, y: 2)
+                    .shadow(color: isEnabled ? tint.opacity(0.55) : .clear, radius: 10, x: 0, y: 3)
             )
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
@@ -224,7 +293,7 @@ struct StatPill: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(
-            Capsule().fill(Color.primary.opacity(0.05))
+            Capsule().fill(DS.cyan.opacity(0.1))
         )
     }
 }

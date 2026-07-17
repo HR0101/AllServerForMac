@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 
@@ -17,6 +18,9 @@ struct ContentView: View {
 
     @StateObject private var coordinator = PlaybackCoordinator()
     @StateObject private var appSettings = AppSettings()
+    private let sidebarMinWidth: CGFloat = 300
+    private let sidebarIdealWidth: CGFloat = 320
+    private let sidebarMaxWidth: CGFloat = 360
 
     init() {
         let manager = VideoDataManager()
@@ -62,31 +66,80 @@ struct ContentView: View {
     }
 
     private var libraryView: some View {
-        NavigationSplitView {
-            MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
-        } detail: {
-            NavigationStack {
-                switch selection {
-                case .home:
-                    HomeView(dataManager: dataManager, webServerManager: webServerManager)
-                        .navigationTitle("ホーム")
-                case .favorites:
-                    LibraryCategoryView(kind: .favorites, dataManager: dataManager)
-                        .navigationTitle("お気に入り")
-                case .trash:
-                    LibraryCategoryView(kind: .trash, dataManager: dataManager)
-                        .navigationTitle("ゴミ箱")
-                case .album(let albumID):
-                    if let album = dataManager.albums.first(where: { $0.id == albumID }) {
-                        AlbumDetailView(album: album, dataManager: dataManager)
-                            .navigationTitle(album.name)
-                    } else {
-                        ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
+        ZStack {
+            // ツールバーの背後まで同じ背景を広げ，フルスクリーン時の色の段差をなくす。
+            CommandDeckBackground()
+
+            NavigationSplitView {
+                MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
+                    .navigationSplitViewColumnWidth(
+                        min: sidebarMinWidth,
+                        ideal: sidebarIdealWidth,
+                        max: sidebarMaxWidth
+                    )
+            } detail: {
+                NavigationStack {
+                    switch selection {
+                    case .home:
+                        HomeView(dataManager: dataManager, webServerManager: webServerManager)
+                            .navigationTitle("ホーム")
+                    case .favorites:
+                        LibraryCategoryView(kind: .favorites, dataManager: dataManager)
+                            .navigationTitle("お気に入り")
+                    case .trash:
+                        LibraryCategoryView(kind: .trash, dataManager: dataManager)
+                            .navigationTitle("ゴミ箱")
+                    case .album(let albumID):
+                        if let album = dataManager.albums.first(where: { $0.id == albumID }) {
+                            AlbumDetailView(album: album, dataManager: dataManager)
+                                .navigationTitle(album.name)
+                        } else {
+                            ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
+                        }
+                    case .none:
+                        ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                     }
-                case .none:
-                    ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                 }
             }
         }
+        .tint(NeomorphicTheme.accent)
+        .preferredColorScheme(.light)
+        .toolbarBackground(.hidden, for: .windowToolbar)
+        .background(WindowChromeConfigurator())
+        .ignoresSafeArea()
+    }
+}
+
+/// macOS標準のタイトルバーをコンテンツと同じ黒い背景に重ねるための設定です。
+/// toolbarBackgroundだけではタイトルバー領域の外観を完全に消せないため，
+/// NSWindowをフルサイズコンテンツビューとして明示的に構成します。
+private struct WindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowChromeView {
+        WindowChromeView()
+    }
+
+    func updateNSView(_ nsView: WindowChromeView, context: Context) {
+        nsView.applyWindowChrome()
+    }
+}
+
+private final class WindowChromeView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyWindowChrome()
+    }
+
+    func applyWindowChrome() {
+        guard let window else { return }
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = NSColor(
+            red: 0.89,
+            green: 0.92,
+            blue: 0.93,
+            alpha: 1.0
+        )
+        window.toolbarStyle = .unifiedCompact
     }
 }
