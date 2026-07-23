@@ -123,8 +123,13 @@ struct ContentView: View {
         .tint(NeomorphicTheme.accent)
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
         .toolbarBackground(NeomorphicTheme.background, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
-        .background(WindowChromeConfigurator())
+        .toolbarBackground(
+            isToolbarHidden ? .hidden : .visible,
+            for: .windowToolbar
+        )
+        .background(
+            WindowChromeConfigurator(isToolbarHidden: isToolbarHidden)
+        )
         .ignoresSafeArea()
         // ベースカラーを切り替えたら、色を静的に参照している全ビュー（CommandDeckBackground・
         // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
@@ -137,16 +142,23 @@ struct ContentView: View {
 /// toolbarBackgroundだけではタイトルバー領域の外観を完全に消せないため，
 /// NSWindowをフルサイズコンテンツビューとして明示的に構成します。
 private struct WindowChromeConfigurator: NSViewRepresentable {
+    let isToolbarHidden: Bool
+
     func makeNSView(context: Context) -> WindowChromeView {
-        WindowChromeView()
+        let view = WindowChromeView()
+        view.isToolbarHidden = isToolbarHidden
+        return view
     }
 
     func updateNSView(_ nsView: WindowChromeView, context: Context) {
+        nsView.isToolbarHidden = isToolbarHidden
         nsView.applyWindowChrome()
     }
 }
 
 private final class WindowChromeView: NSView {
+    var isToolbarHidden = false
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyWindowChrome()
@@ -165,5 +177,6 @@ private final class WindowChromeView: NSView {
             ? NSColor(red: 0.08, green: 0.085, blue: 0.09, alpha: 1.0)
             : NSColor(red: 0.89, green: 0.92, blue: 0.93, alpha: 1.0)
         window.toolbarStyle = .unifiedCompact
+        window.toolbar?.isVisible = !isToolbarHidden
     }
 }
