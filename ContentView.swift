@@ -33,9 +33,13 @@ struct ContentView: View {
         // 他のUIが前面に残らない完全な全画面にする（元アプリと同じ方式）。
         // ただし通常再生をIキーでミニプレイヤー化した間はアルバム一覧を操作できるよう裏に残す。
         ZStack(alignment: .bottomTrailing) {
-            if shouldShowLibraryView {
-                libraryView
-            }
+            NeomorphicTheme.background
+                .ignoresSafeArea()
+
+            libraryView
+                .opacity(shouldShowLibraryView ? 1 : 0)
+                .allowsHitTesting(shouldShowLibraryView)
+                .accessibilityHidden(!shouldShowLibraryView)
 
             if let mode = coordinator.mode {
                 playerOverlay(for: mode)
@@ -118,7 +122,8 @@ struct ContentView: View {
         }
         .tint(NeomorphicTheme.accent)
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
-        .toolbarBackground(.hidden, for: .windowToolbar)
+        .toolbarBackground(NeomorphicTheme.background, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .background(WindowChromeConfigurator())
         .ignoresSafeArea()
         // ベースカラーを切り替えたら、色を静的に参照している全ビュー（CommandDeckBackground・
@@ -152,6 +157,10 @@ private final class WindowChromeView: NSView {
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        // ウィンドウのクロム（タイトルバー・ツールバー）をアプリのテーマに固定する。
+        // システムがダークだと、フルスクリーンの上端が黒く見える一因になるため。
+        window.appearance = NSAppearance(named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua)
         window.backgroundColor = NeomorphicTheme.isDarkBase
             ? NSColor(red: 0.08, green: 0.085, blue: 0.09, alpha: 1.0)
             : NSColor(red: 0.89, green: 0.92, blue: 0.93, alpha: 1.0)
