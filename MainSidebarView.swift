@@ -451,6 +451,7 @@ struct MainSidebarView: View {
     /// ドラッグ&ドロップやフォルダの識別（ハイライト用キー）を型ごとに分離するために使う。
     private func sidebarAlbumNodeRow(_ node: SidebarAlbumNode, isPhotoTree: Bool) -> AnyView {
         if node.children.isEmpty, let album = node.album {
+            guard nonTrashedCount(in: album) > 0 else { return AnyView(EmptyView()) }
             return sidebarAlbumRow(album: album, title: node.name, systemImage: iconForAlbum(album))
         } else {
             let key = dropKey(forPath: node.id, isPhotoTree: isPhotoTree)
@@ -463,7 +464,7 @@ struct MainSidebarView: View {
 
                     if expandedFolderIDs.contains(key) {
                         VStack(alignment: .leading, spacing: 2) {
-                            if let album = node.album {
+                            if let album = node.album, nonTrashedCount(in: album) > 0 {
                                 sidebarAlbumRow(album: album, title: "このフォルダ内のメディア", systemImage: iconForAlbum(album))
                             }
 

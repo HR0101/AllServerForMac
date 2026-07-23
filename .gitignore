@@ -4,3 +4,9 @@
 *.plist
 *.entitlements
 
+# アプリアイコンだけは配布に必要なため追跡する
+!Assets.xcassets/
+Assets.xcassets/*
+!Assets.xcassets/AppIcon.appiconset/
+!Assets.xcassets/AppIcon.appiconset/Contents.json
+!Assets.xcassets/AppIcon.appiconset/*.png
