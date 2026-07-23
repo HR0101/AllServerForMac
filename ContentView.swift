@@ -117,10 +117,14 @@ struct ContentView: View {
             }
         }
         .tint(NeomorphicTheme.accent)
-        .preferredColorScheme(.light)
+        .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
         .toolbarBackground(.hidden, for: .windowToolbar)
         .background(WindowChromeConfigurator())
         .ignoresSafeArea()
+        // ベースカラーを切り替えたら、色を静的に参照している全ビュー（CommandDeckBackground・
+        // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
+        // これをしないと一部だけ色が更新されず、白背景に白文字などのちぐはぐが起きる。
+        .id(appSettings.neomorphicDarkBase)
     }
 }
 
@@ -148,12 +152,9 @@ private final class WindowChromeView: NSView {
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = NSColor(
-            red: 0.89,
-            green: 0.92,
-            blue: 0.93,
-            alpha: 1.0
-        )
+        window.backgroundColor = NeomorphicTheme.isDarkBase
+            ? NSColor(red: 0.08, green: 0.085, blue: 0.09, alpha: 1.0)
+            : NSColor(red: 0.89, green: 0.92, blue: 0.93, alpha: 1.0)
         window.toolbarStyle = .unifiedCompact
     }
 }

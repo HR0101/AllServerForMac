@@ -17,13 +17,36 @@ enum DS {
     static let surfaceRaised = Color(white: 0.028)
 }
 
+/// ネオモーフィズムのベースカラー。設定「外観」のトグルで白ベース⇄黒ベースを切り替える。
+/// 色の値だけを差し替え、レイアウトやシャドウの構造は白ベースと完全に共通のまま保つ。
+/// 単一の真実の source として UserDefaults を直接読むことで、AppSettings を経由できない
+/// 静的な色参照（CommandDeckBackground など）や AppKit 側（NSColor）からも常に同じ値を得る。
+/// トグル時の一貫した再描画は ContentView 側の `.id()` による作り直しで保証している。
 enum NeomorphicTheme {
-    static let background = Color(red: 0.89, green: 0.92, blue: 0.93)
-    static let surface = Color(red: 0.91, green: 0.93, blue: 0.93)
-    static let ink = Color(red: 0.16, green: 0.18, blue: 0.19)
-    static let muted = Color(red: 0.48, green: 0.52, blue: 0.54)
-    static let accent = Color(red: 0.14, green: 0.59, blue: 0.66)
-    static let shadow = Color(red: 0.62, green: 0.67, blue: 0.69)
+    static let darkBaseDefaultsKey = "appearance.neomorphicDarkBase"
+
+    static var isDarkBase: Bool {
+        UserDefaults.standard.bool(forKey: darkBaseDefaultsKey)
+    }
+
+    static var background: Color {
+        isDarkBase ? Color(red: 0.08, green: 0.085, blue: 0.09) : Color(red: 0.89, green: 0.92, blue: 0.93)
+    }
+    static var surface: Color {
+        isDarkBase ? Color(red: 0.14, green: 0.15, blue: 0.16) : Color(red: 0.91, green: 0.93, blue: 0.93)
+    }
+    static var ink: Color {
+        isDarkBase ? Color(red: 0.90, green: 0.92, blue: 0.93) : Color(red: 0.16, green: 0.18, blue: 0.19)
+    }
+    static var muted: Color {
+        isDarkBase ? Color(red: 0.60, green: 0.64, blue: 0.66) : Color(red: 0.48, green: 0.52, blue: 0.54)
+    }
+    static var accent: Color {
+        Color(red: 0.14, green: 0.59, blue: 0.66)
+    }
+    static var shadow: Color {
+        isDarkBase ? Color(red: 0.0, green: 0.0, blue: 0.0) : Color(red: 0.62, green: 0.67, blue: 0.69)
+    }
 }
 
 struct NeomorphicWavePattern: Shape {

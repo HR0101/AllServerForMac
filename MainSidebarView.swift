@@ -24,6 +24,7 @@ private extension UTType {
 struct MainSidebarView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
+    @EnvironmentObject var appSettings: AppSettings
     @Binding var selection: NavigationSelection?
 
     @State private var isShowingPreferences = false
@@ -71,6 +72,9 @@ struct MainSidebarView: View {
     private let sidebarRowHeight: CGFloat = 28
     private let sidebarRowCornerRadius: CGFloat = 7
     private let sidebarIconWidth: CGFloat = 16
+    // 行の左余白。アイコンが左端ギリギリに見えないよう、右側の余白より少し広めにとる。
+    private let sidebarRowLeadingPadding: CGFloat = 16
+    private let sidebarRowTrailingPadding: CGFloat = 10
 
     // サイドバー行の横幅。`.frame(maxWidth: .infinity)` や HStack 内の `Spacer`、
     // `.overlay(alignment:)`、GeometryReader での実測、DisclosureGroup など、
@@ -141,7 +145,7 @@ struct MainSidebarView: View {
             StorageManagerView(dataManager: dataManager)
         }
         .sheet(isPresented: $isShowingPreferences) {
-            PreferencesView(dataManager: dataManager, webServerManager: webServerManager)
+            PreferencesView(dataManager: dataManager, webServerManager: webServerManager, appSettings: appSettings)
         }
         .onDrop(of: [.fileURL], isTargeted: $isSidebarTargeted) { providers in
             handleDropOnSidebar(providers: providers)
@@ -164,14 +168,17 @@ struct MainSidebarView: View {
     }
 
     private var albumSectionHeader: some View {
-        HStack(spacing: 0) {
+        // 選択モードでは「フォルダにまとめる / 削除 / 完了」の3ボタン（完了は文字）になり
+        // 60pt には収まらないため、モードに応じてボタン領域の幅を変える。
+        let buttonsWidth: CGFloat = isAlbumSelectionMode ? 116 : 60
+        return HStack(spacing: 0) {
             Text("アルバム")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(NeomorphicTheme.muted)
                 .padding(.leading, 10)
-                .frame(width: sidebarRowWidth - 60, alignment: .leading)
+                .frame(width: sidebarRowWidth - buttonsWidth, alignment: .leading)
             albumSectionHeaderButtons
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: buttonsWidth, alignment: .trailing)
         }
         .padding(.vertical, 4)
         .background(
@@ -187,39 +194,42 @@ struct MainSidebarView: View {
         .help("ここにドラッグするとフォルダの外（最上位）に移動します")
     }
 
-    @ViewBuilder
+    // 複数のボタンを HStack で囲まずに並べると、親の `.frame(width:)` の中で
+    // ボタン同士が重なって表示が潰れるため、必ず明示的な HStack でまとめる。
     private var albumSectionHeaderButtons: some View {
-        if isAlbumSelectionMode {
-            Button(action: { newFolderNameForSelection = ""; isShowingCreateFolderFromSelectionAlert = true }) {
-                Image(systemName: "folder.badge.plus")
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedAlbumIDs.isEmpty)
-            .help("選択したアルバムを新しいフォルダにまとめる")
+        HStack(spacing: 8) {
+            if isAlbumSelectionMode {
+                Button(action: { newFolderNameForSelection = ""; isShowingCreateFolderFromSelectionAlert = true }) {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedAlbumIDs.isEmpty)
+                .help("選択したアルバムを新しいフォルダにまとめる")
 
-            Button(action: requestSelectedAlbumDeletion) {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedAlbumIDs.isEmpty)
-            .help("選択したアルバムを削除")
+                Button(action: requestSelectedAlbumDeletion) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedAlbumIDs.isEmpty)
+                .help("選択したアルバムを削除")
 
-            Button(action: exitAlbumSelectionMode) {
-                Text("完了")
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button(action: { isShowingAddAlbumSheet = true }) {
-                Image(systemName: "plus.circle")
-            }
-            .buttonStyle(.plain)
-            .help("新規アルバムを作成")
+                Button(action: exitAlbumSelectionMode) {
+                    Text("完了")
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: { isShowingAddAlbumSheet = true }) {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(.plain)
+                .help("新規アルバムを作成")
 
-            Button(action: { isAlbumSelectionMode = true }) {
-                Image(systemName: "checklist")
+                Button(action: { isAlbumSelectionMode = true }) {
+                    Image(systemName: "checklist")
+                }
+                .buttonStyle(.plain)
+                .help("複数選択")
             }
-            .buttonStyle(.plain)
-            .help("複数選択")
         }
     }
 
@@ -264,7 +274,7 @@ struct MainSidebarView: View {
         .background(Color.clear)
         .tint(NeomorphicTheme.accent)
         .foregroundStyle(NeomorphicTheme.ink)
-        .environment(\.colorScheme, .light)
+        .environment(\.colorScheme, appSettings.neomorphicDarkBase ? .dark : .light)
         .onAppear {
             refreshSidebarCaches()
             revealSelectedAlbumInSidebar()
@@ -347,7 +357,8 @@ struct MainSidebarView: View {
                     .frame(width: 12)
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, sidebarRowLeadingPadding)
+        .padding(.trailing, sidebarRowTrailingPadding)
         .frame(width: sidebarRowWidth, height: sidebarRowHeight, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous))
         .background(
@@ -366,7 +377,8 @@ struct MainSidebarView: View {
         Text(title)
             .font(.system(size: 11, weight: .bold, design: .rounded))
             .foregroundStyle(NeomorphicTheme.muted)
-            .padding(.horizontal, 10)
+            .padding(.leading, sidebarRowLeadingPadding)
+            .padding(.trailing, sidebarRowTrailingPadding)
             .frame(width: sidebarRowWidth, alignment: .leading)
     }
 
@@ -385,7 +397,8 @@ struct MainSidebarView: View {
                 .truncationMode(.tail)
             sidebarCountBadge(count, tint: NeomorphicTheme.muted)
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, sidebarRowLeadingPadding)
+        .padding(.trailing, sidebarRowTrailingPadding)
         .frame(width: sidebarRowWidth, height: sidebarRowHeight, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous))
     }

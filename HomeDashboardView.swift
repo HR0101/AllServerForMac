@@ -9,6 +9,7 @@ struct HomeView: View {
     @ObservedObject private var duplicateCheckStatus: DuplicateCheckStatus
     @ObservedObject private var linkedFolderScanStatus: LinkedFolderScanStatus
     @StateObject private var systemMonitor = SystemMonitor()
+    @EnvironmentObject private var appSettings: AppSettings
 
     @State private var isShowingAccessLog = false
     @State private var isShowingStorageManager = false
@@ -59,7 +60,7 @@ struct HomeView: View {
         }
         .tint(NeomorphicTheme.accent)
         .foregroundStyle(NeomorphicTheme.ink)
-        .preferredColorScheme(.light)
+        .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
         .sheet(isPresented: $isShowingAccessLog) {
             AccessLogView(webServerManager: webServerManager)
         }
