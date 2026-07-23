@@ -122,7 +122,8 @@ struct ContentView: View {
         }
         .tint(NeomorphicTheme.accent)
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
-        .toolbarBackground(.hidden, for: .windowToolbar)
+        .toolbarBackground(NeomorphicTheme.background, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .background(WindowChromeConfigurator())
         .ignoresSafeArea()
         // ベースカラーを切り替えたら、色を静的に参照している全ビュー（CommandDeckBackground・
@@ -146,37 +147,9 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
 }
 
 private final class WindowChromeView: NSView {
-    private var fullScreenObservers: [NSObjectProtocol] = []
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        observeFullScreenTransitions()
         applyWindowChrome()
-    }
-
-    /// フルスクリーンへ出入りするとタイトルバー／ツールバーの背景ビューが作り直され、
-    /// 上端に黒い帯が出る。遷移のたびに設定し直す（背景ビューは遷移直後に生成されるため
-    /// 通知の同期タイミングに加えて次のループでも当てる）。
-    private func observeFullScreenTransitions() {
-        fullScreenObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        fullScreenObservers.removeAll()
-        guard let window else { return }
-        let names: [NSNotification.Name] = [
-            NSWindow.didEnterFullScreenNotification,
-            NSWindow.didExitFullScreenNotification,
-            NSWindow.didResizeNotification
-        ]
-        for name in names {
-            let token = NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                self?.applyWindowChrome()
-                DispatchQueue.main.async { self?.applyWindowChrome() }
-            }
-            fullScreenObservers.append(token)
-        }
-    }
-
-    deinit {
-        fullScreenObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     func applyWindowChrome() {
@@ -185,7 +158,6 @@ private final class WindowChromeView: NSView {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
-        window.toolbar?.showsBaselineSeparator = false
         // ウィンドウのクロム（タイトルバー・ツールバー）をアプリのテーマに固定する。
         // システムがダークだと、フルスクリーンの上端が黒く見える一因になるため。
         window.appearance = NSAppearance(named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua)
@@ -193,59 +165,5 @@ private final class WindowChromeView: NSView {
             ? NSColor(red: 0.08, green: 0.085, blue: 0.09, alpha: 1.0)
             : NSColor(red: 0.89, green: 0.92, blue: 0.93, alpha: 1.0)
         window.toolbarStyle = .unifiedCompact
-        clearTitlebarBackground(of: window)
-    }
-
-    /// タイトルバー／ツールバー領域に付く不透明な背景（フルスクリーン時の黒帯の実体）を透明化する。
-    /// `titlebarAppearsTransparent` だけでは全画面で残るため、背景の視覚効果ビューを直接消して
-    /// 背後のコンテンツ（CommandDeckBackground）が透けるようにする。ツールバーのボタン等は
-    /// 別ビューなので残る。
-    private func clearTitlebarBackground(of window: NSWindow) {
-        guard let frameView = window.contentView?.superview else { return }
-        for container in titlebarContainers(in: frameView) {
-            container.wantsLayer = true
-            container.layer?.backgroundColor = NSColor.clear.cgColor
-            configureTitlebarSubviews(in: container)
-        }
-    }
-
-    /// 全画面ではツールバー背景が深い階層へ移動するため，再帰的に視覚効果ビューを処理する。
-    private func configureTitlebarSubviews(in view: NSView) {
-        for subview in view.subviews {
-            if let background = subview as? NSVisualEffectView {
-                if containsToolbar(background) {
-                    // ツールバーボタンを維持しつつ，背景はウィンドウのテーマ色を参照させる。
-                    background.isHidden = false
-                    background.material = .underWindowBackground
-                    background.blendingMode = .withinWindow
-                    background.state = .active
-                } else {
-                    background.isHidden = true
-                }
-            }
-            configureTitlebarSubviews(in: subview)
-        }
-    }
-
-    /// フレームビュー配下から NSTitlebarContainerView を（入れ子でも）探す。
-    private func titlebarContainers(in view: NSView) -> [NSView] {
-        var result: [NSView] = []
-        for sub in view.subviews {
-            if String(describing: type(of: sub)) == "NSTitlebarContainerView" {
-                result.append(sub)
-            }
-            result.append(contentsOf: titlebarContainers(in: sub))
-        }
-        return result
-    }
-
-    /// ビュー配下にツールバー系のビューが含まれるか（背景として消してよいか判定するため）。
-    private func containsToolbar(_ view: NSView) -> Bool {
-        if String(describing: type(of: view)).contains("Toolbar") { return true }
-        for sub in view.subviews {
-            if String(describing: type(of: sub)).contains("Toolbar") { return true }
-            if containsToolbar(sub) { return true }
-        }
-        return false
     }
 }
