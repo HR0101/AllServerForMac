@@ -106,6 +106,14 @@ struct VideoItem: Identifiable, Codable, Hashable {
     }
 }
 
+/// 並び替え（サイズ・変更日・最後に開いた日）のために実ファイルから読む属性。
+/// VideoItem には保持していないので、必要になった時だけ stat して埋める。
+struct VideoFileMetadata {
+    var size: Int64 = 0
+    var modificationDate: Date? = nil
+    var accessDate: Date? = nil
+}
+
 struct Album: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
@@ -879,6 +887,36 @@ class VideoDataManager: ObservableObject {
         }
     }
     
+    /// 並び替え用ファイルメタデータの遅延キャッシュ（item.id → 属性）。
+    /// サイズ・変更日で並べ替えるたびに全ファイルを stat し直すと重いので一度読んだら使い回す。
+    /// サイズや変更日はセッション中まず変わらないため、明示的な無効化はしていない。
+    private var fileMetadataCache: [UUID: VideoFileMetadata] = [:]
+
+    /// ファイルメタデータのキャッシュを捨てて、次回の並び替えで実ファイルを読み直させる。
+    /// 「最後に開いた日」などセッション中に変わり得る属性を、その順で並べ直すとき最新化するために使う。
+    func refreshFileMetadataCache() {
+        fileMetadataCache.removeAll()
+    }
+
+    /// 並び替え（サイズ・変更日・最後に開いた日）用に item の実ファイル属性を返す。
+    /// 一度読んだものは item.id でキャッシュする。実ファイルが無ければ空の属性を返す。
+    func fileMetadata(for item: VideoItem) -> VideoFileMetadata {
+        if let cached = fileMetadataCache[item.id] { return cached }
+        let meta: VideoFileMetadata
+        if let url = fileURL(for: item),
+           let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .contentAccessDateKey]) {
+            meta = VideoFileMetadata(
+                size: Int64(values.fileSize ?? 0),
+                modificationDate: values.contentModificationDate,
+                accessDate: values.contentAccessDate
+            )
+        } else {
+            meta = VideoFileMetadata()
+        }
+        fileMetadataCache[item.id] = meta
+        return meta
+    }
+
     func fileURL(for item: VideoItem) -> URL? {
         if let extPath = item.externalFilePath {
             let extURL = URL(fileURLWithPath: extPath)

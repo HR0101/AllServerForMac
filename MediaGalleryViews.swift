@@ -94,7 +94,7 @@ struct AlbumDetailView: View {
         return dataManager.videos
             .filter { memberIDs.contains($0.id) && !$0.isInTrash }
             .filtered(bySearch: searchText)
-            .sorted(by: appSettings.sortOrder)
+            .sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed) { dataManager.fileMetadata(for: $0) }
     }
 
     /// このアルバムの動画のみ（表示順）
@@ -191,7 +191,7 @@ struct AlbumDetailView: View {
             }
 
             Divider()
-            MediaGridControlBar()
+            MediaGridControlBar(dataManager: dataManager)
         }
         .background(CommandDeckBackground())
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
@@ -1167,6 +1167,9 @@ struct MediaGridItem: View {
 // MARK: - 共有グリッド設定バー（ソート/サムネ位置/タイトル/列数）
 struct MediaGridControlBar: View {
     @EnvironmentObject private var appSettings: AppSettings
+    /// 「サイズ」「最後に開いた日」等を選んだときにファイル属性キャッシュを最新化するためだけに参照する。
+    /// 表示更新は監視しないので @ObservedObject ではなく素の参照にしている。
+    let dataManager: VideoDataManager
 
     private static let secondsFormatter: NumberFormatter = {
         let f = NumberFormatter()
@@ -1180,12 +1183,24 @@ struct MediaGridControlBar: View {
         HStack(spacing: 14) {
             Menu {
                 ForEach(SortOrder.allCases) { order in
-                    Button(order.rawValue) { appSettings.sortOrder = order }
+                    Button(order.rawValue) {
+                        // ファイル属性で並べる順を選び直したときは実ファイルを読み直して最新化する。
+                        if order.needsFileMetadata { dataManager.refreshFileMetadataCache() }
+                        appSettings.sortOrder = order
+                    }
                 }
             } label: {
                 Label(appSettings.sortOrder.rawValue, systemImage: "arrow.up.arrow.down")
             }
             .fixedSize()
+
+            // 並び順の上下をワンクリックで反転する（既に並んだ結果を反転するだけなので再読み込み不要）。
+            Button {
+                appSettings.sortReversed.toggle()
+            } label: {
+                Image(systemName: appSettings.sortReversed ? "arrow.up" : "arrow.down")
+            }
+            .help(appSettings.sortReversed ? "並び順を元に戻す（逆順中）" : "並び順を上下逆にする")
 
             Menu {
                 ForEach(ThumbnailOption.allCases) { option in
@@ -1277,7 +1292,7 @@ struct LibraryCategoryView: View {
         }
     }
     private var displayedItems: [VideoItem] {
-        sourceItems.filtered(bySearch: searchText).sorted(by: appSettings.sortOrder)
+        sourceItems.filtered(bySearch: searchText).sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed) { dataManager.fileMetadata(for: $0) }
     }
     private var selectedVideoItems: [VideoItem] {
         displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
@@ -1322,7 +1337,7 @@ struct LibraryCategoryView: View {
                 }
             }
             Divider()
-            MediaGridControlBar()
+            MediaGridControlBar(dataManager: dataManager)
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
