@@ -667,7 +667,7 @@ struct AlbumDetailView: View {
     }
 
     private func revealInFinder(_ video: VideoItem) {
-        let url = dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)
+        guard let url = dataManager.revealURL(for: video) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -1506,7 +1506,7 @@ struct LibraryCategoryView: View {
                             onDoubleTap: { open(video) },
                             onOpen: { open(video) },
                             onOpenExternal: { if let url = dataManager.fileURL(for: video) { NSWorkspace.shared.open(url) } },
-                            onReveal: { NSWorkspace.shared.activateFileViewerSelecting([dataManager.videoStorageURL.appendingPathComponent(video.internalFilename)]) },
+                            onReveal: { if let url = dataManager.revealURL(for: video) { NSWorkspace.shared.activateFileViewerSelecting([url]) } },
                             onRemoveFromAlbum: {},
                             onDelete: { dataManager.deleteVideos(videoIDs: targetIDs(for: video)) },
                             isTrashView: isTrash,
@@ -1622,8 +1622,8 @@ struct LibraryCategoryView: View {
             }
             return .handled
         } else if MediaShortcutSettings.matches(.libraryRevealInFinder, press: press) {
-            if let item = primaryTarget(in: items) {
-                NSWorkspace.shared.activateFileViewerSelecting([dataManager.videoStorageURL.appendingPathComponent(item.internalFilename)])
+            if let item = primaryTarget(in: items), let url = dataManager.revealURL(for: item) {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
             }
             return .handled
         } else if MediaShortcutSettings.matches(.libraryToggleFavorite, press: press) {

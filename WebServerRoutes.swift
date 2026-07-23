@@ -52,7 +52,14 @@ extension WebServerManager {
                 }
             }
 
-            let videoInfos = videoItems.map { video in
+            // 並べ替え「サイズ/変更日/最後に開いた日」用に実ファイル属性を読む。
+            // ワーカースレッド上なので @MainActor を経由せず nonisolated な解決とファイルIOで完結させる。
+            let videoStorageURL = dataManager.videoStorageURL
+            let downloadStorageURL = dataManager.downloadStorageURL
+            let videoInfos = videoItems.map { video -> RemoteVideoInfo in
+                let fileURL = VideoDataManager.resolveFileURL(for: video, videoStorageURL: videoStorageURL, downloadStorageURL: downloadStorageURL)?
+                    .resolvingSymlinksInPath()
+                let values = fileURL.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .contentAccessDateKey]) }
                 return RemoteVideoInfo(
                     id: video.id.uuidString,
                     filename: video.originalFilename,
@@ -60,7 +67,10 @@ extension WebServerManager {
                     importDate: video.importDate,
                     creationDate: video.creationDate,
                     mediaType: video.mediaType.rawValue,
-                    parentAlbumID: customAlbumByVideoID[video.id]?.id.uuidString
+                    parentAlbumID: customAlbumByVideoID[video.id]?.id.uuidString,
+                    fileSize: values?.fileSize.map(Int64.init),
+                    modificationDate: values?.contentModificationDate,
+                    accessDate: values?.contentAccessDate
                 )
             }
             do {

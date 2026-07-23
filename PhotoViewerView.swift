@@ -59,6 +59,11 @@ struct PhotoViewerView: View {
     @State private var filmstripPreloadCenterID: UUID?
     @State private var visiblePhotos: [VideoItem]
 
+    // マウスドラッグで範囲選択してその領域へズームする状態。
+    @State private var zoom = MarqueeZoomState()
+    @State private var marqueeStart: CGPoint?
+    @State private var marqueeCurrent: CGPoint?
+
     private let preloadRadius = 8
     private let imageCacheRadius = 12
     private let previewPreloadRadius = 18
@@ -113,6 +118,7 @@ struct PhotoViewerView: View {
         }
         .onChange(of: current.id) { _, _ in
             coordinator.rememberReturnTarget(mediaID: current.id)
+            zoom.reset()
             load()
         }
         .onDisappear {
@@ -143,10 +149,17 @@ struct PhotoViewerView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .scaleEffect(x: zoom.scaleX, y: zoom.scaleY, anchor: .topLeading)
+                        .offset(zoom.offset)
 
                     interactionLayer(in: geo.size)
+
+                    if let s = marqueeStart, let c = marqueeCurrent {
+                        MarqueeRectangleShape(start: s, current: c)
+                    }
                     edgePreviewOverlay
                 }
+                .clipped()
             }
         } else {
             ProgressView()
@@ -159,7 +172,19 @@ struct PhotoViewerView: View {
     private func interactionLayer(in size: CGSize) -> some View {
         Color.clear
             .contentShape(Rectangle())
+            .gesture(
+                marqueeZoomGesture(start: $marqueeStart, current: $marqueeCurrent, containerSize: size) { rect in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        zoom.zoom(into: rect, containerSize: size)
+                    }
+                }
+            )
             .onTapGesture { location in
+                // ズーム中のクリックはフィット表示へ戻す。等倍のときだけ左右送りにする。
+                if zoom.isZoomed {
+                    withAnimation(.easeInOut(duration: 0.2)) { zoom.reset() }
+                    return
+                }
                 let width = size.width
                 if location.x < width * 0.3 {
                     changeItem(offset: isMangaMode ? 1 : -1)

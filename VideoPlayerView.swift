@@ -651,6 +651,10 @@ struct VideoPlayerView: View {
     @State private var cornerControlsActivityID = UUID()
     @State private var isUpNextPanelVisible = false
     @State private var isMiniControlsVisible = false
+    // マウスドラッグで範囲選択してその領域へズームする状態。
+    @State private var videoZoom = MarqueeZoomState()
+    @State private var videoMarqueeStart: CGPoint?
+    @State private var videoMarqueeCurrent: CGPoint?
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let sidebarWidth: CGFloat = 240
     private let triggerWidth: CGFloat = 10
@@ -713,6 +717,9 @@ struct VideoPlayerView: View {
             isVideoStripVisible = false
             isUpNextPanelVisible = false
             viewModel.setupPlayer()
+        }
+        .onChange(of: viewModel.currentVideo.id) { _, _ in
+            videoZoom.reset()
         }
         .onDisappear { viewModel.cleanup() }
     }
@@ -860,7 +867,34 @@ struct VideoPlayerView: View {
                     showsFullScreenToggleButton: false,
                     allowsPictureInPicturePlayback: false
                 )
+                .scaleEffect(x: videoZoom.scaleX, y: videoZoom.scaleY, anchor: .topLeading)
+                .offset(videoZoom.offset)
+
+                // マウスドラッグで範囲選択→その領域へズーム。ズーム中のクリックでフィット表示へ戻す。
+                // 独自コントロール（シークバー等）はこの ZStack の外側にあるため、当たり判定は奪わない。
+                GeometryReader { geo in
+                    ZStack {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .gesture(
+                                marqueeZoomGesture(start: $videoMarqueeStart, current: $videoMarqueeCurrent, containerSize: geo.size) { rect in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        videoZoom.zoom(into: rect, containerSize: geo.size)
+                                    }
+                                }
+                            )
+                            .onTapGesture {
+                                if videoZoom.isZoomed {
+                                    withAnimation(.easeInOut(duration: 0.2)) { videoZoom.reset() }
+                                }
+                            }
+                        if let s = videoMarqueeStart, let c = videoMarqueeCurrent {
+                            MarqueeRectangleShape(start: s, current: c)
+                        }
+                    }
+                }
             }
+            .clipped()
             sidebar
 
             ScrollWheelDetector { deltaY in

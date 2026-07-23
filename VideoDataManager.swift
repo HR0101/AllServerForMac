@@ -317,8 +317,9 @@ class VideoDataManager: ObservableObject {
     }
 
     let appRootURL: URL
-    let videoStorageURL: URL
-    let downloadStorageURL: URL
+    // HTTPルート（ワーカースレッド）から実ファイル属性を読むため、isolation に依らず参照できるようにする。
+    nonisolated let videoStorageURL: URL
+    nonisolated let downloadStorageURL: URL
     let thumbnailStorageURL: URL
     let proxyStorageURL: URL
     private let dataFileURL: URL
@@ -915,6 +916,14 @@ class VideoDataManager: ObservableObject {
         }
         fileMetadataCache[item.id] = meta
         return meta
+    }
+
+    /// 「Finderで表示」で選択すべき URL。フォルダインポート品は Videos/ 内のシンボリックリンク
+    /// （＝アプリデータ側のエイリアス）ではなく元ファイルの場所を開きたいので、元パスを優先して返す
+    /// `fileURL(for:)` の結果をシンボリックリンク解決してから返す。
+    /// 元ファイルが辿れないときのみ内部のリンク自体を指す。
+    func revealURL(for item: VideoItem) -> URL? {
+        fileURL(for: item)?.resolvingSymlinksInPath()
     }
 
     func fileURL(for item: VideoItem) -> URL? {
