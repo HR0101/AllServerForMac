@@ -1264,7 +1264,66 @@ class VideoDataManager: ObservableObject {
         return createAlbum(name: name, type: type)
     }
 
+    /// 同じ物理フォルダを実質的に指している重複アルバム（直接リンクした「陽夜」と、
+    /// 親フォルダのリンクから再帰インポートで生成された「Bengugu/陽夜」など）を検出し、1つに統合する。
+    /// 元々メディア数が多かった方を残し、少ない方のメディアと（あれば）フォルダのリンク情報を
+    /// 残す側へ移してから、空になったアルバムを削除する。
+    private func mergeDuplicateFolderAlbums() {
+        let protectedNames: Set<String> = [Self.allVideosAlbumName, Self.allPhotosAlbumName]
+        let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
+
+        func resolvedFolderPath(for album: Album) -> String? {
+            if let linkedPath = album.linkedFolderPath {
+                return normalizedPath(URL(fileURLWithPath: linkedPath))
+            }
+            let parentPaths = Set(album.videoIDs.compactMap { id -> String? in
+                guard let externalPath = itemsByID[id]?.externalFilePath else { return nil }
+                return normalizedPath(URL(fileURLWithPath: externalPath).deletingLastPathComponent())
+            })
+            return parentPaths.count == 1 ? parentPaths.first : nil
+        }
+
+        var groups: [String: [Album]] = [:]
+        for album in albums where !protectedNames.contains(album.name) {
+            guard let folder = resolvedFolderPath(for: album) else { continue }
+            groups[folder, default: []].append(album)
+        }
+
+        var albumIDsToDelete: [UUID] = []
+        for group in groups.values where group.count > 1 {
+            let ordered = group.sorted { $0.videoIDs.count > $1.videoIDs.count }
+            guard let primaryID = ordered.first?.id,
+                  let primaryIndex = albums.firstIndex(where: { $0.id == primaryID }) else { continue }
+
+            var mergedIDs = Set(albums[primaryIndex].videoIDs)
+            var mergedType = albums[primaryIndex].type
+            var linkedPath = albums[primaryIndex].linkedFolderPath
+            var linkedBookmark = albums[primaryIndex].linkedFolderBookmarkData
+
+            for loser in ordered.dropFirst() {
+                mergedIDs.formUnion(loser.videoIDs)
+                mergedType = combinedAlbumType(mergedType, loser.type)
+                if linkedPath == nil, let loserPath = loser.linkedFolderPath {
+                    linkedPath = loserPath
+                    linkedBookmark = loser.linkedFolderBookmarkData
+                }
+                albumIDsToDelete.append(loser.id)
+            }
+
+            albums[primaryIndex].videoIDs = Array(mergedIDs)
+            albums[primaryIndex].type = mergedType
+            albums[primaryIndex].linkedFolderPath = linkedPath
+            albums[primaryIndex].linkedFolderBookmarkData = linkedBookmark
+        }
+
+        guard !albumIDsToDelete.isEmpty else { return }
+        let deletableIDs = Set(albumIDsToDelete)
+        albums.removeAll { deletableIDs.contains($0.id) }
+        saveData()
+    }
+
     private func reconcileLinkedFoldersFromExistingPaths() {
+        mergeDuplicateFolderAlbums()
         let protectedNames: Set<String> = [Self.allVideosAlbumName, Self.allPhotosAlbumName]
         let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
         let existingAlbumsByName = Dictionary(grouping: albums) { $0.name }
@@ -1444,6 +1503,22 @@ class VideoDataManager: ObservableObject {
         return exists && isDirectory.boolValue
     }
 
+    /// 名前パスから導かれる階層アルバム（例: "Bengugu/陽夜"）と、同じ物理フォルダに
+    /// 直接紐づけられた単体アルバム（例: "陽夜"）が両方存在する場合、片方だけが
+    /// 再スキャンされて新規メディアが割れてしまう問題を防ぐため、
+    /// 同じフォルダを指す候補の中からメディア数が最も多いアルバムへ寄せる。
+    private func existingAlbum(named albumName: String, type albumType: AlbumType, orLinkedTo folderURL: URL) -> Album? {
+        let normalizedFolder = normalizedPath(folderURL)
+        let candidates = albums.filter { album in
+            if album.name == albumName && album.type == albumType { return true }
+            if let linkedPath = album.linkedFolderPath {
+                return normalizedPath(URL(fileURLWithPath: linkedPath)) == normalizedFolder
+            }
+            return false
+        }
+        return candidates.max { $0.videoIDs.count < $1.videoIDs.count }
+    }
+
     private func importLinkedFolderContents(
         folderURL: URL,
         as albumType: AlbumType,
@@ -1479,7 +1554,7 @@ class VideoDataManager: ObservableObject {
         if shouldCreateAlbum {
             if parentAlbumName == nil, let rootAlbumID, albums.contains(where: { $0.id == rootAlbumID }) {
                 targetAlbumID = rootAlbumID
-            } else if let existingAlbum = albums.first(where: { $0.name == albumName && $0.type == albumType }) {
+            } else if let existingAlbum = existingAlbum(named: albumName, type: albumType, orLinkedTo: folderURL) {
                 targetAlbumID = existingAlbum.id
             } else {
                 let newID = UUID()
@@ -1536,6 +1611,7 @@ class VideoDataManager: ObservableObject {
             rootBookmarkData: album.linkedFolderBookmarkData ?? bookmarkData(for: folderURL),
             onItemProcessed: onItemProcessed
         )
+        mergeDuplicateFolderAlbums()
     }
 
     private func scheduleLinkedFolderScan(albumID: UUID, delayNanoseconds: UInt64 = 1_500_000_000) {
