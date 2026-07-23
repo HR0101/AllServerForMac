@@ -5,6 +5,7 @@ import SwiftUI
 struct PreferencesView: View {
     @ObservedObject var dataManager: VideoDataManager
     @ObservedObject var webServerManager: WebServerManager
+    @ObservedObject var appSettings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("thumbnailMemoryCacheLimit") private var thumbnailMemoryCacheLimit = 600
@@ -25,6 +26,13 @@ struct PreferencesView: View {
             .padding(20)
 
             Form {
+                Section("外観") {
+                    Toggle("ベースカラーをブラックにする", isOn: $appSettings.neomorphicDarkBase)
+                    Text("ネオモーフィズムの基調色を白から黒へ切り替えます。レイアウトは変わりません。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("データの安全") {
                     Toggle("インポート時にファイルをアプリ内へコピー", isOn: $dataManager.importCopiesFiles)
                     Text("オンにすると、元のフォルダを消してもサーバー内に実体が残ります（ディスク容量を消費）。オフ（既定）は元の場所を参照するだけで、元ファイルを消すと再生できなくなります。")

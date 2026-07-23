@@ -60,6 +60,11 @@ final class AppSettings: ObservableObject {
     @Published var showImportDates: Bool {
         didSet { defaults.set(showImportDates, forKey: Keys.showImportDates) }
     }
+    /// ネオモーフィズムのベースカラーを黒基調にするか（false=既定の白基調）。
+    /// 実際の色解決は NeomorphicTheme が同じ UserDefaults キーを直接読む。
+    @Published var neomorphicDarkBase: Bool {
+        didSet { defaults.set(neomorphicDarkBase, forKey: Keys.neomorphicDarkBase) }
+    }
 
     private let defaults = UserDefaults.standard
     private enum Keys {
@@ -69,6 +74,7 @@ final class AppSettings: ObservableObject {
         static let columnCount = "library.columnCount"
         static let showTitles = "library.showTitles"
         static let showImportDates = "library.showImportDates"
+        static let neomorphicDarkBase = NeomorphicTheme.darkBaseDefaultsKey
     }
 
     init() {
@@ -82,6 +88,7 @@ final class AppSettings: ObservableObject {
         // 既存の「タイトルを表示」がオフなら，従来は日付も非表示だったため，
         // 新しい日付設定がまだ保存されていない場合は同じ状態を引き継ぐ。
         self.showImportDates = d.object(forKey: Keys.showImportDates) as? Bool ?? savedShowTitles
+        self.neomorphicDarkBase = d.bool(forKey: Keys.neomorphicDarkBase)
     }
 }
 
