@@ -118,10 +118,18 @@ struct PlayerContainerView: NSViewRepresentable {
 /// 全プレイヤーで見た目と操作感を揃える。
 struct PlayerCornerControls: View {
     @Binding var showShortcutHelp: Bool
+    /// 音量つまみを出す場合に渡す。nil のときは音量 UI を出さない
+    /// （同時再生のように音を別の仕組みで扱うプレイヤー向け）。
+    var volume: Binding<Float>? = nil
+    var isMuted: Binding<Bool>? = nil
     let onClose: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
+            if let volume, let isMuted {
+                volumeControl(volume: volume, isMuted: isMuted)
+            }
+
             Button {
                 showShortcutHelp.toggle()
             } label: {
@@ -145,6 +153,47 @@ struct PlayerCornerControls: View {
             .accessibilityLabel("プレイヤーを閉じる")
         }
         .padding()
+    }
+
+    /// スピーカーボタン（クリックでミュート切替）と音量スライダー。
+    /// 全画面再生中はメニューバーもウィンドウのツールバーも出ないため、
+    /// 音量を変えられる場所がここしかない。
+    private func volumeControl(volume: Binding<Float>, isMuted: Binding<Bool>) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                isMuted.wrappedValue.toggle()
+            } label: {
+                Image(systemName: Self.speakerSymbol(volume: volume.wrappedValue, isMuted: isMuted.wrappedValue))
+                    .font(.system(size: 15, weight: .semibold))
+                    // 記号ごとに幅が違うのでスライダーが左右に揺れないよう固定幅にする。
+                    .frame(width: 20, alignment: .center)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isMuted.wrappedValue ? "ミュート解除" : "ミュート")
+            .accessibilityLabel(isMuted.wrappedValue ? "ミュート解除" : "ミュート")
+
+            Slider(value: volume, in: 0...1)
+                .controlSize(.small)
+                .frame(width: 96)
+                .tint(.white.opacity(0.85))
+                .disabled(isMuted.wrappedValue)
+                .opacity(isMuted.wrappedValue ? 0.35 : 1)
+                .help("音量")
+                .accessibilityLabel("音量")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(.black.opacity(0.35)))
+        .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+    }
+
+    private static func speakerSymbol(volume: Float, isMuted: Bool) -> String {
+        if isMuted || volume <= 0.001 { return "speaker.slash.fill" }
+        if volume < 0.34 { return "speaker.fill" }
+        if volume < 0.67 { return "speaker.wave.1.fill" }
+        return "speaker.wave.2.fill"
     }
 }
 
@@ -322,6 +371,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case photoDelete
     case photoClose
     case libraryOpenFocused
+    case libraryQuickLook
     case libraryMoveLeft
     case libraryMoveRight
     case libraryMoveUp
@@ -368,6 +418,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .photoDelete: return "画像: 削除"
         case .photoClose: return "画像: 全画面表示／閉じる"
         case .libraryOpenFocused: return "一覧: 開く"
+        case .libraryQuickLook: return "一覧: クイックルック"
         case .libraryMoveLeft: return "一覧: 左へ移動"
         case .libraryMoveRight: return "一覧: 右へ移動"
         case .libraryMoveUp: return "一覧: 上へ移動"
@@ -410,6 +461,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .photoDelete: return "現在の画像を削除"
         case .photoClose: return "全画面表示／画像ビューアを閉じる"
         case .libraryOpenFocused: return "選択中の動画・画像を開く"
+        case .libraryQuickLook: return "選択中の動画を小さいパネルでプレビュー（動画のみ）"
         case .libraryMoveLeft: return "左の項目へ移動"
         case .libraryMoveRight: return "右の項目へ移動"
         case .libraryMoveUp: return "上の項目へ移動"
@@ -456,6 +508,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .photoDelete: return [.delete]
         case .photoClose: return [.f]
         case .libraryOpenFocused: return [.returnKey]
+        case .libraryQuickLook: return [.space]
         case .libraryMoveLeft: return [.leftArrow]
         case .libraryMoveRight: return [.rightArrow]
         case .libraryMoveUp: return [.upArrow]
@@ -503,6 +556,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
 
     static let libraryActions: [MediaShortcutAction] = [
         .libraryOpenFocused,
+        .libraryQuickLook,
         .libraryMoveLeft,
         .libraryMoveRight,
         .libraryMoveUp,

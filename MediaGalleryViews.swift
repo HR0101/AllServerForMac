@@ -9,6 +9,65 @@ private enum MediaGridLayout {
     static let contentInset: CGFloat = 5
 }
 
+/// 一覧グリッドの矢印キー移動。アルバム詳細とお気に入り/ゴミ箱の両方、
+/// さらにクイックルック表示中の送りも同じ計算を使う。
+enum MediaGridNavigation {
+    static func direction(for press: KeyPress) -> QuickLookPreviewController.NavigationDirection? {
+        if MediaShortcutSettings.matches(.libraryMoveUp, press: press) { return .up }
+        if MediaShortcutSettings.matches(.libraryMoveDown, press: press) { return .down }
+        if MediaShortcutSettings.matches(.libraryMoveLeft, press: press) { return .left }
+        if MediaShortcutSettings.matches(.libraryMoveRight, press: press) { return .right }
+        return nil
+    }
+
+    /// 移動先の添字。端で動けないときは nil。
+    static func nextIndex(
+        from index: Int,
+        direction: QuickLookPreviewController.NavigationDirection,
+        columnCount: Int,
+        itemCount: Int
+    ) -> Int? {
+        let next: Int
+        switch direction {
+        case .up: next = index - columnCount
+        case .down: next = index + columnCount
+        case .left: next = index - 1
+        case .right: next = index + 1
+        }
+        return (0..<itemCount).contains(next) ? next : nil
+    }
+}
+
+/// 削除の確認などで「どれを選んだのか」を小さく添えるための一覧文。
+///
+/// 件数だけだと、選んだつもりのものと実際の選択がずれていても気づけない。
+/// かといって全部並べるとダイアログが画面を埋めるので、先頭数件だけ出して残りは件数でまとめる。
+enum SelectionSummary {
+    /// 名前を並べる上限。これを超えたぶんは「ほか◯件」に畳む。
+    private static let maxListedNames = 8
+    /// 1行の長さの上限。超えたら真ん中を省略する。
+    private static let maxNameLength = 44
+
+    /// `items` は表示順で渡すこと（画面で見えている並びと一致していないと確認の役に立たない）。
+    static func text(for items: [VideoItem]) -> String {
+        guard !items.isEmpty else { return "" }
+        var lines = items.prefix(maxListedNames).map { "・" + shortened($0.originalFilename) }
+        let remainder = items.count - lines.count
+        if remainder > 0 {
+            lines.append("・ほか\(remainder)件")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 長い名前は真ん中を省略する。末尾には連番や拡張子が来ることが多く、
+    /// 先頭だけ残すより見分けがつきやすい。
+    private static func shortened(_ name: String) -> String {
+        guard name.count > maxNameLength else { return name }
+        let sideLength = maxNameLength / 2 - 1
+        return "\(name.prefix(sideLength))…\(name.suffix(sideLength))"
+    }
+}
+
 /// インポート進捗の @State 更新を間引くカウンタ。
 /// 1件ごとに @State を更新すると、その回数だけビュー全体（displayedItems の全件
 /// フィルタ+ソート含む）が再評価され、せっかくの一括反映最適化を打ち消してしまう。
@@ -47,13 +106,22 @@ struct AlbumDetailView: View {
     @State private var showMoveToNewAlbumAlert = false
     @State private var newAlbumNameForMove = ""
     @State private var pendingMoveVideoIDs: [UUID] = []
-    @FocusState private var focusedVideoID: UUID?
+    /// キーボードで今どのセルを指しているか。セル側の @FocusState ではなくただの状態として持つ
+    /// （SwiftUI 標準のフォーカス送りと矢印キーを取り合わないようにするため）。
+    @State private var focusedVideoID: UUID?
+    /// グリッドがキー入力を受け取れる状態か。フォーカスはグリッド全体で1つ。
+    @FocusState private var isGridFocused: Bool
+
+    // ラフ画・線画の抽出
+    @State private var showSketchCleanup = false
+    // 似ているメディアの整理
+    @State private var showSimilarMedia = false
 
     // 分割再生用
     @State private var showSplitSheet = false
     @State private var splitCount: Int = 4
     @State private var splitTargetVideo: VideoItem?
-    
+
     @State private var isCheckingDuplicates = false
     @State private var duplicateCheckProgress: Double = 0
     @State private var duplicateCheckCurrent = 0
@@ -76,8 +144,14 @@ struct AlbumDetailView: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
 
+    /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
+    /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
+    private var columnCount: Int {
+        max(2, Int(appSettings.columnCount))
+    }
+
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: max(2, Int(appSettings.columnCount)))
+        Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
     }
 
     private var currentAlbum: Album {
@@ -105,6 +179,11 @@ struct AlbumDetailView: View {
     /// 現在の選択のうち動画のみ（表示順）
     private var selectedVideoItems: [VideoItem] {
         displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
+    }
+
+    /// 現在の選択すべて（表示順、画像も含む）。削除の確認で何を消すのか見せるために使う。
+    private var selectedItems: [VideoItem] {
+        displayedItems.filter { selectedVideoIDs.contains($0.id) }
     }
 
     private var canRemoveItemsFromCurrentAlbum: Bool {
@@ -225,6 +304,46 @@ struct AlbumDetailView: View {
                 }
             }
 
+            // ラフ画・線画の抽出（画像がある場合のみ）
+            ToolbarItem(placement: .primaryAction) {
+                if items.contains(where: { $0.mediaType == .photo }) {
+                    Button {
+                        showSketchCleanup = true
+                    } label: {
+                        Label("ラフ画・線画", systemImage: "scribble.variable")
+                    }
+                    .help("このアルバムの画像からラフ画・線画を自動で拾い出して、確認してから削除します")
+                }
+            }
+
+            // 似ているメディアの整理（重複チェックと違い、完全一致でなくても拾う）
+            ToolbarItem(placement: .primaryAction) {
+                if items.count >= 2 {
+                    Button {
+                        showSimilarMedia = true
+                    } label: {
+                        Label("似ているものを探す", systemImage: "square.on.square.dashed")
+                    }
+                    .help("見た目が似ているメディアをまとめて表示し、残す1件を選んで残りを削除します")
+                }
+            }
+
+            // ランダム同時再生（本数を選ぶと、このアルバムからその数だけ無作為に選んで並べる）
+            ToolbarItem(placement: .primaryAction) {
+                if videoItems.count >= 2 {
+                    Menu {
+                        ForEach(2...min(9, videoItems.count), id: \.self) { count in
+                            Button("\(count)本") {
+                                coordinator.playMulti(Array(videoItems.shuffled().prefix(count)))
+                            }
+                        }
+                    } label: {
+                        Label("ランダム同時再生", systemImage: "square.grid.2x2")
+                    }
+                    .help("このアルバムの動画から、選んだ本数だけ無作為に選んで同時再生します")
+                }
+            }
+
             // ランダム再生（選択不要・このアルバムの動画をシャッフルして連続再生）
             ToolbarItem(placement: .primaryAction) {
                 if !videoItems.isEmpty {
@@ -302,7 +421,19 @@ struct AlbumDetailView: View {
             Button("完全に削除", role: .destructive, action: deleteSelectedVideos)
             Button("キャンセル", role: .cancel) { }
         } message: {
-            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。")
+            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。\n\n\(SelectionSummary.text(for: selectedItems))")
+        }
+        .sheet(isPresented: $showSketchCleanup) {
+            SketchCleanupView(items: displayedItems, dataManager: dataManager) {
+                selectedVideoIDs.removeAll()
+                lastSelectedVideoID = nil
+            }
+        }
+        .sheet(isPresented: $showSimilarMedia) {
+            SimilarMediaView(items: displayedItems, dataManager: dataManager) {
+                selectedVideoIDs.removeAll()
+                lastSelectedVideoID = nil
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             return handleDrop(providers: providers)
@@ -405,6 +536,8 @@ struct AlbumDetailView: View {
                             onSingleTap: { flags in
                                 handleGridSelection(for: video, in: items, flags: flags)
                                 focusedVideoID = video.id
+                                // クリック後もそのまま矢印キーで送れるようにフォーカスを戻す。
+                                isGridFocused = true
                             },
                             onDoubleTap: { openFile(video) },
                             onOpen: { openFile(video) },
@@ -414,7 +547,9 @@ struct AlbumDetailView: View {
                                 dataManager.removeVideosFromAlbum(videoIDs: [video.id], albumID: album.id)
                             },
                             onDelete: {
-                                dataManager.deleteVideos(videoIDs: [video.id])
+                                // 「ゴミ箱に入れる」と対象範囲を揃える。複数選択中に右クリックしたとき、
+                                // ゴミ箱行きは選択全体なのに完全削除だけ1件、では取り違えのもとになる。
+                                dataManager.deleteVideos(videoIDs: effectiveTargetIDs(for: video))
                             },
                             onToggleFavorite: {
                                 dataManager.toggleFavorite(videoIDs: effectiveTargetIDs(for: video))
@@ -434,16 +569,21 @@ struct AlbumDetailView: View {
                                 pendingMoveVideoIDs = effectiveTargetIDs(for: video)
                                 newAlbumNameForMove = ""
                                 showMoveToNewAlbumAlert = true
-                            }
+                            },
+                            affectedItems: menuTargets(for: video, in: items)
                         )
                         .id(video.id)
-                        .focusable()
-                        .focusEffectDisabled()
-                        .focused($focusedVideoID, equals: video.id)
                     }
                 }
                 .padding(MediaGridLayout.contentInset)
             }
+            // フォーカスはグリッド全体で1つだけ持つ。セルごとに .focusable() を付けると、
+            // SwiftUI 標準の矢印キーによるフォーカス送りが自前の「index ± 列数」移動と同時に走り、
+            // 1回の入力で二重に動いたり斜めに飛んだりする（列数によって挙動が変わって見える原因）。
+            // どのセルを指しているかは focusedVideoID（ただの @State）で持つ。
+            .focusable()
+            .focusEffectDisabled()
+            .focused($isGridFocused)
             .task(id: coordinator.returnToMediaID) {
                 await restoreReturnTarget(items: items, proxy: proxy)
             }
@@ -452,6 +592,7 @@ struct AlbumDetailView: View {
             }
             .onAppear {
                 // グリッドにフォーカスを持たせて onKeyPress を有効化する
+                isGridFocused = true
                 if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
                 if coordinator.returnToMediaID != nil {
                     Task { await restoreReturnTarget(items: items, proxy: proxy) }
@@ -473,8 +614,7 @@ struct AlbumDetailView: View {
             playFromGrid(items: items); return .handled
         }
 
-        let cols = max(2, Int(appSettings.columnCount))
-        guard let focused = focusedVideoID, let index = items.firstIndex(where: { $0.id == focused }) else {
+        guard let focused = focusedVideoID, items.contains(where: { $0.id == focused }) else {
             let first = items[0].id
             focusedVideoID = first
             selectedVideoIDs = [first]
@@ -482,33 +622,38 @@ struct AlbumDetailView: View {
             return .handled
         }
 
-        var nextIndex: Int?
-        if MediaShortcutSettings.matches(.libraryMoveUp, press: press), index - cols >= 0 {
-            nextIndex = index - cols
-        } else if MediaShortcutSettings.matches(.libraryMoveDown, press: press), index + cols < items.count {
-            nextIndex = index + cols
-        } else if MediaShortcutSettings.matches(.libraryMoveLeft, press: press), index > 0 {
-            nextIndex = index - 1
-        } else if MediaShortcutSettings.matches(.libraryMoveRight, press: press), index < items.count - 1 {
-            nextIndex = index + 1
-        } else {
-            return .ignored
-        }
+        guard let direction = MediaGridNavigation.direction(for: press) else { return .ignored }
+        return moveFocus(direction, items: items, proxy: proxy) != nil ? .handled : .ignored
+    }
 
-        if let nextIndex, items.indices.contains(nextIndex) {
-            let id = items[nextIndex].id
-            focusedVideoID = id
-            selectedVideoIDs = [id]
-            lastSelectedVideoID = id
-            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
-            return .handled
-        }
-        return .ignored
+    /// フォーカスと選択を矢印1回ぶん動かし、移動後の項目を返す。端で動けなければ nil。
+    /// キー処理とクイックルック中の送りが同じ動きになるよう、移動はここだけで行う。
+    @discardableResult
+    private func moveFocus(
+        _ direction: QuickLookPreviewController.NavigationDirection,
+        items: [VideoItem],
+        proxy: ScrollViewProxy
+    ) -> VideoItem? {
+        guard let focused = focusedVideoID,
+              let index = items.firstIndex(where: { $0.id == focused }),
+              let next = MediaGridNavigation.nextIndex(
+                  from: index, direction: direction, columnCount: columnCount, itemCount: items.count
+              ) else { return nil }
+
+        let item = items[next]
+        focusedVideoID = item.id
+        selectedVideoIDs = [item.id]
+        lastSelectedVideoID = item.id
+        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item.id, anchor: .center) }
+        return item
     }
 
     private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         if MediaShortcutSettings.matches(.libraryOpenFocused, press: press) {
             playFromGrid(items: items)
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryQuickLook, press: press) {
+            quickLookFocusedVideo(in: items, proxy: proxy)
             return .handled
         } else if MediaShortcutSettings.matches(.libraryOpenExternal, press: press) {
             if let item = primaryTarget(in: items) { openFileExternal(item) }
@@ -590,6 +735,29 @@ struct AlbumDetailView: View {
             return item
         }
         return items.first
+    }
+
+    /// 選択中の動画を Finder と同じクイックルックパネルで開く（動画専用。画像は対象外）。
+    /// Finder と同じく、複数選択しているときはその選択ぶんをパネル内で送れるようにする。
+    /// 一覧全件を渡さないのは、URL の解決が1件ずつファイル探索になるため
+    /// 大きなアルバムで Space を押すたびに数千回のファイルIOが走ってしまうから。
+    private func quickLookFocusedVideo(in items: [VideoItem], proxy: ScrollViewProxy) {
+        guard let target = primaryTarget(in: items), target.mediaType == .video else { return }
+        var candidates = selectedVideoIDs.count > 1 ? items.filter { selectedVideoIDs.contains($0.id) } : []
+        if !candidates.contains(where: { $0.id == target.id }) { candidates = [target] }
+
+        let targets = QuickLookPreviewController.previewTargets(in: candidates, focusedOn: target) {
+            dataManager.fileURL(for: $0)
+        }
+        guard let startIndex = targets.startIndex else { return }
+
+        // プレビュー中の矢印キーで一覧の選択を動かし、その項目をそのまま表示させる。
+        // グリッドと同じ moveFocus を通すので、列数ぶんの上下移動もスクロール追従も一致する。
+        QuickLookPreviewController.shared.onNavigate = { direction in
+            guard let moved = moveFocus(direction, items: items, proxy: proxy) else { return nil }
+            return dataManager.fileURL(for: moved)
+        }
+        QuickLookPreviewController.shared.present(urls: targets.urls, startingAt: startIndex)
     }
 
     private func ensureSelectionForFocusedItem(in items: [VideoItem]) {
@@ -851,6 +1019,12 @@ struct AlbumDetailView: View {
         return [video.id]
     }
 
+    /// `effectiveTargetIDs` と同じ対象を、確認文へ出すために表示順の項目として返す。
+    private func menuTargets(for video: VideoItem, in items: [VideoItem]) -> [VideoItem] {
+        guard selectedVideoIDs.contains(video.id), selectedVideoIDs.count > 1 else { return [video] }
+        return items.filter { selectedVideoIDs.contains($0.id) }
+    }
+
     private func handleGridSelection(for video: VideoItem, in videos: [VideoItem], flags: NSEvent.ModifierFlags) {
         if flags.contains(.shift), let lastID = lastSelectedVideoID {
             guard let lastIndex = videos.firstIndex(where: { $0.id == lastID }), let currentIndex = videos.firstIndex(where: { $0.id == video.id }) else { return }
@@ -960,6 +1134,8 @@ struct AlbumDetailView: View {
                 focusedVideoID = targetID
                 selectedVideoIDs = [targetID]
                 lastSelectedVideoID = targetID
+                // プレイヤーから戻ってきた直後もそのまま矢印キーで送れるようにする。
+                isGridFocused = true
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(targetID, anchor: .center)
                 }
@@ -998,9 +1174,28 @@ struct MediaGridItem: View {
     var currentAlbumID: UUID? = nil
     var onMoveToAlbum: (UUID) -> Void = { _ in }
     var onMoveToNewAlbum: () -> Void = {}
+    /// このセルのメニュー操作が実際に対象とする項目（表示順）。
+    /// 複数選択中に右クリックすると選択全体が対象になるため、
+    /// 確認文が「このセル1件」の話に見えないよう、対象の実態をここで受け取る。
+    var affectedItems: [VideoItem] = []
 
     @State private var isHovering = false
     @State private var showDeleteConfirmation = false
+
+    /// 削除確認の本文。対象が複数のときは件数と中身を並べて、
+    /// 「1件だけ消えるつもりが選択全体だった」という取り違えを防ぐ。
+    private var deleteConfirmationMessage: String {
+        let targets = affectedItems.isEmpty ? [video] : affectedItems
+        guard targets.count > 1 else {
+            return isTrashView
+                ? "「\(video.originalFilename)」を完全に削除します。この操作は取り消せません。"
+                : "「\(video.originalFilename)」をゴミ箱に入れますか？それとも完全に削除しますか？"
+        }
+        let head = isTrashView
+            ? "選択した\(targets.count)件を完全に削除します。この操作は取り消せません。"
+            : "選択した\(targets.count)件をゴミ箱に入れますか？それとも完全に削除しますか？"
+        return "\(head)\n\n\(SelectionSummary.text(for: targets))"
+    }
 
     /// 移動先候補（システムアルバム・現在のアルバムを除き、メディアタイプが互換のもの）
     private var moveTargetAlbums: [Album] {
@@ -1136,7 +1331,7 @@ struct MediaGridItem: View {
             Button("完全に削除", role: .destructive) { onDelete() }
             Button("キャンセル", role: .cancel) { }
         } message: {
-            Text(isTrashView ? "この操作は取り消せません。" : "「\(video.originalFilename)」をゴミ箱に入れますか？それとも完全に削除しますか？")
+            Text(deleteConfirmationMessage)
         }
     }
 
@@ -1265,7 +1460,11 @@ struct LibraryCategoryView: View {
     @State private var showMoveToNewAlbumAlert = false
     @State private var newAlbumNameForMove = ""
     @State private var pendingMoveVideoIDs: [UUID] = []
-    @FocusState private var focusedVideoID: UUID?
+    /// キーボードで今どのセルを指しているか。セル側の @FocusState ではなくただの状態として持つ
+    /// （SwiftUI 標準のフォーカス送りと矢印キーを取り合わないようにするため）。
+    @State private var focusedVideoID: UUID?
+    /// グリッドがキー入力を受け取れる状態か。フォーカスはグリッド全体で1つ。
+    @FocusState private var isGridFocused: Bool
 
     // 分割再生用
     @State private var showSplitSheet = false
@@ -1297,8 +1496,20 @@ struct LibraryCategoryView: View {
     private var selectedVideoItems: [VideoItem] {
         displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
     }
+
+    /// 現在の選択すべて（表示順、画像も含む）。削除の確認で何を消すのか見せるために使う。
+    private var selectedItems: [VideoItem] {
+        displayedItems.filter { selectedVideoIDs.contains($0.id) }
+    }
+
+    /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
+    /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
+    private var columnCount: Int {
+        max(2, Int(appSettings.columnCount))
+    }
+
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: max(2, Int(appSettings.columnCount)))
+        Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
     }
 
     var body: some View {
@@ -1437,7 +1648,7 @@ struct LibraryCategoryView: View {
             }
             Button("キャンセル", role: .cancel) { }
         } message: {
-            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。")
+            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。\n\n\(SelectionSummary.text(for: selectedItems))")
         }
         .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
             TextField("アルバム名", text: $newAlbumNameForMove)
@@ -1502,7 +1713,12 @@ struct LibraryCategoryView: View {
                             showTitle: appSettings.showTitles,
                             showImportDate: appSettings.showImportDates,
                             showRemoveFromAlbum: false,
-                            onSingleTap: { flags in handleSelection(for: video, in: items, flags: flags); focusedVideoID = video.id },
+                            onSingleTap: { flags in
+                                handleSelection(for: video, in: items, flags: flags)
+                                focusedVideoID = video.id
+                                // クリック後もそのまま矢印キーで送れるようにフォーカスを戻す。
+                                isGridFocused = true
+                            },
                             onDoubleTap: { open(video) },
                             onOpen: { open(video) },
                             onOpenExternal: { if let url = dataManager.fileURL(for: video) { NSWorkspace.shared.open(url) } },
@@ -1522,21 +1738,27 @@ struct LibraryCategoryView: View {
                                 pendingMoveVideoIDs = targetIDs(for: video)
                                 newAlbumNameForMove = ""
                                 showMoveToNewAlbumAlert = true
-                            }
+                            },
+                            affectedItems: menuTargets(for: video, in: items)
                         )
                         .id(video.id)
-                        .focusable()
-                        .focusEffectDisabled()
-                        .focused($focusedVideoID, equals: video.id)
                     }
                 }
                 .padding(MediaGridLayout.contentInset)
             }
+            // フォーカスはグリッド全体で1つだけ持つ。セルごとに .focusable() を付けると、
+            // SwiftUI 標準の矢印キーによるフォーカス送りが自前の「index ± 列数」移動と同時に走り、
+            // 1回の入力で二重に動いたり斜めに飛んだりする（列数によって挙動が変わって見える原因）。
+            // どのセルを指しているかは focusedVideoID（ただの @State）で持つ。
+            .focusable()
+            .focusEffectDisabled()
+            .focused($isGridFocused)
             .task(id: coordinator.returnToMediaID) {
                 await restoreReturnTarget(items: items, proxy: proxy)
             }
             .onKeyPress(phases: .down) { press in handleKey(press, items: items, proxy: proxy) }
             .onAppear {
+                isGridFocused = true
                 if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
                 if coordinator.returnToMediaID != nil {
                     Task { await restoreReturnTarget(items: items, proxy: proxy) }
@@ -1560,6 +1782,12 @@ struct LibraryCategoryView: View {
         return [video.id]
     }
 
+    /// `targetIDs` と同じ対象を、確認文へ出すために表示順の項目として返す。
+    private func menuTargets(for video: VideoItem, in items: [VideoItem]) -> [VideoItem] {
+        guard selectedVideoIDs.contains(video.id), selectedVideoIDs.count > 1 else { return [video] }
+        return items.filter { selectedVideoIDs.contains($0.id) }
+    }
+
     private func handleSelection(for video: VideoItem, in videos: [VideoItem], flags: NSEvent.ModifierFlags) {
         if flags.contains(.shift), let lastID = lastSelectedVideoID,
            let lastIndex = videos.firstIndex(where: { $0.id == lastID }),
@@ -1576,7 +1804,7 @@ struct LibraryCategoryView: View {
     private func handleKey(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         guard !items.isEmpty else { return .ignored }
 
-        if handleLibraryShortcut(press, items: items) == .handled {
+        if handleLibraryShortcut(press, items: items, proxy: proxy) == .handled {
             return .handled
         }
 
@@ -1585,36 +1813,44 @@ struct LibraryCategoryView: View {
             playFocused(items: items); return .handled
         }
 
-        let cols = max(2, Int(appSettings.columnCount))
-        guard let focused = focusedVideoID, let index = items.firstIndex(where: { $0.id == focused }) else {
+        guard let focused = focusedVideoID, items.contains(where: { $0.id == focused }) else {
             let first = items[0].id
             focusedVideoID = first; selectedVideoIDs = [first]; lastSelectedVideoID = first
             return .handled
         }
-        var nextIndex: Int?
-        if MediaShortcutSettings.matches(.libraryMoveUp, press: press), index - cols >= 0 {
-            nextIndex = index - cols
-        } else if MediaShortcutSettings.matches(.libraryMoveDown, press: press), index + cols < items.count {
-            nextIndex = index + cols
-        } else if MediaShortcutSettings.matches(.libraryMoveLeft, press: press), index > 0 {
-            nextIndex = index - 1
-        } else if MediaShortcutSettings.matches(.libraryMoveRight, press: press), index < items.count - 1 {
-            nextIndex = index + 1
-        } else {
-            return .ignored
-        }
-        if let nextIndex, items.indices.contains(nextIndex) {
-            let id = items[nextIndex].id
-            focusedVideoID = id; selectedVideoIDs = [id]; lastSelectedVideoID = id
-            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
-            return .handled
-        }
-        return .ignored
+
+        guard let direction = MediaGridNavigation.direction(for: press) else { return .ignored }
+        return moveFocus(direction, items: items, proxy: proxy) != nil ? .handled : .ignored
     }
 
-    private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem]) -> KeyPress.Result {
+    /// フォーカスと選択を矢印1回ぶん動かし、移動後の項目を返す。端で動けなければ nil。
+    /// キー処理とクイックルック中の送りが同じ動きになるよう、移動はここだけで行う。
+    @discardableResult
+    private func moveFocus(
+        _ direction: QuickLookPreviewController.NavigationDirection,
+        items: [VideoItem],
+        proxy: ScrollViewProxy
+    ) -> VideoItem? {
+        guard let focused = focusedVideoID,
+              let index = items.firstIndex(where: { $0.id == focused }),
+              let next = MediaGridNavigation.nextIndex(
+                  from: index, direction: direction, columnCount: columnCount, itemCount: items.count
+              ) else { return nil }
+
+        let item = items[next]
+        focusedVideoID = item.id
+        selectedVideoIDs = [item.id]
+        lastSelectedVideoID = item.id
+        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item.id, anchor: .center) }
+        return item
+    }
+
+    private func handleLibraryShortcut(_ press: KeyPress, items: [VideoItem], proxy: ScrollViewProxy) -> KeyPress.Result {
         if MediaShortcutSettings.matches(.libraryOpenFocused, press: press) {
             playFocused(items: items)
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryQuickLook, press: press) {
+            quickLookFocusedVideo(in: items, proxy: proxy)
             return .handled
         } else if MediaShortcutSettings.matches(.libraryOpenExternal, press: press) {
             if let item = primaryTarget(in: items), let url = dataManager.fileURL(for: item) {
@@ -1708,6 +1944,29 @@ struct LibraryCategoryView: View {
         return items.first
     }
 
+    /// 選択中の動画を Finder と同じクイックルックパネルで開く（動画専用。画像は対象外）。
+    /// Finder と同じく、複数選択しているときはその選択ぶんをパネル内で送れるようにする。
+    /// 一覧全件を渡さないのは、URL の解決が1件ずつファイル探索になるため
+    /// 大きなアルバムで Space を押すたびに数千回のファイルIOが走ってしまうから。
+    private func quickLookFocusedVideo(in items: [VideoItem], proxy: ScrollViewProxy) {
+        guard let target = primaryTarget(in: items), target.mediaType == .video else { return }
+        var candidates = selectedVideoIDs.count > 1 ? items.filter { selectedVideoIDs.contains($0.id) } : []
+        if !candidates.contains(where: { $0.id == target.id }) { candidates = [target] }
+
+        let targets = QuickLookPreviewController.previewTargets(in: candidates, focusedOn: target) {
+            dataManager.fileURL(for: $0)
+        }
+        guard let startIndex = targets.startIndex else { return }
+
+        // プレビュー中の矢印キーで一覧の選択を動かし、その項目をそのまま表示させる。
+        // グリッドと同じ moveFocus を通すので、列数ぶんの上下移動もスクロール追従も一致する。
+        QuickLookPreviewController.shared.onNavigate = { direction in
+            guard let moved = moveFocus(direction, items: items, proxy: proxy) else { return nil }
+            return dataManager.fileURL(for: moved)
+        }
+        QuickLookPreviewController.shared.present(urls: targets.urls, startingAt: startIndex)
+    }
+
     private func ensureSelectionForFocusedItem(in items: [VideoItem]) {
         guard selectedVideoIDs.isEmpty, let item = primaryTarget(in: items) else { return }
         selectedVideoIDs = [item.id]
@@ -1724,6 +1983,8 @@ struct LibraryCategoryView: View {
                 focusedVideoID = targetID
                 selectedVideoIDs = [targetID]
                 lastSelectedVideoID = targetID
+                // プレイヤーから戻ってきた直後もそのまま矢印キーで送れるようにする。
+                isGridFocused = true
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(targetID, anchor: .center)
                 }

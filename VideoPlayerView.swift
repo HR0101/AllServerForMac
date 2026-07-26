@@ -32,10 +32,31 @@ final class VideoPlayerViewModel: ObservableObject {
     private let playerTimeObserverInterval: TimeInterval = 0.25
     private let defaultDuration: Double = 1.0
 
+    /// 音量とミュート。動画を切り替えても、次にプレイヤーを開いたときも引き継ぐ。
+    @Published var volume: Float {
+        didSet {
+            player?.volume = volume
+            UserDefaults.standard.set(Double(volume), forKey: Self.volumeDefaultsKey)
+        }
+    }
+    @Published var isMuted: Bool {
+        didSet {
+            player?.isMuted = isMuted
+            UserDefaults.standard.set(isMuted, forKey: Self.mutedDefaultsKey)
+        }
+    }
+
+    static let volumeDefaultsKey = "player.volume"
+    static let mutedDefaultsKey = "player.muted"
+
     init(videos: [VideoItem], currentVideo: VideoItem, dataManager: VideoDataManager) {
         self.allVideos = videos
         self.currentVideo = currentVideo
         self.dataManager = dataManager
+        // 未設定なら最大音量から始める（bool/double の既定値 0 をそのまま使うと無音になる）。
+        let storedVolume = UserDefaults.standard.object(forKey: Self.volumeDefaultsKey) as? Double
+        self.volume = Float(storedVolume ?? 1.0)
+        self.isMuted = UserDefaults.standard.bool(forKey: Self.mutedDefaultsKey)
     }
 
     func setupPlayer() {
@@ -48,6 +69,9 @@ final class VideoPlayerViewModel: ObservableObject {
         Task { @MainActor in
             let newPlayer = AVPlayer(playerItem: item)
             newPlayer.automaticallyWaitsToMinimizeStalling = false
+            // didSet は init 中に走らないので、プレイヤー生成時に現在値を当て直す。
+            newPlayer.volume = self.volume
+            newPlayer.isMuted = self.isMuted
             self.player = newPlayer
             self.configurePlaybackMonitoring(for: newPlayer)
             newPlayer.play()
@@ -742,7 +766,11 @@ struct VideoPlayerView: View {
             // シークバーと同じく，カーソル操作中だけ右上の補助操作を表示する。
             // パネルの開閉に関わらず常にウィンドウ右上端に留める。
             if areCornerControlsVisible || showShortcutHelp {
-                PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                PlayerCornerControls(
+                    showShortcutHelp: $showShortcutHelp,
+                    volume: $viewModel.volume,
+                    isMuted: $viewModel.isMuted
+                ) {
                     coordinator.close()
                 }
                 .transition(.opacity)
@@ -894,7 +922,9 @@ struct VideoPlayerView: View {
                     }
                 }
             }
-            .clipped()
+            // ここでは切り抜かない。動画本体（AVPlayerView）を直に囲むクリップは
+            // 再生中フレームごとのオフスクリーン描画を招きやすく、ズーム範囲の切り抜きは
+            // 外側の videoPane 側の .clipped() が同じ範囲で担ってくれる。
             sidebar
 
             ScrollWheelDetector { deltaY in
