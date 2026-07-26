@@ -108,7 +108,7 @@ struct VideoItem: Identifiable, Codable, Hashable {
 
 /// 並び替え（サイズ・変更日・最後に開いた日）のために実ファイルから読む属性。
 /// VideoItem には保持していないので、必要になった時だけ stat して埋める。
-struct VideoFileMetadata {
+nonisolated struct VideoFileMetadata {
     var size: Int64 = 0
     var modificationDate: Date? = nil
     var accessDate: Date? = nil
@@ -891,20 +891,30 @@ class VideoDataManager: ObservableObject {
     /// 並び替え用ファイルメタデータの遅延キャッシュ（item.id → 属性）。
     /// サイズ・変更日で並べ替えるたびに全ファイルを stat し直すと重いので一度読んだら使い回す。
     /// サイズや変更日はセッション中まず変わらないため、明示的な無効化はしていない。
-    private var fileMetadataCache: [UUID: VideoFileMetadata] = [:]
+    /// HTTP ルート（ワーカースレッド）からも同じキャッシュを引けるようロック付きの箱で持つ。
+    nonisolated private let fileMetadataCache = LockedBox<[UUID: VideoFileMetadata]>([:])
 
     /// ファイルメタデータのキャッシュを捨てて、次回の並び替えで実ファイルを読み直させる。
     /// 「最後に開いた日」などセッション中に変わり得る属性を、その順で並べ直すとき最新化するために使う。
-    func refreshFileMetadataCache() {
-        fileMetadataCache.removeAll()
+    nonisolated func refreshFileMetadataCache() {
+        fileMetadataCache.value = [:]
     }
 
     /// 並び替え（サイズ・変更日・最後に開いた日）用に item の実ファイル属性を返す。
     /// 一度読んだものは item.id でキャッシュする。実ファイルが無ければ空の属性を返す。
-    func fileMetadata(for item: VideoItem) -> VideoFileMetadata {
-        if let cached = fileMetadataCache[item.id] { return cached }
+    ///
+    /// Mac の一覧表示と HTTP の `/albums/:id/videos` の両方がここを通る。ルート側で個別に
+    /// stat し直すと、アルバムを開くたびにメディア件数ぶんのファイルIOが走り（1件あたり
+    /// 実体探索＋属性読み取り）、数百〜数千件のアルバムでは一覧の応答がはっきり遅れる。
+    /// ワーカースレッドから呼べるよう nonisolated にして、キャッシュごと共有する。
+    nonisolated func fileMetadata(for item: VideoItem) -> VideoFileMetadata {
+        if let cached = fileMetadataCache.value[item.id] { return cached }
         let meta: VideoFileMetadata
-        if let url = fileURL(for: item),
+        // resourceValues はリンク自体の属性を返す（Videos/ 内のリンクだとサイズが数十バイトになる）ため、
+        // 実体の属性を読むには先にリンクを解決しておく必要がある。
+        // 解決は1件ずつ実ファイルを辿るぶん高くつくので、必ずこのキャッシュの内側で行う。
+        if let url = VideoDataManager.resolveFileURL(for: item, videoStorageURL: videoStorageURL, downloadStorageURL: downloadStorageURL)?
+            .resolvingSymlinksInPath(),
            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .contentAccessDateKey]) {
             meta = VideoFileMetadata(
                 size: Int64(values.fileSize ?? 0),
@@ -914,7 +924,7 @@ class VideoDataManager: ObservableObject {
         } else {
             meta = VideoFileMetadata()
         }
-        fileMetadataCache[item.id] = meta
+        fileMetadataCache.value[item.id] = meta
         return meta
     }
 

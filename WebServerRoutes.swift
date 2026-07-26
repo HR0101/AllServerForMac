@@ -53,13 +53,10 @@ extension WebServerManager {
             }
 
             // 並べ替え「サイズ/変更日/最後に開いた日」用に実ファイル属性を読む。
-            // ワーカースレッド上なので @MainActor を経由せず nonisolated な解決とファイルIOで完結させる。
-            let videoStorageURL = dataManager.videoStorageURL
-            let downloadStorageURL = dataManager.downloadStorageURL
+            // Mac 側の一覧と同じキャッシュ（VideoDataManager.fileMetadata）を共有するので、
+            // アルバムを開くたびにメディア全件を stat し直すことはない。
             let videoInfos = videoItems.map { video -> RemoteVideoInfo in
-                let fileURL = VideoDataManager.resolveFileURL(for: video, videoStorageURL: videoStorageURL, downloadStorageURL: downloadStorageURL)?
-                    .resolvingSymlinksInPath()
-                let values = fileURL.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .contentAccessDateKey]) }
+                let meta = dataManager.fileMetadata(for: video)
                 return RemoteVideoInfo(
                     id: video.id.uuidString,
                     filename: video.originalFilename,
@@ -68,9 +65,9 @@ extension WebServerManager {
                     creationDate: video.creationDate,
                     mediaType: video.mediaType.rawValue,
                     parentAlbumID: customAlbumByVideoID[video.id]?.id.uuidString,
-                    fileSize: values?.fileSize.map(Int64.init),
-                    modificationDate: values?.contentModificationDate,
-                    accessDate: values?.contentAccessDate
+                    fileSize: meta.size,
+                    modificationDate: meta.modificationDate,
+                    accessDate: meta.accessDate
                 )
             }
             do {
