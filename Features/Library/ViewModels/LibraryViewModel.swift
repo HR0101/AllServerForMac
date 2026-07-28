@@ -89,8 +89,8 @@ class LibraryViewModel: ObservableObject {
     /// library.json の現行スキーマ世代。フィールドを追加したら上げる。
     nonisolated static let librarySchemaVersion = 3
 
-    static let allVideosAlbumName = "ALL VIDEOS"
-    static let allPhotosAlbumName = "ALL PHOTOS"
+    nonisolated static let allVideosAlbumName = "ALL VIDEOS"
+    nonisolated static let allPhotosAlbumName = "ALL PHOTOS"
     static let duplicateCheckVersion = "duplicate-v3-exact"
 
     var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []

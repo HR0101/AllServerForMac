@@ -97,7 +97,7 @@ extension LibraryViewModel {
             if !shouldSkipBackup {
                 rotateBackups(with: data, backupURLs: backupURLs)
             }
-            return .loaded(container)
+            return .loaded(prepareLoadedContainer(container))
         }
 
         let corruptedURL = appRootURL.appendingPathComponent(
@@ -110,7 +110,7 @@ extension LibraryViewModel {
             if let backupData = try? Data(contentsOf: backupURL),
                let container = try? JSONDecoder().decode(DataContainer.self, from: backupData) {
                 print("✅ [LOAD] バックアップ（\(backupURL.lastPathComponent)）から復元しました")
-                return .recovered(container)
+                return .recovered(prepareLoadedContainer(container))
             }
         }
 
@@ -136,6 +136,59 @@ extension LibraryViewModel {
             try? fileManager.moveItem(at: backupURLs[0], to: backupURLs[1])
         }
         try? data.write(to: backupURLs[0], options: .atomic)
+    }
+
+    nonisolated static func prepareLoadedContainer(
+        _ container: DataContainer
+    ) -> DataContainer {
+        var prepared = container
+        var videoIDs = Set<UUID>()
+        var photoIDs = Set<UUID>()
+
+        for item in prepared.videos {
+            switch item.mediaType {
+            case .video:
+                videoIDs.insert(item.id)
+            case .photo:
+                photoIDs.insert(item.id)
+            }
+        }
+
+        updateSystemAlbum(
+            name: allVideosAlbumName,
+            type: .video,
+            ids: videoIDs,
+            albums: &prepared.albums
+        )
+        updateSystemAlbum(
+            name: allPhotosAlbumName,
+            type: .photo,
+            ids: photoIDs,
+            albums: &prepared.albums
+        )
+
+        let albumIDs = Set(prepared.albums.map(\.id))
+        prepared.duplicateCheckStates = prepared.duplicateCheckStates?.filter {
+            albumIDs.contains($0.key)
+        }
+        return prepared
+    }
+
+    nonisolated static func updateSystemAlbum(
+        name: String,
+        type: AlbumType,
+        ids: Set<UUID>,
+        albums: inout [Album]
+    ) {
+        if let index = albums.firstIndex(where: { $0.name == name }) {
+            albums[index].videoIDs = Array(ids)
+            albums[index].type = type
+        } else {
+            albums.insert(
+                Album(id: UUID(), name: name, videoIDs: Array(ids), type: type),
+                at: 0
+            )
+        }
     }
 
     func applyLibraryLoadResult(_ result: LibraryLoadResult) {
@@ -179,8 +232,6 @@ extension LibraryViewModel {
         videos = container.videos
         albums = container.albums
         duplicateCheckStates = container.duplicateCheckStates ?? [:]
-        setupInitialAlbums()
-        pruneDuplicateCheckStates()
     }
     func setupInitialAlbums() { updateOrCreateSystemAlbum(name: LibraryViewModel.allVideosAlbumName, type: .video, ids: Set(videos.filter { $0.mediaType == .video }.map { $0.id })); updateOrCreateSystemAlbum(name: LibraryViewModel.allPhotosAlbumName, type: .photo, ids: Set(videos.filter { $0.mediaType == .photo }.map { $0.id })) }
     func pruneDuplicateCheckStates() { let albumIDs = Set(albums.map { $0.id }); duplicateCheckStates = duplicateCheckStates.filter { albumIDs.contains($0.key) } }
