@@ -403,6 +403,7 @@ struct VideoPlayerView: View {
         _ = shortcutSettingsVersion
         return MediaShortcutSettings.shortcutList(
             for: [
+                .videoClose,
                 .videoPlayPause,
                 .videoPreviousItem,
                 .videoNextItem,
@@ -838,6 +839,11 @@ struct VideoPlayerView: View {
     }
 
     private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
+        if MediaShortcutSettings.matches(.videoClose, press: press) {
+            coordinator.close()
+            return .handled
+        }
+
         switch press.key {
         case .escape:
             if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
