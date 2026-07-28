@@ -89,9 +89,14 @@ class LibraryViewModel: ObservableObject {
     /// library.json の現行スキーマ世代。フィールドを追加したら上げる。
     nonisolated static let librarySchemaVersion = 3
 
-    static let allVideosAlbumName = "ALL VIDEOS"
-    static let allPhotosAlbumName = "ALL PHOTOS"
+    nonisolated static let allVideosAlbumName = "ALL VIDEOS"
+    nonisolated static let allPhotosAlbumName = "ALL PHOTOS"
     static let duplicateCheckVersion = "duplicate-v3-exact"
+    static let storageRefreshStartupDelayNanoseconds: UInt64 = 45_000_000_000
+    static let duplicateCheckStartupDelayNanoseconds: UInt64 = 90_000_000_000
+    static let linkedFolderStartupDelayNanoseconds: UInt64 = 150_000_000_000
+    static let linkedFolderScanSpacingNanoseconds: UInt64 = 250_000_000
+    static let maintenanceStartupDelayNanoseconds: UInt64 = 15_000_000_000
 
     var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     var isGeneratingProxy = false
@@ -107,7 +112,12 @@ class LibraryViewModel: ObservableObject {
     var proxyProgressMap: [String: Double] = [:]
 
     var pendingSaveTask: Task<Void, Never>?
+    var libraryLoadTask: Task<Void, Never>?
+    var symlinkRepairTask: Task<Void, Never>?
+    var startupMaintenanceTask: Task<Void, Never>?
     var saveGeneration = 0
+
+    @Published var isLibraryLoaded = false
 
     /// 並び替え用ファイルメタデータの遅延キャッシュです．
     nonisolated let fileMetadataCache = LockedBox<[UUID: VideoFileMetadata]>([:])
@@ -175,28 +185,14 @@ class LibraryViewModel: ObservableObject {
             return
         }
 
-        loadData()
-        repairMissingSymlinks()
-        refreshDuplicateCheckAlbumCaches()
-        startAutomaticDuplicateChecks()
-        startStorageSizeAutoRefresh()
-        purgeExpiredTrash()
-        // リンク切れの自動整理は誤削除のリスクがあるため既定オフの設定制。
-        // （外付けドライブのメディアを参照している場合、未接続時に誤って消える）
-        if autoCleanupMissingFilesEnabled {
-            runAutomaticMissingFileCleanup()
-        }
-        reconcileLinkedFoldersFromExistingPaths()
-        // リンクフォルダの取り込みは、60秒ごとの自動ポーリング＋ファイル監視をやめ、
-        // ホーム画面の「リンクフォルダを更新」ボタンによる手動実行に切り替えた。
-        // 件数が多いと自動スキャンがメインスレッドを圧迫してUIがカクつくため。
-        // ただし、アプリを閉じている間にFinder側で増減したメディアを反映するため、
-        // 起動時だけは一度自動スキャンする（以降の更新は手動ボタン）。
-        startInitialLinkedFolderScan()
+        startLoadingData()
 
         // 保存はデバウンスされているため、終了時に保留中の分を確実に書き込む
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
+                self?.libraryLoadTask?.cancel()
+                self?.symlinkRepairTask?.cancel()
+                self?.startupMaintenanceTask?.cancel()
                 self?.cancelPendingLinkedFolderScans()
                 self?.flushPendingSave()
             }

@@ -2,7 +2,7 @@ import CoreGraphics
 
 // MARK: - Shared Utilities
 
-func isImagePredominantlyBlack(image: CGImage, threshold: CGFloat = 0.1) -> Bool {
+nonisolated func isImagePredominantlyBlack(image: CGImage, threshold: CGFloat = 0.1) -> Bool {
     let size = 20
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     var rawData = [UInt8](repeating: 0, count: size * size * 4)

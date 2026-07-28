@@ -28,7 +28,7 @@ enum SortOrder: String, CaseIterable, Identifiable {
 }
 
 /// サムネイルを抽出する位置
-enum ThumbnailOption: String, CaseIterable, Identifiable {
+nonisolated enum ThumbnailOption: String, CaseIterable, Identifiable, Sendable {
     case initial = "1秒時点"
     case threeSeconds = "3秒時点"
     case tenSeconds = "10秒時点"

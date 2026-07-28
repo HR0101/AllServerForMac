@@ -12,7 +12,7 @@ import Vision
 extension LibraryViewModel {
     func saveData() {
         // 二重起動側のインスタンスは一切書き込まない（後勝ちによるサイレント消失防止）
-        guard !isSecondaryInstance else { return }
+        guard !isSecondaryInstance, isLibraryLoaded else { return }
         saveGeneration += 1
         let generation = saveGeneration
         let container = DataContainer(videos: videos, albums: albums, duplicateCheckStates: duplicateCheckStates, schemaVersion: Self.librarySchemaVersion)
@@ -38,7 +38,7 @@ extension LibraryViewModel {
 
     /// 保留中の非同期保存があれば取り消し、現在の状態を同期的に書き込む（アプリ終了時用）
     func flushPendingSave() {
-        guard !isSecondaryInstance else { return }
+        guard !isSecondaryInstance, isLibraryLoaded else { return }
         pendingSaveTask?.cancel()
         pendingSaveTask = nil
         saveGeneration += 1
@@ -55,77 +55,205 @@ extension LibraryViewModel {
     }
     var backupFileURL: URL { appRootURL.appendingPathComponent("library.backup.json") }
 
-    func loadData() {
-        guard FileManager.default.fileExists(atPath: dataFileURL.path),
-              let data = try? Data(contentsOf: dataFileURL), !data.isEmpty else {
-            setupInitialAlbums()
-            saveData()
-            return
+    func startLoadingData() {
+        guard libraryLoadTask == nil else { return }
+        let dataFileURL = self.dataFileURL
+        let appRootURL = self.appRootURL
+
+        libraryLoadTask = Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                Self.loadLibrary(
+                    dataFileURL: dataFileURL,
+                    appRootURL: appRootURL
+                )
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.applyLibraryLoadResult(result)
+            self.libraryLoadTask = nil
+        }
+    }
+
+    nonisolated static func loadLibrary(
+        dataFileURL: URL,
+        appRootURL: URL
+    ) -> LibraryLoadResult {
+        let fileManager = FileManager.default
+        let backupURLs = backupGenerationURLs(for: appRootURL)
+
+        guard fileManager.fileExists(atPath: dataFileURL.path),
+              let data = try? Data(contentsOf: dataFileURL),
+              !data.isEmpty else {
+            return .empty
         }
 
         if let container = try? JSONDecoder().decode(DataContainer.self, from: data) {
-            applyLoadedContainer(container)
-            // 正常に読めたスナップショットをバックアップとして残す（次回破損時の復元用）。
-            // 「デコードできた」だけで空に近いライブラリを世代1に上書きすると、良いバックアップまで
-            // 汚染されるため、中身が空で既存バックアップがある場合は更新しない。
-            // また1世代だと汚染に弱いため、3世代でローテーションする。
-            // さらに、自分より新しいスキーマ世代のデータを読んだ場合もバックアップを更新しない
-            // （この古いビルドが知らないフィールドを落とした内容で新形式のバックアップを汚さないため）。
-            let isNewerSchema = (container.schemaVersion ?? 0) > Self.librarySchemaVersion
+            let isNewerSchema = (container.schemaVersion ?? 0) > librarySchemaVersion
             if isNewerSchema {
                 print("⚠️ [LOAD] library.json はこのバージョンより新しい形式（v\(container.schemaVersion ?? 0)）です。バックアップの更新をスキップします。")
             }
-            let shouldSkipBackup = isNewerSchema || (container.videos.isEmpty && FileManager.default.fileExists(atPath: backupFileURL.path))
+
+            let shouldSkipBackup = isNewerSchema
+                || (container.videos.isEmpty && fileManager.fileExists(atPath: backupURLs[0].path))
             if !shouldSkipBackup {
-                let urls = backupGenerationURLs
-                Task.detached(priority: .utility) {
-                    let fm = FileManager.default
-                    try? fm.removeItem(at: urls[2])
-                    if fm.fileExists(atPath: urls[1].path) { try? fm.moveItem(at: urls[1], to: urls[2]) }
-                    if fm.fileExists(atPath: urls[0].path) { try? fm.moveItem(at: urls[0], to: urls[1]) }
-                    try? data.write(to: urls[0], options: .atomic)
-                }
+                rotateBackups(with: data, backupURLs: backupURLs)
             }
-            return
+            return .loaded(prepareLoadedContainer(container))
         }
 
-        // ここに来るのは library.json が壊れて読めないとき。
-        // 以前はこの場で空のライブラリを保存し直しており、全アルバム構成・参照・お気に入りが
-        // 一瞬で失われる事故につながっていた。壊れたファイルは必ず退避してから、
-        // バックアップ（新しい世代から順）での復元を試み、それも無い場合のみ空の状態から始める。
-        let corruptedURL = appRootURL.appendingPathComponent("library.corrupted-\(Int(Date().timeIntervalSince1970)).json")
-        try? FileManager.default.copyItem(at: dataFileURL, to: corruptedURL)
+        let corruptedURL = appRootURL.appendingPathComponent(
+            "library.corrupted-\(Int(Date().timeIntervalSince1970)).json"
+        )
+        try? fileManager.copyItem(at: dataFileURL, to: corruptedURL)
         print("⚠️ [LOAD] library.json が破損していたため \(corruptedURL.lastPathComponent) に退避しました")
 
-        for backupURL in backupGenerationURLs {
+        for backupURL in backupURLs {
             if let backupData = try? Data(contentsOf: backupURL),
                let container = try? JSONDecoder().decode(DataContainer.self, from: backupData) {
                 print("✅ [LOAD] バックアップ（\(backupURL.lastPathComponent)）から復元しました")
-                applyLoadedContainer(container)
-                saveData()
-                return
+                return .recovered(prepareLoadedContainer(container))
             }
         }
 
-        setupInitialAlbums()
-        saveData()
+        return .empty
+    }
+
+    nonisolated static func backupGenerationURLs(for appRootURL: URL) -> [URL] {
+        [
+            appRootURL.appendingPathComponent("library.backup.json"),
+            appRootURL.appendingPathComponent("library.backup.2.json"),
+            appRootURL.appendingPathComponent("library.backup.3.json"),
+        ]
+    }
+
+    nonisolated static func rotateBackups(with data: Data, backupURLs: [URL]) {
+        guard backupURLs.count == 3 else { return }
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: backupURLs[2])
+        if fileManager.fileExists(atPath: backupURLs[1].path) {
+            try? fileManager.moveItem(at: backupURLs[1], to: backupURLs[2])
+        }
+        if fileManager.fileExists(atPath: backupURLs[0].path) {
+            try? fileManager.moveItem(at: backupURLs[0], to: backupURLs[1])
+        }
+        try? data.write(to: backupURLs[0], options: .atomic)
+    }
+
+    nonisolated static func prepareLoadedContainer(
+        _ container: DataContainer
+    ) -> DataContainer {
+        var prepared = container
+        var videoIDs = Set<UUID>()
+        var photoIDs = Set<UUID>()
+
+        for item in prepared.videos {
+            switch item.mediaType {
+            case .video:
+                videoIDs.insert(item.id)
+            case .photo:
+                photoIDs.insert(item.id)
+            }
+        }
+
+        updateSystemAlbum(
+            name: allVideosAlbumName,
+            type: .video,
+            ids: videoIDs,
+            albums: &prepared.albums
+        )
+        updateSystemAlbum(
+            name: allPhotosAlbumName,
+            type: .photo,
+            ids: photoIDs,
+            albums: &prepared.albums
+        )
+
+        let albumIDs = Set(prepared.albums.map(\.id))
+        prepared.duplicateCheckStates = prepared.duplicateCheckStates?.filter {
+            albumIDs.contains($0.key)
+        }
+        return prepared
+    }
+
+    nonisolated static func updateSystemAlbum(
+        name: String,
+        type: AlbumType,
+        ids: Set<UUID>,
+        albums: inout [Album]
+    ) {
+        if let index = albums.firstIndex(where: { $0.name == name }) {
+            albums[index].videoIDs = Array(ids)
+            albums[index].type = type
+        } else {
+            albums.insert(
+                Album(id: UUID(), name: name, videoIDs: Array(ids), type: type),
+                at: 0
+            )
+        }
+    }
+
+    func applyLibraryLoadResult(_ result: LibraryLoadResult) {
+        switch result {
+        case .loaded(let container):
+            applyLoadedContainer(container)
+        case .recovered(let container):
+            applyLoadedContainer(container)
+        case .empty:
+            setupInitialAlbums()
+        }
+
+        isLibraryLoaded = true
+        if case .loaded = result {
+            startPostLoadTasks()
+        } else {
+            saveData()
+            startPostLoadTasks()
+        }
+    }
+
+    func startPostLoadTasks() {
+        startMissingSymlinkRepair()
+        startAutomaticDuplicateChecks(
+            initialDelayNanoseconds: Self.duplicateCheckStartupDelayNanoseconds
+        )
+        startStorageSizeAutoRefresh(
+            initialDelayNanoseconds: Self.storageRefreshStartupDelayNanoseconds
+        )
+        startDeferredLibraryMaintenance()
+        startInitialLinkedFolderScan()
+    }
+
+    func startDeferredLibraryMaintenance() {
+        guard startupMaintenanceTask == nil else { return }
+        startupMaintenanceTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: Self.maintenanceStartupDelayNanoseconds
+                )
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+
+            self.purgeExpiredTrash()
+            if self.autoCleanupMissingFilesEnabled {
+                self.runAutomaticMissingFileCleanup()
+            }
+            self.reconcileLinkedFoldersFromExistingPaths(
+                shouldScheduleScans: false
+            )
+            self.startupMaintenanceTask = nil
+        }
     }
 
     /// バックアップの世代（新しい順）。起動が正常なたびに 1→2→3 へローテーションされる。
     var backupGenerationURLs: [URL] {
-        [
-            backupFileURL,
-            appRootURL.appendingPathComponent("library.backup.2.json"),
-            appRootURL.appendingPathComponent("library.backup.3.json"),
-        ]
+        Self.backupGenerationURLs(for: appRootURL)
     }
 
     func applyLoadedContainer(_ container: DataContainer) {
         videos = container.videos
         albums = container.albums
         duplicateCheckStates = container.duplicateCheckStates ?? [:]
-        setupInitialAlbums()
-        pruneDuplicateCheckStates()
     }
     func setupInitialAlbums() { updateOrCreateSystemAlbum(name: LibraryViewModel.allVideosAlbumName, type: .video, ids: Set(videos.filter { $0.mediaType == .video }.map { $0.id })); updateOrCreateSystemAlbum(name: LibraryViewModel.allPhotosAlbumName, type: .photo, ids: Set(videos.filter { $0.mediaType == .photo }.map { $0.id })) }
     func pruneDuplicateCheckStates() { let albumIDs = Set(albums.map { $0.id }); duplicateCheckStates = duplicateCheckStates.filter { albumIDs.contains($0.key) } }

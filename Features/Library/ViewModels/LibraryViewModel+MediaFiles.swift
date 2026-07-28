@@ -37,39 +37,68 @@ extension LibraryViewModel {
         }
     }
 
-    func repairMissingSymlinks() {
-        // for ループの中で videos[i].xxx = ... を1件ずつ書き換えると対象件数だけ @Published が発火するため
-        // （インポート直後の初回起動で数千件が一気に対象になりうる）、更新後の配列を作ってから1回で代入する。
-        var needsSave = false
-        let updated = videos.map { item -> VideoItem in
-            guard item.internalFilename.isEmpty, let extPath = item.externalFilePath else { return item }
+    func startMissingSymlinkRepair() {
+        guard symlinkRepairTask == nil else { return }
+        let videosSnapshot = videos
+        let videoStorageURL = self.videoStorageURL
 
-            let sourceURL = URL(fileURLWithPath: extPath)
-            let ext = sourceURL.pathExtension
-            let newInternal = "\(item.id.uuidString).\(ext)"
-            let symlinkURL = videoStorageURL.appendingPathComponent(newInternal)
+        symlinkRepairTask = Task { [weak self] in
+            let repairedNames = await Task.detached(priority: .utility) {
+                Self.repairMissingSymlinks(
+                    videos: videosSnapshot,
+                    videoStorageURL: videoStorageURL
+                )
+            }.value
+            guard let self, !Task.isCancelled else { return }
 
-            // fileExists はシンボリックリンクを「辿って」判定するため、リンク切れリンクは
-            // 「存在しない」と報告される。一方 createSymbolicLink はリンクノード自体が残っていると
-            // 「既に存在する」で失敗するため、まずリンクノードの有無を（辿らない）attributesOfItem で
-            // 確認し、リンク切れなら削除してから作り直す。これをしないと毎起動失敗し続ける。
-            let linkNodeExists = (try? FileManager.default.attributesOfItem(atPath: symlinkURL.path)) != nil
-            let targetReachable = FileManager.default.fileExists(atPath: symlinkURL.path)
+            if !repairedNames.isEmpty {
+                self.videos = self.videos.map { item in
+                    guard item.internalFilename.isEmpty,
+                          let internalFilename = repairedNames[item.id] else {
+                        return item
+                    }
+                    var updatedItem = item
+                    updatedItem.internalFilename = internalFilename
+                    return updatedItem
+                }
+                self.saveData()
+            }
+            self.symlinkRepairTask = nil
+        }
+    }
+
+    nonisolated static func repairMissingSymlinks(
+        videos: [VideoItem],
+        videoStorageURL: URL
+    ) -> [UUID: String] {
+        let fileManager = FileManager.default
+        var repairedNames: [UUID: String] = [:]
+
+        for item in videos {
+            guard !Task.isCancelled,
+                  item.internalFilename.isEmpty,
+                  let externalPath = item.externalFilePath else {
+                continue
+            }
+
+            let sourceURL = URL(fileURLWithPath: externalPath)
+            let internalFilename = "\(item.id.uuidString).\(sourceURL.pathExtension)"
+            let symlinkURL = videoStorageURL.appendingPathComponent(internalFilename)
+            let linkNodeExists = (try? fileManager.attributesOfItem(atPath: symlinkURL.path)) != nil
+            let targetReachable = fileManager.fileExists(atPath: symlinkURL.path)
+
             if linkNodeExists && !targetReachable {
-                try? FileManager.default.removeItem(at: symlinkURL)
+                try? fileManager.removeItem(at: symlinkURL)
             }
-            if (try? FileManager.default.attributesOfItem(atPath: symlinkURL.path)) == nil {
-                try? FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: sourceURL)
+            if (try? fileManager.attributesOfItem(atPath: symlinkURL.path)) == nil {
+                try? fileManager.createSymbolicLink(
+                    at: symlinkURL,
+                    withDestinationURL: sourceURL
+                )
             }
-            var updatedItem = item
-            updatedItem.internalFilename = newInternal
-            needsSave = true
-            return updatedItem
+            repairedNames[item.id] = internalFilename
         }
-        if needsSave {
-            videos = updated
-            saveData()
-        }
+        return repairedNames
     }
 
     /// ファイルメタデータのキャッシュを捨てて、次回の並び替えで実ファイルを読み直させる。
@@ -322,15 +351,29 @@ extension LibraryViewModel {
     /// ホーム画面に表示する使用容量（キャッシュ済み・バックグラウンドで定期更新）。
     /// 件数が多いとファイル存在チェック・サイズ取得だけで数万回のディスクI/Oになるため、
     /// 描画のたびに同期計算すると（特にダッシュボードは1秒おきに再描画されるため）致命的に重くなる。
-    func startStorageSizeAutoRefresh() {
+    func startStorageSizeAutoRefresh(
+        initialDelayNanoseconds: UInt64
+    ) {
         guard storageSizeRefreshTask == nil else { return }
         storageSizeRefreshTask = Task { [weak self] in
+            if initialDelayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: initialDelayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshTotalStorageSize()
                 // 全ファイルの存在チェック・サイズ取得はライブラリが大きいと相応のディスクI/Oになるため、
                 // 60秒だと頻度が高すぎた。使用容量はそこまで頻繁に変わらないので5分間隔に緩和する。
-                try? await Task.sleep(nanoseconds: 300_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 300_000_000_000)
+                } catch {
+                    return
+                }
             }
         }
     }

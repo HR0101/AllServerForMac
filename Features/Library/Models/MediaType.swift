@@ -1,11 +1,11 @@
 import Foundation
 
-enum MediaType: String, Codable, Hashable {
+enum MediaType: String, Codable, Hashable, Sendable {
     case video
     case photo
 }
 
-enum AlbumType: String, Codable, Hashable {
+enum AlbumType: String, Codable, Hashable, Sendable {
     case video
     case photo
     case mixed

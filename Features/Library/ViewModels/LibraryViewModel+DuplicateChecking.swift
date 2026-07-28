@@ -90,11 +90,17 @@ extension LibraryViewModel {
         )
     }
 
-    func startAutomaticDuplicateChecks() {
+    func startAutomaticDuplicateChecks(
+        initialDelayNanoseconds: UInt64
+    ) {
         guard duplicateAutoCheckTask == nil else { return }
 
         duplicateAutoCheckTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            do {
+                try await Task.sleep(nanoseconds: initialDelayNanoseconds)
+            } catch {
+                return
+            }
 
             while !Task.isCancelled {
                 guard let self else { return }

@@ -5,7 +5,33 @@ import Foundation
 import MediaServerKit
 import Swifter
 
-enum ThumbQuality { case high, low }
+nonisolated enum ThumbQuality: Sendable { case high, low }
+
+actor ServerThumbnailGenerationCoordinator {
+    static let shared = ServerThumbnailGenerationCoordinator()
+
+    private var inFlightTasks: [String: Task<Data?, Never>] = [:]
+
+    func data(
+        for key: String,
+        operation: @escaping @Sendable () async -> Data?
+    ) async -> Data? {
+        if let existingTask = inFlightTasks[key] {
+            return await existingTask.value
+        }
+
+        let task = Task {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            let data = await operation()
+            await ThumbnailDecodeLimiter.shared.release()
+            return data
+        }
+        inFlightTasks[key] = task
+        let data = await task.value
+        inFlightTasks[key] = nil
+        return data
+    }
+}
 
 extension ServerViewModel {
     func thumbnailMaxPixelSize(from queryParams: [(String, String)], isOriginal: Bool) -> Int? {
@@ -117,6 +143,39 @@ extension ServerViewModel {
     }
 
     func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false, requestedTime: Double? = nil, maxPixelSize: Int? = nil) async -> Data? {
+        let qualityKey = quality == .high ? "high" : "low"
+        let generationKey = [
+            url.standardizedFileURL.path,
+            type.rawValue,
+            qualityKey,
+            String(isOriginal),
+            requestedTime.map { String($0) } ?? "default",
+            maxPixelSize.map { String($0) } ?? "default",
+        ].joined(separator: "|")
+
+        return await ServerThumbnailGenerationCoordinator.shared.data(
+            for: generationKey
+        ) { [weak self] in
+            guard let self else { return nil }
+            return await self.generateThumbnailDataWithoutCoordination(
+                for: url,
+                type: type,
+                quality: quality,
+                isOriginal: isOriginal,
+                requestedTime: requestedTime,
+                maxPixelSize: maxPixelSize
+            )
+        }
+    }
+
+    private func generateThumbnailDataWithoutCoordination(
+        for url: URL,
+        type: MediaType,
+        quality: ThumbQuality,
+        isOriginal: Bool,
+        requestedTime: Double?,
+        maxPixelSize: Int?
+    ) async -> Data? {
         let defaultSize: CGFloat = quality == .high ? 400 : 50
         let requestedSize = CGFloat(maxPixelSize ?? Int(defaultSize))
         let size = CGSize(width: requestedSize, height: requestedSize)

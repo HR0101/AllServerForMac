@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated struct DataContainer: Codable {
+nonisolated struct DataContainer: Codable, Sendable {
     var videos: [VideoItem]
     var albums: [Album]
     var duplicateCheckStates: [UUID: DuplicateCheckState]?
@@ -8,6 +8,12 @@ nonisolated struct DataContainer: Codable {
     /// 新フィールドを黙って落とすため、少なくとも「自分より新しい形式か」を
     /// 新しいビルド側で検知できるようにしておく（nil は旧ビルドが書いたデータ）。
     var schemaVersion: Int? = nil
+}
+
+nonisolated enum LibraryLoadResult: Sendable {
+  case loaded(DataContainer)
+  case recovered(DataContainer)
+  case empty
 }
 
 /// ロック付きの値ボックス。メインアクター側で書き込み、HTTPワーカースレッドから読む。
