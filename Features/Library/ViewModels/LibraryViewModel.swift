@@ -108,6 +108,7 @@ class LibraryViewModel: ObservableObject {
 
     var pendingSaveTask: Task<Void, Never>?
     var libraryLoadTask: Task<Void, Never>?
+    var symlinkRepairTask: Task<Void, Never>?
     var saveGeneration = 0
 
     @Published var isLibraryLoaded = false
@@ -184,6 +185,7 @@ class LibraryViewModel: ObservableObject {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.libraryLoadTask?.cancel()
+                self?.symlinkRepairTask?.cancel()
                 self?.cancelPendingLinkedFolderScans()
                 self?.flushPendingSave()
             }

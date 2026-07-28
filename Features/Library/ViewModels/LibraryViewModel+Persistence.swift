@@ -211,7 +211,7 @@ extension LibraryViewModel {
     }
 
     func startPostLoadTasks() {
-        repairMissingSymlinks()
+        startMissingSymlinkRepair()
         refreshDuplicateCheckAlbumCaches()
         startAutomaticDuplicateChecks()
         startStorageSizeAutoRefresh()
