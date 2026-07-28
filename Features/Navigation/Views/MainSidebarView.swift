@@ -1,29 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import CoreTransferable
-
-/// サイドバーのアルバムをドラッグする際のペイロード。
-/// フォルダは実体を持たず名前の "/" 区切りだけで表現されるため、
-/// ドロップ側は名前の付け替え（VideoDataManager.renameAlbums）で移動を実現する。
-private struct AlbumDragPayload: Codable, Transferable {
-    /// 移動対象となる実アルバムのID群（フォルダごとドラッグした場合はその配下全部）
-    var albumIDs: [UUID]
-    /// フォルダそのものをドラッグした場合の、そのフォルダの完全パス（例: "旅行/2024年"）。
-    /// 単体アルバムのドラッグの場合は nil（末尾の名前だけを残して移動先直下に置く）。
-    var sourceFolderPath: String?
-
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .allServerAlbumDrag)
-    }
-}
-
-private extension UTType {
-    static let allServerAlbumDrag = UTType(exportedAs: "hr.AllServerForMac.album-drag-payload")
-}
 
 struct MainSidebarView: View {
-    @ObservedObject var dataManager: VideoDataManager
-    @ObservedObject var webServerManager: WebServerManager
+    @StateObject private var viewModel = SidebarViewModel()
+    @ObservedObject var dataManager: LibraryViewModel
+    @ObservedObject var webServerManager: ServerViewModel
     @EnvironmentObject var appSettings: AppSettings
     @Binding var selection: NavigationSelection?
 
@@ -64,9 +45,6 @@ struct MainSidebarView: View {
     // selection（クリックしたアルバム）が変わるだけでもサイドバー全体が再描画されるため、
     // キャッシュなしだと「アルバムをクリックするたびにライブラリ全件を再集計する」状態になっていた。
     // dataManager.videos / .albums が実際に変化したときだけ refreshSidebarCaches() で更新する。
-    @State private var cachedTrashedVideoIDs: Set<UUID> = []
-    @State private var cachedVideoAlbumNodes: [SidebarAlbumNode] = []
-    @State private var cachedPhotoAlbumNodes: [SidebarAlbumNode] = []
     private let sidebarContentPadding: CGFloat = 10
     private let sidebarTopPadding: CGFloat = 42
     private let sidebarRowHeight: CGFloat = 28
@@ -241,10 +219,10 @@ struct MainSidebarView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     sidebarSectionTitle("ライブラリ")
 
-                if let allVideos = dataManager.albums.first(where: { $0.name == VideoDataManager.allVideosAlbumName }) {
+                if let allVideos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allVideosAlbumName }) {
                     sidebarNavigationButton(.album(allVideos.id), title: "すべての動画", systemImage: "film.stack", count: nonTrashedCount(in: allVideos))
                 }
-                if let allPhotos = dataManager.albums.first(where: { $0.name == VideoDataManager.allPhotosAlbumName }) {
+                if let allPhotos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allPhotosAlbumName }) {
                     sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
                 }
                     sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
@@ -257,12 +235,12 @@ struct MainSidebarView: View {
                     // 動画アルバムと画像アルバムは別々のツリーとして棲み分ける
                     // （フォルダはアルバム名の "/" 区切りだけで表現されるため、混在すると
                     // 同名フォルダで動画と画像が同じ階層に混ざって見えてしまう）。
-                    // ツリー自体は cachedVideoAlbumNodes / cachedPhotoAlbumNodes （refreshSidebarCaches() で更新）を使う。
-                    ForEach(cachedVideoAlbumNodes) { node in
+                    // ツリー自体は viewModel.videoAlbumNodes / viewModel.photoAlbumNodes （refreshSidebarCaches() で更新）を使う。
+                    ForEach(viewModel.videoAlbumNodes) { node in
                         sidebarAlbumNodeRow(node, isPhotoTree: false)
                     }
 
-                    ForEach(cachedPhotoAlbumNodes) { node in
+                    ForEach(viewModel.photoAlbumNodes) { node in
                         sidebarAlbumNodeRow(node, isPhotoTree: true)
                     }
                 }
@@ -451,7 +429,7 @@ struct MainSidebarView: View {
     }
 
     private func nonTrashedCount(in album: Album) -> Int {
-        album.videoIDs.filter { !cachedTrashedVideoIDs.contains($0) }.count
+        album.videoIDs.filter { !viewModel.trashedMediaIDs.contains($0) }.count
     }
 
     private func nonTrashedCount(in node: SidebarAlbumNode) -> Int {
@@ -500,11 +478,11 @@ struct MainSidebarView: View {
                     }
                     Divider()
                     Button("フォルダにエクスポート…") {
-                        exportAlbums(albumIDs: albumIDs(in: node))
+                        exportAlbums(albumIDs: viewModel.albumIDs(in: node))
                     }
                     Divider()
                     Button("削除", role: .destructive) {
-                        requestAlbumDeletion(albumIDs: albumIDs(in: node))
+                        requestAlbumDeletion(albumIDs: viewModel.albumIDs(in: node))
                     }
                 }
             )
@@ -541,13 +519,13 @@ struct MainSidebarView: View {
 
     /// 指定したアルバム群のメディア（ゴミ箱を除く）を、選んだフォルダへまとめてエクスポートする。
     /// アルバム名（"/" 区切りの階層含む）とファイル名はサーバー上の登録どおりに再現される
-    /// （VideoDataManager.exportMedia 側で解決する）。
+    /// （LibraryViewModel.exportMedia 側で解決する）。
     private func exportAlbums(albumIDs: [UUID]) {
         let targetIDs = Set(albumIDs)
         let videoIDs = dataManager.albums
             .filter { targetIDs.contains($0.id) }
             .flatMap { $0.videoIDs }
-            .filter { !cachedTrashedVideoIDs.contains($0) }
+            .filter { !viewModel.trashedMediaIDs.contains($0) }
         let uniqueVideoIDs = Array(Set(videoIDs))
         guard !uniqueVideoIDs.isEmpty else { return }
 
@@ -595,7 +573,7 @@ struct MainSidebarView: View {
                     .onTapGesture {
                         if expandedFolderIDs.contains(key) { expandedFolderIDs.remove(key) } else { expandedFolderIDs.insert(key) }
                     }
-                    .draggable(AlbumDragPayload(albumIDs: albumIDs(in: node), sourceFolderPath: node.id))
+                    .draggable(AlbumDragPayload(albumIDs: viewModel.albumIDs(in: node), sourceFolderPath: node.id))
             }
         }
         .background(
@@ -668,60 +646,6 @@ struct MainSidebarView: View {
         isAlbumSelectionMode = false
     }
 
-    private func buildAlbumTree(from albums: [Album]) -> [SidebarAlbumNode] {
-        final class NodeBuilder {
-            let id: String
-            let name: String
-            var album: Album?
-            var children: [String: NodeBuilder] = [:]
-
-            init(id: String, name: String) {
-                self.id = id
-                self.name = name
-            }
-
-            func makeNode() -> SidebarAlbumNode {
-                SidebarAlbumNode(
-                    id: id,
-                    name: name,
-                    album: album,
-                    children: children.values
-                        .map { $0.makeNode() }
-                        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-                )
-            }
-        }
-
-        let root = NodeBuilder(id: "root", name: "root")
-
-        for album in albums {
-            let parts = album.name
-                .components(separatedBy: "/")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            guard !parts.isEmpty else { continue }
-
-            var current = root
-            var currentPath = ""
-
-            for (index, part) in parts.enumerated() {
-                currentPath += (currentPath.isEmpty ? "" : "/") + part
-                if current.children[part] == nil {
-                    current.children[part] = NodeBuilder(id: currentPath, name: part)
-                }
-                current = current.children[part]!
-
-                if index == parts.count - 1 {
-                    current.album = album
-                }
-            }
-        }
-
-        return root.children.values
-            .map { $0.makeNode() }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
     private var albumDeletionDialogBinding: Binding<Bool> {
         Binding(
             get: { albumDeletionRequest != nil },
@@ -742,7 +666,7 @@ struct MainSidebarView: View {
     }
 
     private func toggleAlbumNodeSelection(_ node: SidebarAlbumNode) {
-        let ids = Set(albumIDs(in: node))
+        let ids = Set(viewModel.albumIDs(in: node))
         guard !ids.isEmpty else { return }
 
         if ids.isSubset(of: selectedAlbumIDs) {
@@ -753,14 +677,8 @@ struct MainSidebarView: View {
     }
 
     private func isAlbumNodeSelected(_ node: SidebarAlbumNode) -> Bool {
-        let ids = Set(albumIDs(in: node))
+        let ids = Set(viewModel.albumIDs(in: node))
         return !ids.isEmpty && ids.isSubset(of: selectedAlbumIDs)
-    }
-
-    private func albumIDs(in node: SidebarAlbumNode) -> [UUID] {
-        var ids = node.album.map { [$0.id] } ?? []
-        ids.append(contentsOf: node.children.flatMap { albumIDs(in: $0) })
-        return ids
     }
 
     private func requestAlbumDeletion(albumIDs: [UUID]) {
@@ -778,8 +696,8 @@ struct MainSidebarView: View {
         return dataManager.albums
             .filter {
                 targetIDs.contains($0.id) &&
-                $0.name != VideoDataManager.allVideosAlbumName &&
-                $0.name != VideoDataManager.allPhotosAlbumName
+                $0.name != LibraryViewModel.allVideosAlbumName &&
+                $0.name != LibraryViewModel.allPhotosAlbumName
             }
             .map { $0.id }
     }
@@ -802,7 +720,7 @@ struct MainSidebarView: View {
         return dataManager.albums.filter { ids.contains($0.id) }
     }
 
-    private func performAlbumDeletion(_ request: AlbumDeletionRequest, contentDisposal: VideoDataManager.AlbumContentDisposal) {
+    private func performAlbumDeletion(_ request: AlbumDeletionRequest, contentDisposal: LibraryViewModel.AlbumContentDisposal) {
         let ids = orderedDeletableAlbumIDs(from: request.albumIDs)
         dataManager.deleteAlbums(albumIDs: ids, contentDisposal: contentDisposal)
 
@@ -827,39 +745,21 @@ struct MainSidebarView: View {
     /// わからなくなるため、アルバムを開くたびに呼ぶ。
     private func revealSelectedAlbumInSidebar() {
         guard case .album(let albumID) = selection else { return }
-        if let path = Self.folderPath(containing: albumID, in: cachedVideoAlbumNodes) {
+        if let path = viewModel.folderPath(containing: albumID, in: viewModel.videoAlbumNodes) {
             for folderID in path { expandedFolderIDs.insert(dropKey(forPath: folderID, isPhotoTree: false)) }
         }
-        if let path = Self.folderPath(containing: albumID, in: cachedPhotoAlbumNodes) {
+        if let path = viewModel.folderPath(containing: albumID, in: viewModel.photoAlbumNodes) {
             for folderID in path { expandedFolderIDs.insert(dropKey(forPath: folderID, isPhotoTree: true)) }
         }
-    }
-
-    /// albumID にたどり着くまでに開いておく必要がある祖先フォルダの id（パス文字列）を返す。
-    /// 見つからなければ nil。
-    private static func folderPath(containing albumID: UUID, in nodes: [SidebarAlbumNode], ancestors: [String] = []) -> [String]? {
-        for node in nodes {
-            if node.children.isEmpty {
-                if node.album?.id == albumID { return ancestors }
-                continue
-            }
-            // フォルダ自身が「このフォルダ内のメディア」として同じアルバムを指しているケース
-            if node.album?.id == albumID { return ancestors + [node.id] }
-            if let found = folderPath(containing: albumID, in: node.children, ancestors: ancestors + [node.id]) {
-                return found
-            }
-        }
-        return nil
     }
 
     /// dataManager.videos / .albums の変化に追従してキャッシュを更新する。
     /// selection の変化だけではここは呼ばれない（body 内で直接計算していないため）。
     private func refreshSidebarCaches() {
-        cachedTrashedVideoIDs = Set(dataManager.trashedVideos.map { $0.id })
-
-        let userAlbums = dataManager.albums.filter { $0.name != VideoDataManager.allVideosAlbumName && $0.name != VideoDataManager.allPhotosAlbumName }
-        cachedVideoAlbumNodes = buildAlbumTree(from: userAlbums.filter { $0.type != .photo })
-        cachedPhotoAlbumNodes = buildAlbumTree(from: userAlbums.filter { $0.type == .photo })
+        viewModel.refresh(
+            videos: dataManager.videos,
+            albums: dataManager.albums
+        )
     }
 
     private var addAlbumSheet: some View {
@@ -903,7 +803,7 @@ struct MainSidebarView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(newAlbumName.isEmpty || newAlbumName == VideoDataManager.allVideosAlbumName || newAlbumName == VideoDataManager.allPhotosAlbumName)
+                .disabled(newAlbumName.isEmpty || newAlbumName == LibraryViewModel.allVideosAlbumName || newAlbumName == LibraryViewModel.allPhotosAlbumName)
             }
             .padding(.top, 4)
 
@@ -1078,16 +978,4 @@ struct MainSidebarView: View {
         }
         return url
     }
-}
-
-private struct SidebarAlbumNode: Identifiable {
-    let id: String
-    let name: String
-    let album: Album?
-    let children: [SidebarAlbumNode]
-}
-
-private struct AlbumDeletionRequest: Identifiable {
-    let id = UUID()
-    let albumIDs: [UUID]
 }
