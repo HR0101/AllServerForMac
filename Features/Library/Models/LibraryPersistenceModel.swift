@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated struct DataContainer: Codable {
+nonisolated struct DataContainer: Codable, Sendable {
     var videos: [VideoItem]
     var albums: [Album]
     var duplicateCheckStates: [UUID: DuplicateCheckState]?

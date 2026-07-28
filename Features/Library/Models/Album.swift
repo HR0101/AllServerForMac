@@ -1,6 +1,6 @@
 import Foundation
 
-struct Album: Identifiable, Codable, Hashable {
+struct Album: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var name: String
     var videoIDs: [UUID]

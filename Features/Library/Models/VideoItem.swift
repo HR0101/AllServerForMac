@@ -1,6 +1,6 @@
 import Foundation
 
-struct VideoItem: Identifiable, Codable, Hashable {
+struct VideoItem: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     let originalFilename: String
     var internalFilename: String
@@ -55,7 +55,7 @@ struct VideoItem: Identifiable, Codable, Hashable {
 
 /// 並び替え（サイズ・変更日・最後に開いた日）のために実ファイルから読む属性。
 /// VideoItem には保持していないので、必要になった時だけ stat して埋める。
-nonisolated struct VideoFileMetadata {
+nonisolated struct VideoFileMetadata: Sendable {
     var size: Int64 = 0
     var modificationDate: Date? = nil
     var accessDate: Date? = nil
