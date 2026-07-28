@@ -78,14 +78,50 @@
 
 ## ソース構成
 
-| ファイル | 役割 |
+macOSアプリは，機能単位のMVVM構成です．画面を追加・変更するときは，まず対象の`Features`配下を確認してください．複数機能から共有する実装だけを`Common`へ配置します．
+
+```text
+AllServerForMac/
+├── App/
+│   ├── Models/          # アプリ全体の画面選択など
+│   ├── ViewModels/      # Feature間の依存を組み立てるAppViewModel
+│   └── Views/           # ルート画面とウインドウ設定
+├── Common/
+│   ├── DesignSystem/    # 色，余白，共通ViewModifier
+│   ├── Utilities/       # 画像処理，排他制御などの汎用処理
+│   └── Views/           # 複数Featureで使う共通View
+└── Features/
+    ├── Dashboard/
+    ├── Library/
+    ├── MediaAnalysis/
+    ├── Navigation/
+    ├── Playback/
+    ├── Server/
+    ├── Settings/
+    └── Storage/
+```
+
+各Featureは，必要に応じて次のフォルダを持ちます．
+
+| フォルダ | 役割 |
 |---|---|
-| `AllServerForMacApp.swift` | アプリのエントリーポイント |
-| `ContentView.swift` | メイン UI（サーバー設定・セキュリティ・スケジュール・アクセスログ） |
-| `WebServerManager.swift` | HTTP サーバー、ルーティング、認証、Bonjour、スケジュール起動/停止 |
-| `VideoDataManager.swift` | ライブラリ管理、取り込み、サムネイル、オンデマンドプロキシ生成 |
-| `MacVideoThumbnailView.swift` | サムネイル表示用ビュー |
-| `StorageManagerView.swift` | ストレージ管理画面 |
+| `Models/` | 永続化データ，値オブジェクト，画面状態の型 |
+| `ViewModels/` | 画面状態とユーザー操作を扱う`ObservableObject` |
+| `Views/` | SwiftUIによる表示と入力イベントの受け渡し |
+| `Services/` | HTTP，ファイルI/O，メディア変換などの副作用 |
+| `Components/` | Feature内だけで共有する小さなViewや再生部品 |
+
+主要な依存関係は，`AppViewModel`が`LibraryViewModel`，`ServerViewModel`，`PlaybackCoordinator`，`AppSettings`を生成し，`ContentView`から各Featureへ渡す形です．Viewは表示とイベント通知を担当し，ライブラリ操作，サーバー制御，ストレージ集計などの状態変更はViewModelまたはServiceへ集約します．Feature固有の型を`Common`へ置かず，`Common`から`Features`へは依存させない方針です．
+
+| 主な実装 | 役割 |
+|---|---|
+| `App/AllServerForMacApp.swift` | アプリのエントリーポイント |
+| `App/ViewModels/AppViewModel.swift` | アプリ全体の依存関係と画面選択の管理 |
+| `Features/Library/ViewModels/LibraryViewModel.swift` | ライブラリ状態の基点 |
+| `Features/Library/ViewModels/LibraryViewModel+*.swift` | 取り込み，リンクフォルダ，重複検出，保存などの責務別処理 |
+| `Features/Server/ViewModels/ServerViewModel.swift` | HTTPサーバー，認証，Bonjour，起動・停止状態の管理 |
+| `Features/Playback/ViewModels/` | 動画，写真，分割再生，スライドショーの再生状態 |
+| `Features/Storage/ViewModels/StorageViewModel.swift` | 容量集計とストレージ整理操作 |
 
 ---
 
