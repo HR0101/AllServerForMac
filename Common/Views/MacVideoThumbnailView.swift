@@ -34,6 +34,36 @@ actor ThumbnailDecodeLimiter {
     }
 }
 
+actor ThumbnailGenerationCoordinator {
+    static let shared = ThumbnailGenerationCoordinator()
+
+    private var inFlightTasks: [String: Task<Data?, Never>] = [:]
+
+    func data(
+        for key: String,
+        operation: @escaping @Sendable () async -> Data?
+    ) async -> Data? {
+        if let existingTask = inFlightTasks[key] {
+            return await existingTask.value
+        }
+
+        let task = Task {
+            await ThumbnailDecodeLimiter.shared.acquire()
+            let data = await operation()
+            await ThumbnailDecodeLimiter.shared.release()
+            return data
+        }
+        inFlightTasks[key] = task
+        let data = await task.value
+        inFlightTasks[key] = nil
+        return data
+    }
+}
+
+nonisolated struct DecodedThumbnail: @unchecked Sendable {
+    let image: NSImage
+}
+
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
     let dataManager: LibraryViewModel
@@ -111,65 +141,119 @@ struct MacVideoThumbnailView: View {
         let cacheURL = dataManager.thumbnailStorageURL
             .appendingPathComponent(videoItem.id.uuidString)
             .appendingPathExtension("jpg")
+        let thumbnailOption = appSettings.thumbnailOption
+        let customThumbnailTime = appSettings.customThumbnailTime
+        let mediaType = videoItem.mediaType
 
         if !forceRegenerate {
             if let cached = Self.memoryCache.object(forKey: cacheKey) {
                 thumbnail = cached
                 return
             }
-
-            let cached: NSImage? = await Task.detached(priority: .utility) {
-                await ThumbnailDecodeLimiter.shared.acquire()
-                defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
-                return NSImage(contentsOf: cacheURL)
-            }.value
-            if let img = cached {
-                Self.memoryCache.setObject(img, forKey: cacheKey)
-                thumbnail = img
-                return
-            }
         }
 
         guard let fileURL = dataManager.fileURL(for: videoItem) else { return }
+        let generationKey = [
+            videoItem.id.uuidString,
+            videoItem.mediaType.rawValue,
+            thumbnailOption.rawValue,
+            String(customThumbnailTime),
+        ].joined(separator: "|")
 
-        if videoItem.mediaType == .photo {
-            await generatePhotoThumbnail(fileURL: fileURL, cacheURL: cacheURL)
-        } else {
-            await generateVideoThumbnail(fileURL: fileURL, cacheURL: cacheURL)
+        let data = await ThumbnailGenerationCoordinator.shared.data(
+            for: generationKey
+        ) {
+            await Self.thumbnailData(
+                fileURL: fileURL,
+                cacheURL: cacheURL,
+                mediaType: mediaType,
+                thumbnailOption: thumbnailOption,
+                customThumbnailTime: customThumbnailTime,
+                forceRegenerate: forceRegenerate
+            )
         }
+        guard !Task.isCancelled,
+              let data,
+              let decoded = await Self.decodeThumbnail(data) else {
+            return
+        }
+        Self.memoryCache.setObject(decoded.image, forKey: cacheKey)
+        thumbnail = decoded.image
     }
 
-    private func generatePhotoThumbnail(fileURL: URL, cacheURL: URL) async {
-        // 元画像の読み込み・デコード・切り抜き・JPEG書き出しは重い同期処理のため、
-        // メインスレッド（UIスレッド）をブロックしないようバックグラウンドで実行する。
-        let nsImage: NSImage? = await Task.detached(priority: .utility) {
-            await ThumbnailDecodeLimiter.shared.acquire()
-            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
+    nonisolated private static func thumbnailData(
+        fileURL: URL,
+        cacheURL: URL,
+        mediaType: MediaType,
+        thumbnailOption: ThumbnailOption,
+        customThumbnailTime: TimeInterval,
+        forceRegenerate: Bool
+    ) async -> Data? {
+        if !forceRegenerate {
+            let cachedData = await Task.detached(priority: .utility) {
+                try? Data(contentsOf: cacheURL)
+            }.value
+            if let cachedData {
+                return cachedData
+            }
+        }
 
+        let data: Data?
+        switch mediaType {
+        case .photo:
+            data = await generatePhotoThumbnailData(fileURL: fileURL)
+        case .video:
+            data = await generateVideoThumbnailData(
+                fileURL: fileURL,
+                thumbnailOption: thumbnailOption,
+                customThumbnailTime: customThumbnailTime
+            )
+        }
+
+        if let data {
+            await Task.detached(priority: .utility) {
+                try? data.write(to: cacheURL, options: .atomic)
+            }.value
+        }
+        return data
+    }
+
+    nonisolated private static func generatePhotoThumbnailData(
+        fileURL: URL
+    ) async -> Data? {
+        await Task.detached(priority: .utility) {
             let sourceOptions: [CFString: Any] = [
                 kCGImageSourceShouldCache: false
             ]
-            guard let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions as CFDictionary) else { return nil }
+            guard let imageSource = CGImageSourceCreateWithURL(
+                fileURL as CFURL,
+                sourceOptions as CFDictionary
+            ) else {
+                return nil
+            }
             let options: [CFString: Any] = [
                 kCGImageSourceThumbnailMaxPixelSize: 300,
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceShouldCacheImmediately: true
             ]
-            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary),
-                  let cropped = squareCroppedCGImage(cgImage, side: 400) else { return nil }
-            if let data = jpegData(from: cropped, compression: 0.7) {
-                try? data.write(to: cacheURL)
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                imageSource,
+                0,
+                options as CFDictionary
+            ),
+            let cropped = squareCroppedCGImage(cgImage, side: 400) else {
+                return nil
             }
-            return NSImage(cgImage: cropped, size: .zero)
+            return jpegData(from: cropped, compression: 0.7)
         }.value
-
-        guard let nsImage else { return }
-        Self.memoryCache.setObject(nsImage, forKey: videoItem.id.uuidString as NSString)
-        thumbnail = nsImage
     }
 
-    private func generateVideoThumbnail(fileURL: URL, cacheURL: URL) async {
+    nonisolated private static func generateVideoThumbnailData(
+        fileURL: URL,
+        thumbnailOption: ThumbnailOption,
+        customThumbnailTime: TimeInterval
+    ) async -> Data? {
         let asset = AVURLAsset(url: fileURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -179,9 +263,9 @@ struct MacVideoThumbnailView: View {
         let duration = (try? await asset.load(.duration).seconds) ?? 0
 
         // 設定で選ばれた抽出位置を先頭に、黒フレーム時のフォールバックを後ろに並べる
-        let preferred = appSettings.thumbnailOption.seconds(
+        let preferred = thumbnailOption.seconds(
             forDuration: duration,
-            customTime: appSettings.customThumbnailTime
+            customTime: customThumbnailTime
         )
         var attempts = [preferred]
         attempts.append(contentsOf: [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0].filter { $0 < duration && $0 != preferred })
@@ -203,23 +287,26 @@ struct MacVideoThumbnailView: View {
             }
         }
 
-        guard let cgImage = bestImage ?? fallbackImage else { return }
+        guard let cgImage = bestImage ?? fallbackImage else { return nil }
 
         // 切り抜き・JPEG書き出しはバックグラウンドで実行する（AVAssetImageGenerator 自体は非同期だが、
         // その後の後処理は同期処理でメインスレッドをブロックしうるため）。
-        let nsImage: NSImage? = await Task.detached(priority: .utility) {
-            await ThumbnailDecodeLimiter.shared.acquire()
-            defer { Task { await ThumbnailDecodeLimiter.shared.release() } }
-
+        return await Task.detached(priority: .utility) {
             guard let cropped = squareCroppedCGImage(cgImage, side: 400) else { return nil }
-            if let data = jpegData(from: cropped, compression: 0.7) {
-                try? data.write(to: cacheURL)
-            }
-            return NSImage(cgImage: cropped, size: .zero)
+            return jpegData(from: cropped, compression: 0.7)
         }.value
+    }
 
-        guard let nsImage else { return }
-        Self.memoryCache.setObject(nsImage, forKey: videoItem.id.uuidString as NSString)
-        thumbnail = nsImage
+    nonisolated private static func decodeThumbnail(
+        _ data: Data
+    ) async -> DecodedThumbnail? {
+        await ThumbnailDecodeLimiter.shared.acquire()
+        let decoded: DecodedThumbnail? = await Task.detached(priority: .utility) {
+            () -> DecodedThumbnail? in
+            guard let image = NSImage(data: data) else { return nil }
+            return DecodedThumbnail(image: image)
+        }.value
+        await ThumbnailDecodeLimiter.shared.release()
+        return decoded
     }
 }
