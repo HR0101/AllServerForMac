@@ -35,7 +35,7 @@ struct PhotoViewerView: View {
     }
 
     @State var current: VideoItem
-    let dataManager: VideoDataManager
+    let dataManager: LibraryViewModel
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @AppStorage("isMangaMode") private var isMangaMode = false
@@ -79,7 +79,7 @@ struct PhotoViewerView: View {
     private let topControlsHoverHeight: CGFloat = 96
     private let filmstripPreloadRadius = 12
 
-    init(photos: [VideoItem], current: VideoItem, dataManager: VideoDataManager) {
+    init(photos: [VideoItem], current: VideoItem, dataManager: LibraryViewModel) {
         self.dataManager = dataManager
         _current = State(initialValue: current)
         _visiblePhotos = State(initialValue: photos)
@@ -242,7 +242,7 @@ struct PhotoViewerView: View {
             }
             .buttonStyle(.plain)
             .help("完全に削除")
-            
+
             Button {
                 if let url = dataManager.fileURL(for: current) {
                     NSWorkspace.shared.open(url)

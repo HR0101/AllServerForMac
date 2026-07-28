@@ -5,7 +5,7 @@ import AVKit
 struct MediaPreviewView: View {
     @State var item: VideoItem
     var items: [VideoItem] = []
-    let dataManager: VideoDataManager
+    let dataManager: LibraryViewModel
     @Environment(\.dismiss) private var dismiss
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
