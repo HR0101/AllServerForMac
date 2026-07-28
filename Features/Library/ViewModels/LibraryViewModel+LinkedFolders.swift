@@ -103,13 +103,18 @@ extension LibraryViewModel {
         await scanLinkedFolder(albumID: albumID, onItemProcessed: onItemProcessed)
     }
 
-    func confirmLinkedFolderCandidate(_ candidate: LinkedFolderCandidate) {
+    func confirmLinkedFolderCandidate(
+        _ candidate: LinkedFolderCandidate,
+        shouldScheduleScan: Bool = true
+    ) {
         guard let albumID = existingOrCreateAlbumID(name: candidate.albumName, type: candidate.albumType, preferredID: candidate.albumID) else {
             return
         }
         setLinkedFolder(folderURL: URL(fileURLWithPath: candidate.folderPath), albumID: albumID)
         linkedFolderConflicts.removeAll { $0.id == candidate.conflictID }
-        scheduleLinkedFolderScan(albumID: albumID, delayNanoseconds: 500_000_000)
+        if shouldScheduleScan {
+            scheduleLinkedFolderScan(albumID: albumID, delayNanoseconds: 500_000_000)
+        }
     }
 
     func setLinkedFolder(folderURL: URL, albumID: UUID) {
@@ -187,7 +192,9 @@ extension LibraryViewModel {
         saveData()
     }
 
-    func reconcileLinkedFoldersFromExistingPaths() {
+    func reconcileLinkedFoldersFromExistingPaths(
+        shouldScheduleScans: Bool = true
+    ) {
         mergeDuplicateFolderAlbums()
         let protectedNames: Set<String> = [Self.allVideosAlbumName, Self.allPhotosAlbumName]
         let itemsByID = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
@@ -225,7 +232,10 @@ extension LibraryViewModel {
                 }
 
             if candidates.count == 1, let candidate = candidates.first {
-                confirmLinkedFolderCandidate(candidate)
+                confirmLinkedFolderCandidate(
+                    candidate,
+                    shouldScheduleScan: shouldScheduleScans
+                )
             } else if candidates.count > 1 {
                 conflicts.append(
                     LinkedFolderConflict(
@@ -268,7 +278,10 @@ extension LibraryViewModel {
                 }
 
             if candidates.count == 1, let candidate = candidates.first {
-                confirmLinkedFolderCandidate(candidate)
+                confirmLinkedFolderCandidate(
+                    candidate,
+                    shouldScheduleScan: shouldScheduleScans
+                )
             } else if candidates.count > 1 {
                 conflicts.append(
                     LinkedFolderConflict(
@@ -399,20 +412,13 @@ extension LibraryViewModel {
             ?? rootAlbumID.flatMap { rootID in albums.first(where: { $0.id == rootID })?.name }
             ?? folderName
 
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: folderURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        guard let entries = await Self.loadLinkedFolderEntries(at: folderURL) else {
             return
         }
 
-        let sortedContents = contents.sorted {
-            $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
-        }
-        let mediaFiles = sortedContents.filter { url in
-            !isDirectory(url) && isSupportedMedia(url, for: albumType)
-        }
+        let mediaFiles = entries
+            .filter { !$0.isDirectory && isSupportedMedia($0.url, for: albumType) }
+            .map(\.url)
 
         var targetAlbumID: UUID?
         let shouldCreateAlbum = parentAlbumName == nil || !mediaFiles.isEmpty
@@ -448,9 +454,11 @@ extension LibraryViewModel {
             }
         }
 
-        for url in sortedContents where isDirectory(url) && !isExcludedFromImport(url) {
+        for entry in entries where entry.isDirectory && !isExcludedFromImport(entry.url) {
+            guard !Task.isCancelled else { return }
+            await Task.yield()
             await importLinkedFolderContents(
-                folderURL: url,
+                folderURL: entry.url,
                 as: albumType,
                 parentAlbumName: albumName,
                 rootAlbumID: nil,
@@ -459,6 +467,33 @@ extension LibraryViewModel {
                 onItemProcessed: onItemProcessed
             )
         }
+    }
+
+    nonisolated static func loadLinkedFolderEntries(
+        at folderURL: URL
+    ) async -> [LinkedFolderDirectoryEntry]? {
+        await Task.detached(priority: .utility) {
+            guard let contents = try? FileManager.default.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return nil
+            }
+
+            return contents.map { url in
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+                return LinkedFolderDirectoryEntry(
+                    url: url,
+                    isDirectory: values?.isDirectory == true
+                )
+            }
+            .sorted {
+                $0.url.lastPathComponent.localizedStandardCompare(
+                    $1.url.lastPathComponent
+                ) == .orderedAscending
+            }
+        }.value
     }
 
     func scanLinkedFolder(albumID: UUID, onItemProcessed: @MainActor @escaping () -> Void = {}) async {
@@ -499,7 +534,13 @@ extension LibraryViewModel {
     /// リンクフォルダが無い場合は何もしない（ホーム画面に不要な状態メッセージを出さないため）。
     func startInitialLinkedFolderScan() {
         initialLinkedFolderScanTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            do {
+                try await Task.sleep(
+                    nanoseconds: Self.linkedFolderStartupDelayNanoseconds
+                )
+            } catch {
+                return
+            }
             guard let self, !Task.isCancelled, self.linkedFolderCount > 0 else { return }
             await self.rescanAllLinkedFolders()
         }
@@ -526,22 +567,41 @@ extension LibraryViewModel {
         linkedFolderScanStatus.processedItemsInCurrentFolder = 0
         linkedFolderScanStatus.statusMessage = ""
 
-        for album in linkedAlbums {
+        var wasCancelled = false
+        for (index, album) in linkedAlbums.enumerated() {
+            guard !Task.isCancelled else {
+                wasCancelled = true
+                break
+            }
             linkedFolderScanStatus.currentFolderName = album.name
             linkedFolderScanStatus.processedItemsInCurrentFolder = 0
             await scanLinkedFolder(albumID: album.id) { [weak self] in
                 self?.linkedFolderScanStatus.processedItemsInCurrentFolder += 1
             }
             linkedFolderScanStatus.processedCount += 1
+
+            guard index < linkedAlbums.count - 1 else { continue }
+            do {
+                try await Task.sleep(
+                    nanoseconds: Self.linkedFolderScanSpacingNanoseconds
+                )
+            } catch {
+                wasCancelled = true
+                break
+            }
         }
 
         let imported = max(0, videos.count - beforeCount)
         linkedFolderScanStatus.isScanning = false
         linkedFolderScanStatus.currentFolderName = nil
         linkedFolderScanStatus.processedItemsInCurrentFolder = 0
-        linkedFolderScanStatus.statusMessage = imported > 0
-            ? "\(linkedAlbums.count)件のフォルダを更新し、\(imported)件の新しいメディアを取り込みました。"
-            : "\(linkedAlbums.count)件のフォルダを更新しました（新規メディアはありません）。"
+        if wasCancelled {
+            linkedFolderScanStatus.statusMessage = "リンクフォルダの更新を中止しました。"
+        } else {
+            linkedFolderScanStatus.statusMessage = imported > 0
+                ? "\(linkedAlbums.count)件のフォルダを更新し、\(imported)件の新しいメディアを取り込みました。"
+                : "\(linkedAlbums.count)件のフォルダを更新しました（新規メディアはありません）。"
+        }
     }
 
     /// 予約済みの単発スキャン（起動時の初回スキャン・フォルダ紐づけ直後などに走るもの）を取り消す。アプリ終了時に呼ぶ。

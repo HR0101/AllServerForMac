@@ -212,15 +212,37 @@ extension LibraryViewModel {
 
     func startPostLoadTasks() {
         startMissingSymlinkRepair()
-        refreshDuplicateCheckAlbumCaches()
-        startAutomaticDuplicateChecks()
-        startStorageSizeAutoRefresh()
-        purgeExpiredTrash()
-        if autoCleanupMissingFilesEnabled {
-            runAutomaticMissingFileCleanup()
-        }
-        reconcileLinkedFoldersFromExistingPaths()
+        startAutomaticDuplicateChecks(
+            initialDelayNanoseconds: Self.duplicateCheckStartupDelayNanoseconds
+        )
+        startStorageSizeAutoRefresh(
+            initialDelayNanoseconds: Self.storageRefreshStartupDelayNanoseconds
+        )
+        startDeferredLibraryMaintenance()
         startInitialLinkedFolderScan()
+    }
+
+    func startDeferredLibraryMaintenance() {
+        guard startupMaintenanceTask == nil else { return }
+        startupMaintenanceTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: Self.maintenanceStartupDelayNanoseconds
+                )
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+
+            self.purgeExpiredTrash()
+            if self.autoCleanupMissingFilesEnabled {
+                self.runAutomaticMissingFileCleanup()
+            }
+            self.reconcileLinkedFoldersFromExistingPaths(
+                shouldScheduleScans: false
+            )
+            self.startupMaintenanceTask = nil
+        }
     }
 
     /// バックアップの世代（新しい順）。起動が正常なたびに 1→2→3 へローテーションされる。

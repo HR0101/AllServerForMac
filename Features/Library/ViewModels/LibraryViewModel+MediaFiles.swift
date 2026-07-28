@@ -351,15 +351,29 @@ extension LibraryViewModel {
     /// ホーム画面に表示する使用容量（キャッシュ済み・バックグラウンドで定期更新）。
     /// 件数が多いとファイル存在チェック・サイズ取得だけで数万回のディスクI/Oになるため、
     /// 描画のたびに同期計算すると（特にダッシュボードは1秒おきに再描画されるため）致命的に重くなる。
-    func startStorageSizeAutoRefresh() {
+    func startStorageSizeAutoRefresh(
+        initialDelayNanoseconds: UInt64
+    ) {
         guard storageSizeRefreshTask == nil else { return }
         storageSizeRefreshTask = Task { [weak self] in
+            if initialDelayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: initialDelayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshTotalStorageSize()
                 // 全ファイルの存在チェック・サイズ取得はライブラリが大きいと相応のディスクI/Oになるため、
                 // 60秒だと頻度が高すぎた。使用容量はそこまで頻繁に変わらないので5分間隔に緩和する。
-                try? await Task.sleep(nanoseconds: 300_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 300_000_000_000)
+                } catch {
+                    return
+                }
             }
         }
     }

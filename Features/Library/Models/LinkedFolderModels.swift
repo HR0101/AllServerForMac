@@ -10,6 +10,11 @@ struct LinkedFolderCandidate: Identifiable, Hashable {
     let matchCount: Int
 }
 
+nonisolated struct LinkedFolderDirectoryEntry: Sendable {
+  let url: URL
+  let isDirectory: Bool
+}
+
 struct LinkedFolderConflict: Identifiable, Hashable {
     let id: String
     let albumID: UUID?

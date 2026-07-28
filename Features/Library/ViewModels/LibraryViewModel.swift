@@ -92,6 +92,11 @@ class LibraryViewModel: ObservableObject {
     nonisolated static let allVideosAlbumName = "ALL VIDEOS"
     nonisolated static let allPhotosAlbumName = "ALL PHOTOS"
     static let duplicateCheckVersion = "duplicate-v3-exact"
+    static let storageRefreshStartupDelayNanoseconds: UInt64 = 45_000_000_000
+    static let duplicateCheckStartupDelayNanoseconds: UInt64 = 90_000_000_000
+    static let linkedFolderStartupDelayNanoseconds: UInt64 = 150_000_000_000
+    static let linkedFolderScanSpacingNanoseconds: UInt64 = 250_000_000
+    static let maintenanceStartupDelayNanoseconds: UInt64 = 15_000_000_000
 
     var proxyQueue: [(sourceURL: URL, preset: String, destinationURL: URL)] = []
     var isGeneratingProxy = false
@@ -109,6 +114,7 @@ class LibraryViewModel: ObservableObject {
     var pendingSaveTask: Task<Void, Never>?
     var libraryLoadTask: Task<Void, Never>?
     var symlinkRepairTask: Task<Void, Never>?
+    var startupMaintenanceTask: Task<Void, Never>?
     var saveGeneration = 0
 
     @Published var isLibraryLoaded = false
@@ -186,6 +192,7 @@ class LibraryViewModel: ObservableObject {
             MainActor.assumeIsolated {
                 self?.libraryLoadTask?.cancel()
                 self?.symlinkRepairTask?.cancel()
+                self?.startupMaintenanceTask?.cancel()
                 self?.cancelPendingLinkedFolderScans()
                 self?.flushPendingSave()
             }
