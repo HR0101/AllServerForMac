@@ -10,6 +10,12 @@ nonisolated struct DataContainer: Codable, Sendable {
     var schemaVersion: Int? = nil
 }
 
+nonisolated enum LibraryLoadResult: Sendable {
+  case loaded(DataContainer)
+  case recovered(DataContainer)
+  case empty
+}
+
 /// ロック付きの値ボックス。メインアクター側で書き込み、HTTPワーカースレッドから読む。
 /// サーバーの各ルートが DispatchQueue.main.sync でライブラリを読むと、
 /// Mac の UI が忙しいときに iOS への応答が止まり、逆にリクエストラッシュが
