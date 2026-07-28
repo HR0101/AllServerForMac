@@ -8,6 +8,11 @@ import Foundation
 @MainActor
 final class AppViewModel: ObservableObject {
   @Published var selection: NavigationSelection? = .home
+  @Published var isShowingPreferences = false
+  @Published var isShowingStorageManager = false
+  @Published var isShowingAccessLog = false
+  @Published private(set) var isServerRunning = false
+  @Published private(set) var currentServerURL: String?
 
   let dataManager: LibraryViewModel
   let webServerManager: ServerViewModel
@@ -31,5 +36,14 @@ final class AppViewModel: ObservableObject {
     self.webServerManager = ServerViewModel(dataManager: dataManager)
     self.playbackCoordinator = playbackCoordinator
     self.appSettings = appSettings
+
+    webServerManager.$serverStartTime
+      .map { $0 != nil }
+      .removeDuplicates()
+      .assign(to: &$isServerRunning)
+
+    webServerManager.$serverURL
+      .removeDuplicates()
+      .assign(to: &$currentServerURL)
   }
 }
