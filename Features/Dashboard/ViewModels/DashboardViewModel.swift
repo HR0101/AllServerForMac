@@ -2,13 +2,8 @@ import Combine
 import Darwin
 import Foundation
 
-struct CPUDataPoint: Identifiable {
-    let id = UUID()
-    let time: Int
-    let value: Double
-}
-
-class SystemMonitor: ObservableObject {
+/// ダッシュボードに表示するシステム情報を監視するViewModelです．
+final class DashboardViewModel: ObservableObject {
     @Published var cpuUsage: Double = 0.0
     @Published var memoryUsage: Double = 0.0
     @Published var cpuHistory: [CPUDataPoint] = []
