@@ -20,6 +20,8 @@ struct AlbumDetailView: View {
     /// キーボードで今どのセルを指しているか。セル側の @FocusState ではなくただの状態として持つ
     /// （SwiftUI 標準のフォーカス送りと矢印キーを取り合わないようにするため）。
     @State private var focusedVideoID: UUID?
+    /// 一覧を再生成したときに元の表示位置へ戻すため，上端付近の項目を記録する。
+    @State private var scrollTargetMediaID: UUID?
     /// グリッドがキー入力を受け取れる状態か。フォーカスはグリッド全体で1つ。
     @FocusState private var isGridFocused: Bool
 
@@ -245,7 +247,7 @@ struct AlbumDetailView: View {
                     Menu {
                         ForEach(2...min(9, videoItems.count), id: \.self) { count in
                             Button("\(count)本") {
-                                coordinator.playMulti(Array(videoItems.shuffled().prefix(count)))
+                                startMultiPlayback(Array(videoItems.shuffled().prefix(count)))
                             }
                         }
                     } label: {
@@ -259,7 +261,7 @@ struct AlbumDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 if !videoItems.isEmpty {
                     Button {
-                        coordinator.playRandom(from: videoItems)
+                        startRandomPlayback(from: videoItems)
                     } label: {
                         Label("ランダム再生", systemImage: "shuffle")
                     }
@@ -276,7 +278,7 @@ struct AlbumDetailView: View {
                 ToolbarItem(placement: .primaryAction) {
                     if selectedItems.count >= 2 {
                         Button {
-                            coordinator.playMulti(selectedItems)
+                            startMultiPlayback(selectedItems)
                         } label: {
                             Label("同時再生", systemImage: "square.grid.2x2.fill")
                         }
@@ -286,7 +288,7 @@ struct AlbumDetailView: View {
                 ToolbarItem(placement: .primaryAction) {
                     if selectedItems.count >= 2 {
                         Button {
-                            coordinator.startSlideshow(selectedItems)
+                            startSlideshowPlayback(selectedItems)
                         } label: {
                             Label("スライドショー", systemImage: "play.square.stack")
                         }
@@ -413,7 +415,7 @@ struct AlbumDetailView: View {
                     Button("再生") {
                         showSplitSheet = false
                         if let video = splitTargetVideo {
-                            coordinator.playSplit(video: video, splitCount: splitCount)
+                            startSplitPlayback(video: video, splitCount: splitCount)
                         }
                     }
                     .keyboardShortcut(.defaultAction)
@@ -486,8 +488,10 @@ struct AlbumDetailView: View {
                         .id(video.id)
                     }
                 }
+                .scrollTargetLayout()
                 .padding(MediaGridLayout.contentInset)
             }
+            .scrollPosition(id: $scrollTargetMediaID, anchor: .top)
             // フォーカスはグリッド全体で1つだけ持つ。セルごとに .focusable() を付けると、
             // SwiftUI 標準の矢印キーによるフォーカス送りが自前の「index ± 列数」移動と同時に走り、
             // 1回の入力で二重に動いたり斜めに飛んだりする（列数によって挙動が変わって見える原因）。
@@ -495,8 +499,8 @@ struct AlbumDetailView: View {
             .focusable()
             .focusEffectDisabled()
             .focused($isGridFocused)
-            .task(id: coordinator.returnToMediaID) {
-                await restoreReturnTarget(items: items, proxy: proxy)
+            .task {
+                await restoreReturnState(proxy: proxy)
             }
             .onKeyPress(phases: .down) { press in
                 handleGridKey(press, items: items, proxy: proxy)
@@ -505,9 +509,6 @@ struct AlbumDetailView: View {
                 // グリッドにフォーカスを持たせて onKeyPress を有効化する
                 isGridFocused = true
                 if focusedVideoID == nil, let first = items.first { focusedVideoID = first.id }
-                if coordinator.returnToMediaID != nil {
-                    Task { await restoreReturnTarget(items: items, proxy: proxy) }
-                }
             }
         }
     }
@@ -593,15 +594,15 @@ struct AlbumDetailView: View {
             importFilesViaDialog()
             return .handled
         } else if MediaShortcutSettings.matches(.libraryRandomPlay, press: press) {
-            coordinator.playRandom(from: items.filter { $0.mediaType == .video })
+            startRandomPlayback(from: items.filter { $0.mediaType == .video })
             return .handled
         } else if MediaShortcutSettings.matches(.libraryMultiPlay, press: press) {
             let selected = selectedVideoItems
-            if selected.count >= 2 { coordinator.playMulti(selected) }
+            if selected.count >= 2 { startMultiPlayback(selected) }
             return .handled
         } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
             let selected = selectedVideoItems
-            if selected.count >= 2 { coordinator.startSlideshow(selected) }
+            if selected.count >= 2 { startSlideshowPlayback(selected) }
             return .handled
         } else if MediaShortcutSettings.matches(.librarySplitPlay, press: press) {
             let selected = selectedVideoItems
@@ -630,7 +631,7 @@ struct AlbumDetailView: View {
     private func playFromGrid(items: [VideoItem]) {
         let selectedVideos = selectedVideoItems
         if selectedVideos.count > 1 {
-            coordinator.playMulti(selectedVideos)
+            startMultiPlayback(selectedVideos)
         } else if let focused = focusedVideoID, let item = items.first(where: { $0.id == focused }) {
             openFile(item)
         } else if let first = items.first {
@@ -731,7 +732,7 @@ struct AlbumDetailView: View {
 
     // アプリ内プレイヤーで開く（動画は全画面プレイヤー、画像はプレビュー）
     private func openFile(_ video: VideoItem) {
-        coordinator.rememberReturnTarget(mediaID: video.id)
+        rememberGridState(opening: video.id)
         if video.mediaType == .video {
             coordinator.playSingle(playlist: albumVideoItems, current: video)
         } else {
@@ -1037,28 +1038,81 @@ struct AlbumDetailView: View {
     }
 
     @MainActor
-    private func restoreReturnTarget(items: [VideoItem], proxy: ScrollViewProxy) async {
-        guard let targetID = coordinator.returnToMediaID else { return }
-
-        for attempt in 0..<4 {
-            if let _ = items.first(where: { $0.id == targetID }) {
-                focusedVideoID = targetID
-                selectedVideoIDs = [targetID]
-                lastSelectedVideoID = targetID
-                // プレイヤーから戻ってきた直後もそのまま矢印キーで送れるようにする。
-                isGridFocused = true
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(targetID, anchor: .center)
-                }
-                coordinator.clearReturnTarget()
-                return
-            }
-
-            if attempt == 3 {
-                coordinator.clearReturnTarget()
-                return
-            }
-            await Task.yield()
+    private func restoreReturnState(proxy: ScrollViewProxy) async {
+        guard let state = coordinator.libraryReturnState else { return }
+        guard state.scope == .album(album.id) else {
+            coordinator.clearLibraryReturnState()
+            return
         }
+
+        searchText = state.searchText
+        await Task.yield()
+
+        let availableIDs = Set(displayedItems.map(\.id))
+        selectedVideoIDs = state.selectedMediaIDs.intersection(availableIDs)
+        focusedVideoID = state.focusedMediaID.flatMap {
+            availableIDs.contains($0) ? $0 : nil
+        }
+        lastSelectedVideoID = state.selectionAnchorMediaID.flatMap {
+            availableIDs.contains($0) ? $0 : nil
+        }
+        isGridFocused = true
+
+        let targetID = state.scrollTargetMediaID.flatMap {
+            availableIDs.contains($0) ? $0 : nil
+        } ?? focusedVideoID
+
+        if let targetID {
+            for _ in 0..<3 {
+                await Task.yield()
+                proxy.scrollTo(targetID, anchor: .top)
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+            scrollTargetMediaID = targetID
+        }
+        coordinator.clearLibraryReturnState()
+    }
+
+    private func rememberGridState(opening mediaID: UUID? = nil) {
+        let restoredSelection: Set<UUID>
+        if let mediaID, !selectedVideoIDs.contains(mediaID) {
+            restoredSelection = [mediaID]
+        } else {
+            restoredSelection = selectedVideoIDs
+        }
+
+        coordinator.rememberLibraryState(
+            PlaybackCoordinator.LibraryReturnState(
+                scope: .album(album.id),
+                selectedMediaIDs: restoredSelection,
+                focusedMediaID: mediaID ?? focusedVideoID,
+                selectionAnchorMediaID: mediaID ?? lastSelectedVideoID,
+                scrollTargetMediaID: scrollTargetMediaID ?? mediaID ?? focusedVideoID,
+                searchText: searchText
+            )
+        )
+    }
+
+    private func startRandomPlayback(from videos: [VideoItem]) {
+        guard !videos.isEmpty else { return }
+        rememberGridState()
+        coordinator.playRandom(from: videos)
+    }
+
+    private func startMultiPlayback(_ videos: [VideoItem]) {
+        guard videos.count >= 2 else { return }
+        rememberGridState()
+        coordinator.playMulti(videos)
+    }
+
+    private func startSlideshowPlayback(_ videos: [VideoItem]) {
+        guard videos.count >= 2 else { return }
+        rememberGridState()
+        coordinator.startSlideshow(videos)
+    }
+
+    private func startSplitPlayback(video: VideoItem, splitCount: Int) {
+        rememberGridState(opening: video.id)
+        coordinator.playSplit(video: video, splitCount: splitCount)
     }
 }

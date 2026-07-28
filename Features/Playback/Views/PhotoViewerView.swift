@@ -112,12 +112,11 @@ struct PhotoViewerView: View {
         .focused($isFocused)
         .onAppear {
             isFocused = true
-            coordinator.rememberReturnTarget(mediaID: current.id)
             load()
             hideControls()
         }
         .onChange(of: current.id) { _, _ in
-            coordinator.rememberReturnTarget(mediaID: current.id)
+            coordinator.updateLibraryReturnSelection(mediaID: current.id)
             zoom.reset()
             load()
         }
