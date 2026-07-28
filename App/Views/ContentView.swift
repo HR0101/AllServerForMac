@@ -3,16 +3,30 @@ import SwiftUI
 // MARK: - メインビュー
 struct ContentView: View {
     @StateObject private var viewModel: AppViewModel
+    @ObservedObject private var dataManager: LibraryViewModel
+    @ObservedObject private var playbackCoordinator: PlaybackCoordinator
+    @ObservedObject private var appSettings: AppSettings
     private let sidebarMinWidth: CGFloat = 300
     private let sidebarIdealWidth: CGFloat = 320
     private let sidebarMaxWidth: CGFloat = 360
 
     init() {
-        _viewModel = StateObject(wrappedValue: AppViewModel())
+        let viewModel = AppViewModel()
+        _viewModel = StateObject(wrappedValue: viewModel)
+        _dataManager = ObservedObject(wrappedValue: viewModel.dataManager)
+        _playbackCoordinator = ObservedObject(
+            wrappedValue: viewModel.playbackCoordinator
+        )
+        _appSettings = ObservedObject(wrappedValue: viewModel.appSettings)
     }
 
     init(viewModel: AppViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        _dataManager = ObservedObject(wrappedValue: viewModel.dataManager)
+        _playbackCoordinator = ObservedObject(
+            wrappedValue: viewModel.playbackCoordinator
+        )
+        _appSettings = ObservedObject(wrappedValue: viewModel.appSettings)
     }
 
     var body: some View {
@@ -33,7 +47,7 @@ struct ContentView: View {
                 libraryView
             }
 
-            if let mode = viewModel.playbackCoordinator.mode {
+            if let mode = playbackCoordinator.mode {
                 playerOverlay(for: mode)
             }
         }
@@ -49,22 +63,22 @@ struct ContentView: View {
             WindowChromeConfigurator(isToolbarHidden: isToolbarHidden)
         )
         .tint(NeomorphicTheme.accent)
-        .preferredColorScheme(viewModel.appSettings.neomorphicDarkBase ? .dark : .light)
-        .environmentObject(viewModel.playbackCoordinator)
-        .environmentObject(viewModel.appSettings)
+        .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
+        .environmentObject(playbackCoordinator)
+        .environmentObject(appSettings)
     }
 
     /// ミニプレイヤー表示中は通常再生の裏でライブラリも操作できるようにする。
     private var shouldShowLibraryView: Bool {
-        guard let mode = viewModel.playbackCoordinator.mode else { return true }
+        guard let mode = playbackCoordinator.mode else { return true }
         if case .single = mode {
-            return viewModel.playbackCoordinator.isMiniPlayerActive
+            return playbackCoordinator.isMiniPlayerActive
         }
         return false
     }
 
     private var isToolbarHidden: Bool {
-        viewModel.playbackCoordinator.mode != nil && !shouldShowLibraryView
+        playbackCoordinator.mode != nil && !shouldShowLibraryView
     }
 
     /// 再生中はウィンドウ全体を占有するプレイヤー（通常再生はIキーでミニプレイヤー化できる）
@@ -75,26 +89,26 @@ struct ContentView: View {
             VideoPlayerView(
                 videos: playlist,
                 currentVideo: current,
-                dataManager: viewModel.dataManager
+                dataManager: dataManager
             )
         case .multi(let videos):
-            MultiVideoPlayerView(videos: videos, dataManager: viewModel.dataManager)
+            MultiVideoPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
         case .slideshow(let videos):
-            SlideshowPlayerView(videos: videos, dataManager: viewModel.dataManager)
+            SlideshowPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
         case .splitPlay(let video, let splitCount):
             SplitVideoPlayerView(
                 video: video,
                 splitCount: splitCount,
-                dataManager: viewModel.dataManager
+                dataManager: dataManager
             )
                 .ignoresSafeArea()
         case .photos(let playlist, let current):
             PhotoViewerView(
                 photos: playlist,
                 current: current,
-                dataManager: viewModel.dataManager
+                dataManager: dataManager
             )
         }
     }
@@ -106,7 +120,7 @@ struct ContentView: View {
 
             NavigationSplitView {
                 MainSidebarView(
-                    dataManager: viewModel.dataManager,
+                    dataManager: dataManager,
                     webServerManager: viewModel.webServerManager,
                     selection: $viewModel.selection
                 )
@@ -120,29 +134,29 @@ struct ContentView: View {
                     switch viewModel.selection {
                     case .home:
                         HomeView(
-                            dataManager: viewModel.dataManager,
+                            dataManager: dataManager,
                             webServerManager: viewModel.webServerManager
                         )
                             .navigationTitle("ホーム")
                     case .favorites:
                         LibraryCategoryView(
                             kind: .favorites,
-                            dataManager: viewModel.dataManager
+                            dataManager: dataManager
                         )
                             .navigationTitle("お気に入り")
                     case .trash:
                         LibraryCategoryView(
                             kind: .trash,
-                            dataManager: viewModel.dataManager
+                            dataManager: dataManager
                         )
                             .navigationTitle("ゴミ箱")
                     case .album(let albumID):
-                        if let album = viewModel.dataManager.albums.first(
+                        if let album = dataManager.albums.first(
                             where: { $0.id == albumID }
                         ) {
                             AlbumDetailView(
                                 album: album,
-                                dataManager: viewModel.dataManager
+                                dataManager: dataManager
                             )
                                 .navigationTitle(album.name)
                         } else {
@@ -160,6 +174,6 @@ struct ContentView: View {
         // ベースカラーを切り替えたら、色を静的に参照している全ビュー（CommandDeckBackground・
         // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
         // これをしないと一部だけ色が更新されず、白背景に白文字などのちぐはぐが起きる。
-        .id(viewModel.appSettings.neomorphicDarkBase)
+        .id(appSettings.neomorphicDarkBase)
     }
 }
