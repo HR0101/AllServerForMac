@@ -156,6 +156,7 @@ private struct SlideshowContentView: View {
         _ = shortcutSettingsVersion
         return MediaShortcutSettings.shortcutList(
             for: [
+                .videoClose,
                 .videoPlayPause,
                 .videoSeekBack15,
                 .videoSeekBack10,
@@ -223,6 +224,11 @@ private struct SlideshowContentView: View {
     }
 
     private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
+        if MediaShortcutSettings.matches(.videoClose, press: press) {
+            coordinator.close()
+            return .handled
+        }
+
         if let digit = press.key.character.wholeNumberValue {
             viewModel.seek(toPercentage: Double(digit) / 10.0)
             return .handled

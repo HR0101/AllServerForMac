@@ -103,6 +103,7 @@ struct MediaShortcutKey: RawRepresentable, Hashable, Identifiable {
 }
 
 enum MediaShortcutAction: String, CaseIterable, Identifiable {
+    case videoClose
     case videoPlayPause
     case videoPreviousItem
     case videoNextItem
@@ -150,6 +151,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
 
     var settingsTitle: String {
         switch self {
+        case .videoClose: return "動画: プレイヤーを閉じる"
         case .videoPlayPause: return "動画: 再生・一時停止"
         case .videoPreviousItem: return "動画: 前の項目"
         case .videoNextItem: return "動画: 次の項目"
@@ -193,6 +195,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
 
     var helpAction: String {
         switch self {
+        case .videoClose: return "動画プレイヤーを閉じる"
         case .videoPlayPause: return "再生・一時停止"
         case .videoPreviousItem: return "前の動画へ"
         case .videoNextItem: return "次の動画へ"
@@ -240,6 +243,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
 
     var defaultKeys: [MediaShortcutKey] {
         switch self {
+        case .videoClose: return [.f]
         case .videoPlayPause: return [.space, .k]
         case .videoPreviousItem: return [.leftArrow]
         case .videoNextItem: return [.rightArrow]
@@ -282,6 +286,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     }
 
     static let videoActions: [MediaShortcutAction] = [
+        .videoClose,
         .videoPlayPause,
         .videoPreviousItem,
         .videoNextItem,
