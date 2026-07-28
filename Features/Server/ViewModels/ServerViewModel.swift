@@ -7,16 +7,16 @@ import Combine
 import MediaServerKit
 
 
-class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
+class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     let server = HttpServer()
     private var netService: NetService?
-    
-    weak var dataManager: VideoDataManager?
-    
+
+    weak var dataManager: LibraryViewModel?
+
     @Published var statusMessage: String = "停止中"
     @Published var serverURL: String?
     var isRunning: Bool { serverStartTime != nil }
-    
+
     @Published var serverStartTime: Date? {
         didSet { snapshotServerStartTime.value = serverStartTime }
     }
@@ -24,7 +24,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     nonisolated let snapshotServerStartTime = LockedBox<Date?>(nil)
     @Published var uptimeString: String = "00:00:00"
     private var timerCancellable: AnyCancellable?
-    
+
     @Published var autoStopEnabled: Bool {
         didSet {
             UserDefaults.standard.set(autoStopEnabled, forKey: "autoStopEnabled")
@@ -103,7 +103,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
 
     var maxUploadBytes: Int { maxUploadBytesCache }
 
-    init(dataManager: VideoDataManager) {
+    init(dataManager: LibraryViewModel) {
         self.dataManager = dataManager
 
         let savedPort = UserDefaults.standard.integer(forKey: "serverPort")
@@ -140,9 +140,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
         UserDefaults.standard.set(pin, forKey: "authPIN")
 
         super.init()
-        print("✅ [LIFECYCLE] WebServerManager initialized.")
+        print("✅ [LIFECYCLE] ServerViewModel initialized.")
         setupRoutes()
-        
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleSessionOrAppTermination),
@@ -162,7 +162,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     }
 
     deinit {
-        print("🛑 [LIFECYCLE] WebServerManager deinitialized.")
+        print("🛑 [LIFECYCLE] ServerViewModel deinitialized.")
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -294,9 +294,9 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     // MARK: - Server Control
     func startServer() {
         guard !server.operating else { return }
-        
+
         let portToUse = in_port_t(targetPort)
-        
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             do {
@@ -318,7 +318,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
                     self.netService = NetService(domain: "local.", type: "_myvideoserver._tcp.", name: uniqueServiceName, port: Int32(actualPort))
                     self.netService?.delegate = self
                     self.netService?.publish()
-                    
+
                     self.serverStartTime = Date()
                     self.startUptimeTimer()
                 }
@@ -369,7 +369,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
     func stopServerInternal() {
         netService?.stop(); netService = nil
         server.stop()
-        
+
         DispatchQueue.main.async {
             self.serverStartTime = nil
             self.timerCancellable?.cancel()
@@ -378,7 +378,7 @@ class WebServerManager: NSObject, ObservableObject, NetServiceDelegate {
             self.statusMessage = "🛑 サーバー停止"
         }
     }
-    
+
     @objc private func handleSessionOrAppTermination() { stopServerInternal() }
 
     // MARK: - スケジュール起動/停止

@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// 詳細設定シート。データ安全・サーバー保護・パフォーマンス・エクスポートの
-/// 各設定をまとめる（値の実体は VideoDataManager / WebServerManager / UserDefaults）。
+/// 各設定をまとめる（値の実体は LibraryViewModel / ServerViewModel / UserDefaults）。
 struct PreferencesView: View {
-    @ObservedObject var dataManager: VideoDataManager
-    @ObservedObject var webServerManager: WebServerManager
+    @ObservedObject var dataManager: LibraryViewModel
+    @ObservedObject var webServerManager: ServerViewModel
     @ObservedObject var appSettings: AppSettings
     @Environment(\.dismiss) private var dismiss
 

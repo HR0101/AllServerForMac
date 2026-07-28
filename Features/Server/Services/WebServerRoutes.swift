@@ -3,15 +3,15 @@ import Foundation
 import MediaServerKit
 import Swifter
 
-extension WebServerManager {
+extension ServerViewModel {
     // MARK: - API Routes
     func setupRoutes() {
-        
+
         server["/"] = { [weak self] request -> HttpResponse in
             self?.logAccess(request, authorized: true)
             return .ok(.html(WebClientHTML.page))
         }
-        
+
         server["/albums"] = protected { [weak self] _ -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             // メインスレッドを経由せずスナップショットから応答する。
@@ -30,7 +30,7 @@ extension WebServerManager {
                 return .ok(.data(jsonData, contentType: "application/json"))
             } catch { return .internalServerError }
         }
-        
+
         server["/albums/:id/videos"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             guard let albumIDString = request.params[":id"], let albumID = UUID(uuidString: albumIDString) else {
@@ -46,14 +46,14 @@ extension WebServerManager {
 
             // 動画ごとの「カスタムアルバム」を1回の走査で構築（各アルバム内で最初に見つかったものを優先＝albums の順序を保つ）
             var customAlbumByVideoID: [UUID: Album] = [:]
-            for a in albums where a.name != VideoDataManager.allVideosAlbumName && a.name != VideoDataManager.allPhotosAlbumName {
+            for a in albums where a.name != LibraryViewModel.allVideosAlbumName && a.name != LibraryViewModel.allPhotosAlbumName {
                 for vid in a.videoIDs where customAlbumByVideoID[vid] == nil {
                     customAlbumByVideoID[vid] = a
                 }
             }
 
             // 並べ替え「サイズ/変更日/最後に開いた日」用に実ファイル属性を読む。
-            // Mac 側の一覧と同じキャッシュ（VideoDataManager.fileMetadata）を共有するので、
+            // Mac 側の一覧と同じキャッシュ（LibraryViewModel.fileMetadata）を共有するので、
             // アルバムを開くたびにメディア全件を stat し直すことはない。
             let videoInfos = videoItems.map { video -> RemoteVideoInfo in
                 let meta = dataManager.fileMetadata(for: video)
@@ -77,7 +77,7 @@ extension WebServerManager {
                 return .ok(.data(jsonData, contentType: "application/json"))
             } catch { return .internalServerError }
         }
-        
+
         server["/server/status"] = protected { [weak self] _ -> HttpResponse in
             var uptime = 0
             if let start = self?.snapshotServerStartTime.value {
@@ -101,7 +101,7 @@ extension WebServerManager {
             }
             return .ok(.text("Shutdown initiated"))
         }
-        
+
         server.post["/albums/create"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct CreateReq: Codable { let name: String; let type: String }
@@ -121,7 +121,7 @@ extension WebServerManager {
             DispatchQueue.main.sync { dataManager.deleteAlbum(albumID: id) }
             return .ok(.text("Deleted"))
         }
-        
+
         server.post["/move"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             struct MoveRequest: Codable { let videoIds: [String]; let sourceAlbumId: String; let targetAlbumId: String }
@@ -160,7 +160,7 @@ extension WebServerManager {
 
         server.post["/upload"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
-            
+
             // サイズ上限の確認（Swifter はボディを全展開済みなので、ここではディスク書き込みを防ぐ）
             guard request.body.count <= self.maxUploadBytes else {
                 return .raw(413, "Payload Too Large", ["Content-Type": "text/plain"], { try? $0.write(Array("File too large".utf8)) })
@@ -180,17 +180,17 @@ extension WebServerManager {
             let data = Data(request.body)
             do {
                 try data.write(to: tempURL)
-                
+
                 let targetAlbumID: UUID
                 if let aid = UUID(uuidString: albumIdStr) {
                     targetAlbumID = aid
                 } else {
-                    guard let allVideos = dataManager.albums.first(where: { $0.name == VideoDataManager.allVideosAlbumName }) else {
+                    guard let allVideos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allVideosAlbumName }) else {
                         return .internalServerError
                     }
                     targetAlbumID = allVideos.id
                 }
-                
+
                 DispatchQueue.main.async {
                     Task {
                         await dataManager.importMedia(from: tempURL, to: targetAlbumID, customFilename: filename)
@@ -207,7 +207,7 @@ extension WebServerManager {
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
-            
+
             let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "original"
 
             // スナップショットから解決（メインスレッド非経由）。再生開始が Mac UI の状態に左右されない。
@@ -217,7 +217,7 @@ extension WebServerManager {
             let vURL = dataManager.videoStorageURL
             let dURL = dataManager.downloadStorageURL
             let pURL = dataManager.proxyStorageURL
-            
+
             var videoURL: URL?
             if quality == "1080p" {
                 // クライアントが小文字UUIDで送ってきても、Mac側で生成したファイル名（大文字）と
@@ -228,7 +228,7 @@ extension WebServerManager {
                 let proxyURL = pURL.appendingPathComponent("\(videoID.uuidString)_540p.mp4")
                 if FileManager.default.fileExists(atPath: proxyURL.path) { videoURL = proxyURL }
             }
-            
+
             if videoURL == nil {
                 if let path = extPath {
                     let extURL = URL(fileURLWithPath: path)
@@ -281,12 +281,12 @@ extension WebServerManager {
             guard let self = self, let dataManager = self.dataManager,
                   let videoIDString = request.params[":id"],
                   let videoID = UUID(uuidString: videoIDString) else { return .notFound }
-            
+
             let isOriginal = request.queryParams.contains(where: { $0.0 == "original" && $0.1 == "true" })
             let timeString = request.queryParams.first(where: { $0.0 == "time" })?.1
             let timeParam = timeString.flatMap { Double($0) }
             let maxPixelSize = self.thumbnailMaxPixelSize(from: request.queryParams, isOriginal: isOriginal)
-            
+
             let fileName: String
             if let t = timeParam {
                 fileName = "\(videoID.uuidString)_t\(Int(t)).jpg"
@@ -309,11 +309,11 @@ extension WebServerManager {
                     try? writer.write(cachedData)
                 })
             }
-            
+
             // スナップショットから解決（メインスレッド非経由）。スクロール中のサムネイル要求
             // ラッシュが Mac UI をカクつかせず、Mac UI が忙しくてもサムネ応答が遅れない。
             guard let item = dataManager.snapshotLibrary.value.videos.first(where: { $0.id == videoID }),
-                  let fileUrl = VideoDataManager.resolveFileURL(
+                  let fileUrl = LibraryViewModel.resolveFileURL(
                     for: item,
                     videoStorageURL: dataManager.videoStorageURL,
                     downloadStorageURL: dataManager.downloadStorageURL
@@ -344,8 +344,8 @@ extension WebServerManager {
                 })
             }
         }
-        
+
         print("✅ [SETUP] API routes configured.")
     }
-    
+
 }

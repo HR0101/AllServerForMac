@@ -7,7 +7,7 @@ import Swifter
 
 enum ThumbQuality { case high, low }
 
-extension WebServerManager {
+extension ServerViewModel {
     func thumbnailMaxPixelSize(from queryParams: [(String, String)], isOriginal: Bool) -> Int? {
         guard isOriginal,
               let value = queryParams.first(where: { $0.0 == "max" })?.1,
@@ -22,7 +22,7 @@ extension WebServerManager {
             let attr = try FileManager.default.attributesOfItem(atPath: url.path)
             guard let size = attr[.size] as? UInt64 else { return .internalServerError }
             let mime = MimeType.forPath(url.path)
-            
+
             if let rangeHeader = request.headers["range"], let range = RangeHeader.parse(rangeHeader, totalSize: size) {
                 let (start, end) = range
                 let length = end - start + 1
@@ -34,11 +34,11 @@ extension WebServerManager {
                     guard fd != -1 else { return }
                     defer { close(fd) }
                     lseek(fd, off_t(start), SEEK_SET)
-                    
+
                     var remaining = length
                     let chunkSize = 1024 * 1024 * 2 // 2MB chunks
                     var buffer = [UInt8](repeating: 0, count: chunkSize)
-                    
+
                     while remaining > 0 {
                         let toRead = min(Int(chunkSize), Int(remaining))
                         let bytesRead = read(fd, &buffer, toRead)
@@ -61,10 +61,10 @@ extension WebServerManager {
                     let fd = open(url.path, O_RDONLY)
                     guard fd != -1 else { return }
                     defer { close(fd) }
-                    
+
                     let chunkSize = 1024 * 1024 * 2 // 2MB chunks
                     var buffer = [UInt8](repeating: 0, count: chunkSize)
-                    
+
                     while true {
                         let bytesRead = read(fd, &buffer, chunkSize)
                         if bytesRead <= 0 { break }
@@ -115,7 +115,7 @@ extension WebServerManager {
         }
         return candidates.min(by: { interfaceNumber($0.name) < interfaceNumber($1.name) })?.ip
     }
-    
+
     func generateThumbnailData(for url: URL, type: MediaType, quality: ThumbQuality, isOriginal: Bool = false, requestedTime: Double? = nil, maxPixelSize: Int? = nil) async -> Data? {
         let defaultSize: CGFloat = quality == .high ? 400 : 50
         let requestedSize = CGFloat(maxPixelSize ?? Int(defaultSize))
@@ -126,7 +126,7 @@ extension WebServerManager {
             // 元画像の読み込み・デコード・リサイズはメインスレッド（アプリ全体）をブロックしうる重い同期処理のため、
             // バックグラウンドで実行する。
             return await Task.detached(priority: .utility) {
-                WebServerManager.generateImageThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
+                ServerViewModel.generateImageThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal)
             }.value
         } else {
             return await generateVideoThumbnail(url: url, targetSize: size, compression: compression, isOriginal: isOriginal, requestedTime: requestedTime)
@@ -156,12 +156,12 @@ extension WebServerManager {
         generator.appliesPreferredTrackTransform = true
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
-        
+
         let duration = (try? await asset.load(.duration).seconds) ?? 0
-        
+
         var bestCGImage: CGImage? = nil
         var fallbackImage: CGImage? = nil
-        
+
         if let requestedTime = requestedTime, requestedTime >= 0, requestedTime <= duration {
             let time = CMTime(seconds: requestedTime, preferredTimescale: 600)
             if let cgImage = try? await generator.image(at: time).image {
@@ -169,18 +169,18 @@ extension WebServerManager {
             }
         } else {
             var attempts: [Double] = [1.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0]
-            
+
             if duration < 5 {
                 attempts.insert(0.0, at: 0)
             }
-            
+
             let validAttempts = attempts.filter { $0 < duration }
-            
+
             for seconds in validAttempts {
                 let time = CMTime(seconds: seconds, preferredTimescale: 600)
                 if let cgImage = try? await generator.image(at: time).image {
                     if fallbackImage == nil { fallbackImage = cgImage }
-                    
+
                     if !isImagePredominantlyBlack(image: cgImage) {
                         bestCGImage = cgImage
                         break
@@ -188,7 +188,7 @@ extension WebServerManager {
                 }
             }
         }
-        
+
         guard let cgImage = bestCGImage ?? fallbackImage else { return nil }
         return await Task.detached(priority: .utility) {
             if isOriginal {

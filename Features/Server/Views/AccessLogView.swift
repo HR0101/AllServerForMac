@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AccessLogView: View {
-    @ObservedObject var webServerManager: WebServerManager
+    @ObservedObject var webServerManager: ServerViewModel
     @Environment(\.dismiss) var dismiss
     @State private var logFilter: Int = 0 // 0: 全て, 1: 動画本体, 2: サムネ, 3: その他
 
@@ -31,7 +31,7 @@ struct AccessLogView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 250)
-                
+
                 Button("クリア") { webServerManager.accessLogs.removeAll() }
                     .disabled(webServerManager.accessLogs.isEmpty)
                 Button("閉じる") { dismiss() }
