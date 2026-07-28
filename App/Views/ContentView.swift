@@ -1,31 +1,18 @@
-import AppKit
 import SwiftUI
-
-
-enum NavigationSelection: Hashable {
-    case home
-    case favorites
-    case trash
-    case album(UUID)
-}
 
 // MARK: - メインビュー
 struct ContentView: View {
-    @StateObject private var dataManager: VideoDataManager
-    @StateObject private var webServerManager: WebServerManager
-
-    @State private var selection: NavigationSelection? = .home
-
-    @StateObject private var coordinator = PlaybackCoordinator()
-    @StateObject private var appSettings = AppSettings()
+    @StateObject private var viewModel: AppViewModel
     private let sidebarMinWidth: CGFloat = 300
     private let sidebarIdealWidth: CGFloat = 320
     private let sidebarMaxWidth: CGFloat = 360
 
     init() {
-        let manager = VideoDataManager()
-        _dataManager = StateObject(wrappedValue: manager)
-        _webServerManager = StateObject(wrappedValue: WebServerManager(dataManager: manager))
+        _viewModel = StateObject(wrappedValue: AppViewModel())
+    }
+
+    init(viewModel: AppViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     var body: some View {
@@ -46,7 +33,7 @@ struct ContentView: View {
                 libraryView
             }
 
-            if let mode = coordinator.mode {
+            if let mode = viewModel.playbackCoordinator.mode {
                 playerOverlay(for: mode)
             }
         }
@@ -62,22 +49,22 @@ struct ContentView: View {
             WindowChromeConfigurator(isToolbarHidden: isToolbarHidden)
         )
         .tint(NeomorphicTheme.accent)
-        .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
-        .environmentObject(coordinator)
-        .environmentObject(appSettings)
+        .preferredColorScheme(viewModel.appSettings.neomorphicDarkBase ? .dark : .light)
+        .environmentObject(viewModel.playbackCoordinator)
+        .environmentObject(viewModel.appSettings)
     }
 
     /// ミニプレイヤー表示中は通常再生の裏でライブラリも操作できるようにする。
     private var shouldShowLibraryView: Bool {
-        guard let mode = coordinator.mode else { return true }
+        guard let mode = viewModel.playbackCoordinator.mode else { return true }
         if case .single = mode {
-            return coordinator.isMiniPlayerActive
+            return viewModel.playbackCoordinator.isMiniPlayerActive
         }
         return false
     }
 
     private var isToolbarHidden: Bool {
-        coordinator.mode != nil && !shouldShowLibraryView
+        viewModel.playbackCoordinator.mode != nil && !shouldShowLibraryView
     }
 
     /// 再生中はウィンドウ全体を占有するプレイヤー（通常再生はIキーでミニプレイヤー化できる）
@@ -85,18 +72,30 @@ struct ContentView: View {
     private func playerOverlay(for mode: PlaybackCoordinator.Mode) -> some View {
         switch mode {
         case .single(let playlist, let current):
-            VideoPlayerView(videos: playlist, currentVideo: current, dataManager: dataManager)
+            VideoPlayerView(
+                videos: playlist,
+                currentVideo: current,
+                dataManager: viewModel.dataManager
+            )
         case .multi(let videos):
-            MultiVideoPlayerView(videos: videos, dataManager: dataManager)
+            MultiVideoPlayerView(videos: videos, dataManager: viewModel.dataManager)
                 .ignoresSafeArea()
         case .slideshow(let videos):
-            SlideshowPlayerView(videos: videos, dataManager: dataManager)
+            SlideshowPlayerView(videos: videos, dataManager: viewModel.dataManager)
                 .ignoresSafeArea()
         case .splitPlay(let video, let splitCount):
-            SplitVideoPlayerView(video: video, splitCount: splitCount, dataManager: dataManager)
+            SplitVideoPlayerView(
+                video: video,
+                splitCount: splitCount,
+                dataManager: viewModel.dataManager
+            )
                 .ignoresSafeArea()
         case .photos(let playlist, let current):
-            PhotoViewerView(photos: playlist, current: current, dataManager: dataManager)
+            PhotoViewerView(
+                photos: playlist,
+                current: current,
+                dataManager: viewModel.dataManager
+            )
         }
     }
 
@@ -106,7 +105,11 @@ struct ContentView: View {
             CommandDeckBackground()
 
             NavigationSplitView {
-                MainSidebarView(dataManager: dataManager, webServerManager: webServerManager, selection: $selection)
+                MainSidebarView(
+                    dataManager: viewModel.dataManager,
+                    webServerManager: viewModel.webServerManager,
+                    selection: $viewModel.selection
+                )
                     .navigationSplitViewColumnWidth(
                         min: sidebarMinWidth,
                         ideal: sidebarIdealWidth,
@@ -114,19 +117,33 @@ struct ContentView: View {
                     )
             } detail: {
                 NavigationStack {
-                    switch selection {
+                    switch viewModel.selection {
                     case .home:
-                        HomeView(dataManager: dataManager, webServerManager: webServerManager)
+                        HomeView(
+                            dataManager: viewModel.dataManager,
+                            webServerManager: viewModel.webServerManager
+                        )
                             .navigationTitle("ホーム")
                     case .favorites:
-                        LibraryCategoryView(kind: .favorites, dataManager: dataManager)
+                        LibraryCategoryView(
+                            kind: .favorites,
+                            dataManager: viewModel.dataManager
+                        )
                             .navigationTitle("お気に入り")
                     case .trash:
-                        LibraryCategoryView(kind: .trash, dataManager: dataManager)
+                        LibraryCategoryView(
+                            kind: .trash,
+                            dataManager: viewModel.dataManager
+                        )
                             .navigationTitle("ゴミ箱")
                     case .album(let albumID):
-                        if let album = dataManager.albums.first(where: { $0.id == albumID }) {
-                            AlbumDetailView(album: album, dataManager: dataManager)
+                        if let album = viewModel.dataManager.albums.first(
+                            where: { $0.id == albumID }
+                        ) {
+                            AlbumDetailView(
+                                album: album,
+                                dataManager: viewModel.dataManager
+                            )
                                 .navigationTitle(album.name)
                         } else {
                             ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
@@ -143,49 +160,6 @@ struct ContentView: View {
         // ベースカラーを切り替えたら、色を静的に参照している全ビュー（CommandDeckBackground・
         // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
         // これをしないと一部だけ色が更新されず、白背景に白文字などのちぐはぐが起きる。
-        .id(appSettings.neomorphicDarkBase)
-    }
-}
-
-/// macOS標準のタイトルバーをコンテンツと同じ黒い背景に重ねるための設定です。
-/// toolbarBackgroundだけではタイトルバー領域の外観を完全に消せないため，
-/// NSWindowをフルサイズコンテンツビューとして明示的に構成します。
-private struct WindowChromeConfigurator: NSViewRepresentable {
-    let isToolbarHidden: Bool
-
-    func makeNSView(context: Context) -> WindowChromeView {
-        let view = WindowChromeView()
-        view.isToolbarHidden = isToolbarHidden
-        return view
-    }
-
-    func updateNSView(_ nsView: WindowChromeView, context: Context) {
-        nsView.isToolbarHidden = isToolbarHidden
-        nsView.applyWindowChrome()
-    }
-}
-
-private final class WindowChromeView: NSView {
-    var isToolbarHidden = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        applyWindowChrome()
-    }
-
-    func applyWindowChrome() {
-        guard let window else { return }
-        window.styleMask.insert(.fullSizeContentView)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.titlebarSeparatorStyle = .none
-        // ウィンドウのクロム（タイトルバー・ツールバー）をアプリのテーマに固定する。
-        // システムがダークだと、フルスクリーンの上端が黒く見える一因になるため。
-        window.appearance = NSAppearance(named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua)
-        window.backgroundColor = NeomorphicTheme.isDarkBase
-            ? NSColor(red: 0.08, green: 0.085, blue: 0.09, alpha: 1.0)
-            : NSColor(red: 0.89, green: 0.92, blue: 0.93, alpha: 1.0)
-        window.toolbarStyle = .unifiedCompact
-        window.toolbar?.isVisible = !isToolbarHidden
+        .id(viewModel.appSettings.neomorphicDarkBase)
     }
 }

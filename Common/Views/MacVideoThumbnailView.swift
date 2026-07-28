@@ -36,7 +36,7 @@ actor ThumbnailDecodeLimiter {
 
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
-    let dataManager: VideoDataManager
+    let dataManager: LibraryViewModel
     @EnvironmentObject private var appSettings: AppSettings
     @State private var thumbnail: NSImage?
 
