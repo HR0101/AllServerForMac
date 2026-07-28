@@ -7,6 +7,21 @@ import Foundation
 // どのモードを表示中かを一元管理し、各プレイヤーは close() で元のライブラリ画面へ戻る。
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
+    enum LibraryScope: Equatable {
+        case album(UUID)
+        case favorites
+        case trash
+    }
+
+    struct LibraryReturnState {
+        let scope: LibraryScope
+        let selectedMediaIDs: Set<UUID>
+        let focusedMediaID: UUID?
+        let selectionAnchorMediaID: UUID?
+        let scrollTargetMediaID: UUID?
+        let searchText: String
+    }
+
     enum Mode: Equatable {
         case single(playlist: [VideoItem], current: VideoItem)
         case multi([VideoItem])
@@ -16,7 +31,7 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     @Published var mode: Mode?
-    @Published var returnToMediaID: UUID?
+    @Published private(set) var libraryReturnState: LibraryReturnState?
     /// 通常再生をIキーで右下に小さくたたみ、アルバム一覧を裏に表示している間 true。
     @Published var isMiniPlayerActive = false
 
@@ -70,13 +85,26 @@ final class PlaybackCoordinator: ObservableObject {
         isMiniPlayerActive = false
     }
 
-    /// プレイヤーを閉じたあとに一覧側で復帰させたい項目を記録する。
-    func rememberReturnTarget(mediaID: UUID) {
-        returnToMediaID = mediaID
+    /// プレイヤーを閉じたあとに一覧の選択状態と表示位置を復元できるよう記録する。
+    func rememberLibraryState(_ state: LibraryReturnState) {
+        libraryReturnState = state
+    }
+
+    /// 全画面の画像ビューア内で表示対象が変わった場合，戻り先の選択だけを追従させる。
+    func updateLibraryReturnSelection(mediaID: UUID) {
+        guard let state = libraryReturnState else { return }
+        libraryReturnState = LibraryReturnState(
+            scope: state.scope,
+            selectedMediaIDs: [mediaID],
+            focusedMediaID: mediaID,
+            selectionAnchorMediaID: mediaID,
+            scrollTargetMediaID: state.scrollTargetMediaID,
+            searchText: state.searchText
+        )
     }
 
     /// 一覧側で復帰処理を終えたら呼ぶ。
-    func clearReturnTarget() {
-        returnToMediaID = nil
+    func clearLibraryReturnState() {
+        libraryReturnState = nil
     }
 }
