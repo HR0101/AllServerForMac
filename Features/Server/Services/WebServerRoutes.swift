@@ -324,7 +324,7 @@ extension ServerViewModel {
 
             Task {
                 if let data = await self.generateThumbnailData(for: fileUrl, type: item.mediaType, quality: .high, isOriginal: isOriginal, requestedTime: timeParam, maxPixelSize: maxPixelSize) {
-                    try? data.write(to: thumbnailURL)
+                    try? data.write(to: thumbnailURL, options: .atomic)
                     generatedData = data
                 }
                 semaphore.signal()
