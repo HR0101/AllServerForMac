@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - メインビュー
@@ -66,6 +67,20 @@ struct ContentView: View {
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
         .environmentObject(playbackCoordinator)
         .environmentObject(appSettings)
+        .focusedSceneValue(\.appMenuContext, appMenuContext)
+        .sheet(isPresented: $viewModel.isShowingPreferences) {
+            PreferencesView(
+                dataManager: dataManager,
+                webServerManager: viewModel.webServerManager,
+                appSettings: appSettings
+            )
+        }
+        .sheet(isPresented: $viewModel.isShowingStorageManager) {
+            StorageManagerView(dataManager: dataManager)
+        }
+        .sheet(isPresented: $viewModel.isShowingAccessLog) {
+            AccessLogView(webServerManager: viewModel.webServerManager)
+        }
     }
 
     /// ミニプレイヤー表示中は通常再生の裏でライブラリも操作できるようにする。
@@ -122,7 +137,9 @@ struct ContentView: View {
                 MainSidebarView(
                     dataManager: dataManager,
                     webServerManager: viewModel.webServerManager,
-                    selection: $viewModel.selection
+                    selection: $viewModel.selection,
+                    isShowingPreferences: $viewModel.isShowingPreferences,
+                    isShowingStorageManager: $viewModel.isShowingStorageManager
                 )
                     .navigationSplitViewColumnWidth(
                         min: sidebarMinWidth,
@@ -175,5 +192,75 @@ struct ContentView: View {
         // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
         // これをしないと一部だけ色が更新されず、白背景に白文字などのちぐはぐが起きる。
         .id(appSettings.neomorphicDarkBase)
+    }
+
+    private var appMenuContext: AppMenuContext {
+        AppMenuContext(
+            isLibraryLoaded: dataManager.isLibraryLoaded,
+            isServerRunning: viewModel.isServerRunning,
+            serverURL: viewModel.currentServerURL,
+            canRefreshLinkedFolders: dataManager.linkedFolderCount > 0,
+            isPresentingPlayer: playbackCoordinator.isPresenting,
+            canToggleMiniPlayer: isSingleVideoPlayback,
+            isMiniPlayerActive: playbackCoordinator.isMiniPlayerActive,
+            showPreferences: { viewModel.isShowingPreferences = true },
+            showStorageManager: { viewModel.isShowingStorageManager = true },
+            showAccessLog: { viewModel.isShowingAccessLog = true },
+            showHome: { viewModel.selection = .home },
+            showAllVideos: {
+                selectSystemAlbum(named: LibraryViewModel.allVideosAlbumName)
+            },
+            showAllPhotos: {
+                selectSystemAlbum(named: LibraryViewModel.allPhotosAlbumName)
+            },
+            showFavorites: { viewModel.selection = .favorites },
+            showTrash: { viewModel.selection = .trash },
+            refreshLinkedFolders: {
+                Task { await dataManager.rescanAllLinkedFolders() }
+            },
+            openDataFolder: dataManager.openAppRootFolderInFinder,
+            startServer: viewModel.webServerManager.startServer,
+            stopServer: viewModel.webServerManager.stopServer,
+            openServerInBrowser: openServerInBrowser,
+            copyServerURL: copyServerURL,
+            closePlayer: playbackCoordinator.close,
+            toggleMiniPlayer: toggleMiniPlayer
+        )
+    }
+
+    private var isSingleVideoPlayback: Bool {
+        guard let mode = playbackCoordinator.mode else { return false }
+        if case .single = mode {
+            return true
+        }
+        return false
+    }
+
+    private func selectSystemAlbum(named name: String) {
+        guard let albumID = dataManager.albums.first(
+            where: { $0.name == name }
+        )?.id else {
+            return
+        }
+        viewModel.selection = .album(albumID)
+    }
+
+    private func openServerInBrowser() {
+        guard let value = viewModel.currentServerURL,
+              let url = URL(string: value) else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func copyServerURL() {
+        guard let value = viewModel.currentServerURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func toggleMiniPlayer() {
+        guard isSingleVideoPlayback else { return }
+        playbackCoordinator.isMiniPlayerActive.toggle()
     }
 }

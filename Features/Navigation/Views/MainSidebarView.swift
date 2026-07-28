@@ -7,8 +7,8 @@ struct MainSidebarView: View {
     @ObservedObject var webServerManager: ServerViewModel
     @EnvironmentObject var appSettings: AppSettings
     @Binding var selection: NavigationSelection?
-
-    @State private var isShowingPreferences = false
+    @Binding var isShowingPreferences: Bool
+    @Binding var isShowingStorageManager: Bool
 
     @State private var isShowingAddAlbumSheet = false
     @State private var newAlbumName = ""
@@ -21,8 +21,6 @@ struct MainSidebarView: View {
     @State private var showSidebarMixedContentAlert = false
     @State private var pendingSidebarFolderURL: URL?
     @State private var sidebarMixedContentInfo = ""
-
-    @State private var isShowingStorageManager = false
 
     @State private var isShowingCreateFolderFromSelectionAlert = false
     @State private var newFolderNameForSelection = ""
@@ -118,12 +116,6 @@ struct MainSidebarView: View {
                 }
                 .help("データの安全性・サーバー保護・パフォーマンスの設定")
             }
-        }
-        .sheet(isPresented: $isShowingStorageManager) {
-            StorageManagerView(dataManager: dataManager)
-        }
-        .sheet(isPresented: $isShowingPreferences) {
-            PreferencesView(dataManager: dataManager, webServerManager: webServerManager, appSettings: appSettings)
         }
         .onDrop(of: [.fileURL], isTargeted: $isSidebarTargeted) { providers in
             handleDropOnSidebar(providers: providers)
