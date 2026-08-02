@@ -559,10 +559,18 @@ struct MainSidebarView: View {
                         toggleAlbumNodeSelection(node)
                     }
             } else {
-                sidebarRowLabel(node.name, systemImage: "folder.fill", count: nonTrashedCount(in: node), isExpanded: expandedFolderIDs.contains(key))
+                sidebarRowLabel(
+                    node.name,
+                    systemImage: "folder.fill",
+                    count: nonTrashedCount(in: node),
+                    isActive: selection == .folder(path: node.id, isPhoto: isPhotoTree),
+                    isExpanded: expandedFolderIDs.contains(key)
+                )
                     .contentShape(Rectangle())
                     // 標準の「＞」だけだと当たり判定が小さいため、タイトル行全体のクリックでも開閉できるようにする。
+                    // 併せて右ペインにこのフォルダの中身（子フォルダ・子アルバムの表紙）を出す。
                     .onTapGesture {
+                        selection = .folder(path: node.id, isPhoto: isPhotoTree)
                         if expandedFolderIDs.contains(key) { expandedFolderIDs.remove(key) } else { expandedFolderIDs.insert(key) }
                     }
                     .draggable(AlbumDragPayload(albumIDs: viewModel.albumIDs(in: node), sourceFolderPath: node.id))
@@ -736,6 +744,17 @@ struct MainSidebarView: View {
     /// DisclosureGroup は閉じたままだと選択ハイライトが見えず「今どこを見ているか」が
     /// わからなくなるため、アルバムを開くたびに呼ぶ。
     private func revealSelectedAlbumInSidebar() {
+        // フォルダ画面のタイル／パンくずから移動したときも、そのフォルダがサイドバー上で
+        // 畳まれたままにならないよう祖先を開く（自分自身は開かない＝行の再クリックで畳める）。
+        if case .folder(let path, let isPhoto) = selection {
+            var ancestor = ""
+            for part in path.components(separatedBy: "/").dropLast() where !part.isEmpty {
+                ancestor += (ancestor.isEmpty ? "" : "/") + part
+                expandedFolderIDs.insert(dropKey(forPath: ancestor, isPhotoTree: isPhoto))
+            }
+            return
+        }
+
         guard case .album(let albumID) = selection else { return }
         if let path = viewModel.folderPath(containing: albumID, in: viewModel.videoAlbumNodes) {
             for folderID in path { expandedFolderIDs.insert(dropKey(forPath: folderID, isPhotoTree: false)) }
