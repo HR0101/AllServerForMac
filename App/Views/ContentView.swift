@@ -179,6 +179,14 @@ struct ContentView: View {
                         } else {
                             ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
                         }
+                    case .folder(let path, let isPhoto):
+                        FolderDetailView(
+                            path: path,
+                            isPhoto: isPhoto,
+                            dataManager: dataManager,
+                            selection: $viewModel.selection
+                        )
+                            .navigationTitle(path.components(separatedBy: "/").last ?? path)
                     case .none:
                         ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                     }
