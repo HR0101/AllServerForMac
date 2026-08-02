@@ -136,6 +136,55 @@ struct MacVideoThumbnailView: View {
             }
     }
 
+    /// セル本体を描かずにサムネイル画像だけ取り出す。
+    /// フォルダ一覧のモザイク表紙のように「1タイルに複数枚」並べる用途で使う。
+    /// メモリキャッシュ・ディスクキャッシュ・同時デコード数の制限はグリッドと共有するので、
+    /// 表紙のために同じ画像を二重に生成することはない。
+    @MainActor
+    static func loadThumbnail(
+        for videoItem: VideoItem,
+        dataManager: LibraryViewModel,
+        thumbnailOption: ThumbnailOption,
+        customThumbnailTime: TimeInterval
+    ) async -> NSImage? {
+        let cacheKey = videoItem.id.uuidString as NSString
+        if let cached = memoryCache.object(forKey: cacheKey) {
+            return cached
+        }
+
+        guard let fileURL = dataManager.fileURL(for: videoItem) else { return nil }
+        let cacheURL = dataManager.thumbnailStorageURL
+            .appendingPathComponent(videoItem.id.uuidString)
+            .appendingPathExtension("jpg")
+        let mediaType = videoItem.mediaType
+        let generationKey = [
+            videoItem.id.uuidString,
+            videoItem.mediaType.rawValue,
+            thumbnailOption.rawValue,
+            String(customThumbnailTime),
+        ].joined(separator: "|")
+
+        let data = await ThumbnailGenerationCoordinator.shared.data(
+            for: generationKey
+        ) {
+            await thumbnailData(
+                fileURL: fileURL,
+                cacheURL: cacheURL,
+                mediaType: mediaType,
+                thumbnailOption: thumbnailOption,
+                customThumbnailTime: customThumbnailTime,
+                forceRegenerate: false
+            )
+        }
+        guard !Task.isCancelled,
+              let data,
+              let decoded = await decodeThumbnail(data) else {
+            return nil
+        }
+        memoryCache.setObject(decoded.image, forKey: cacheKey)
+        return decoded.image
+    }
+
     private func generateThumbnail(forceRegenerate: Bool) async {
         let cacheKey = videoItem.id.uuidString as NSString
         let cacheURL = dataManager.thumbnailStorageURL
