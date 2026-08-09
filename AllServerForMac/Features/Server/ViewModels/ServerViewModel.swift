@@ -12,6 +12,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     private var netService: NetService?
 
     weak var dataManager: LibraryViewModel?
+    let remotePlaybackSession: RemotePlaybackSession
 
     @Published var statusMessage: String = "停止中"
     @Published var serverURL: String?
@@ -111,8 +112,12 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     /// AppKitの画像変換をHTTPワーカースレッドで行わないよう、初期化時に生成します。
     let pwaIconData: Data
 
-    init(dataManager: LibraryViewModel) {
+    init(
+        dataManager: LibraryViewModel,
+        remotePlaybackSession: RemotePlaybackSession
+    ) {
         self.dataManager = dataManager
+        self.remotePlaybackSession = remotePlaybackSession
         // init は main で走るので @MainActor な LibraryViewModel の appRootURL をここで読んでおく。
         // 以後 WebSyncStore は LibraryViewModel に一切依存せず、ワーカースレッドから直接叩ける。
         self.syncStore = WebSyncStore(rootURL: dataManager.appRootURL)

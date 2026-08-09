@@ -117,6 +117,75 @@ extension ServerViewModel {
             return .internalServerError
         }
 
+        server["/remote/playback"] = protected { [weak self] _ -> HttpResponse in
+            guard let self else { return .internalServerError }
+            guard let data = try? JSONEncoder().encode(self.remotePlaybackSession.snapshot.value) else {
+                return .internalServerError
+            }
+            return .ok(.data(data, contentType: "application/json"))
+        }
+
+        server.post["/remote/playback/open"] = protected { [weak self] request -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else { return .internalServerError }
+            guard let openRequest = try? JSONDecoder().decode(
+                RemotePlaybackOpenRequest.self,
+                from: Data(request.body)
+            ), let videoID = UUID(uuidString: openRequest.videoID) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+
+            let snapshot = dataManager.snapshotLibrary.value
+            guard let current = snapshot.videos.first(where: {
+                $0.id == videoID && !$0.isInTrash && $0.mediaType == .video
+            }) else {
+                return .notFound
+            }
+
+            let requestedAlbumID = openRequest.albumID.flatMap(UUID.init(uuidString:))
+            let requestedAlbum = requestedAlbumID.flatMap { albumID in
+                snapshot.albums.first(where: { $0.id == albumID })
+            }
+            let defaultAlbum = snapshot.albums.first(where: {
+                $0.name == LibraryViewModel.allVideosAlbumName
+            })
+            let sourceAlbum = requestedAlbum ?? defaultAlbum
+            let videosByID = Dictionary(uniqueKeysWithValues: snapshot.videos.map { ($0.id, $0) })
+            var playlist = sourceAlbum?.videoIDs.compactMap { videosByID[$0] }.filter {
+                !$0.isInTrash && $0.mediaType == .video
+            } ?? []
+            if !playlist.contains(current) {
+                playlist.append(current)
+            }
+
+            DispatchQueue.main.sync {
+                self.remotePlaybackSession.open(playlist: playlist, current: current)
+            }
+            return .ok(.text("Opened"))
+        }
+
+        server.post["/remote/playback/command"] = protected { [weak self] request -> HttpResponse in
+            guard let self else { return .internalServerError }
+            guard let command = try? JSONDecoder().decode(
+                RemotePlaybackCommandRequest.self,
+                from: Data(request.body)
+            ) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+
+            let handled = DispatchQueue.main.sync {
+                self.remotePlaybackSession.perform(command)
+            }
+            guard handled else {
+                return .raw(409, "Conflict", ["Content-Type": "text/plain"], { writer in
+                    try? writer.write(Data("No active player or invalid command".utf8))
+                })
+            }
+            guard let data = try? JSONEncoder().encode(self.remotePlaybackSession.snapshot.value) else {
+                return .internalServerError
+            }
+            return .ok(.data(data, contentType: "application/json"))
+        }
+
         server.post["/server/shutdown"] = protectedDestructive { [weak self] _ -> HttpResponse in
             DispatchQueue.main.async {
                 self?.stopServerInternal()
@@ -406,7 +475,8 @@ extension ServerViewModel {
 
             let fileName: String
             if let t = timeParam {
-                fileName = "\(videoID.uuidString)_t\(Int(t)).jpg"
+                let timeMilliseconds = Int((t * 1_000).rounded())
+                fileName = "\(videoID.uuidString)_t\(timeMilliseconds).jpg"
             } else if isOriginal, let maxPixelSize {
                 fileName = "\(videoID.uuidString)_fit\(maxPixelSize).jpg"
             } else {
