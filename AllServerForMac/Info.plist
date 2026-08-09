@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>同じWi-Fi上のiPhone・iPadへ動画や写真を配信するためにローカルネットワークを使用します。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_myvideoserver._tcp.</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>AllServerForMac Album Drag Payload</string>
+			<key>UTTypeIdentifier</key>
+			<string>hr.AllServerForMac.album-drag-payload</string>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+	</array>
+</dict>
+</plist>
