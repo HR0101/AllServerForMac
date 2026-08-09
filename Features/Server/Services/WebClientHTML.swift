@@ -4,6 +4,22 @@ import Foundation
 /// iOS/Android 版と同じ「ホーム／ショート／アルバム」の3タブ構成で、
 /// スマホ（下タブバー）と Mac（左サイドレール）でレイアウトを切り替える。
 enum WebClientHTML {
+    static let manifest = #"""
+    {
+      "name": "Mac Media Server",
+      "short_name": "Media Server",
+      "description": "家庭内LANで動画と写真を閲覧するメディアサーバー",
+      "start_url": "/#home",
+      "scope": "/",
+      "display": "standalone",
+      "background_color": "#0D0D14",
+      "theme_color": "#0D0D14",
+      "icons": [
+        { "src": "/pwa-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+      ]
+    }
+    """#
+
     static let page = #"""
     <!DOCTYPE html>
     <html lang="ja">
@@ -11,6 +27,11 @@ enum WebClientHTML {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0D0D14">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Media Server">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/pwa-icon.png">
     <title>Mac Media Server</title>
     <style>
     :root {
@@ -407,11 +428,26 @@ enum WebClientHTML {
     .watch { height: 100%; }
     .stage { position: relative; width: 100%; background: #000; overflow: hidden; }
     .stage video, .stage img { width: 100%; height: 100%; object-fit: contain; display: block; outline: none; background: #000; }
+    .playback-error {
+        position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center;
+        background: radial-gradient(circle at center, rgba(45,35,42,0.96), rgba(0,0,0,0.96));
+    }
+    .playback-error.hidden { display: none; }
+    .playback-error-title { font-size: 17px; font-weight: 800; }
+    .playback-error-message { max-width: 520px; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+    .playback-error-progress { color: var(--accent); font-size: 12px; min-height: 18px; }
     .stage-close {
         position: absolute; top: 12px; left: 12px; z-index: 5; width: 40px; height: 40px; border-radius: 50%;
         border: none; background: rgba(0,0,0,0.55); color: #fff; display: grid; place-items: center; cursor: pointer; backdrop-filter: blur(6px);
     }
     .stage-close:hover { background: rgba(0,0,0,0.8); }
+    .stage-mini, .stage-expand {
+        position: absolute; top: 12px; right: 12px; z-index: 5; width: 40px; height: 40px;
+        border-radius: 50%; border: none; background: rgba(0,0,0,0.55); color: #fff;
+        display: grid; place-items: center; cursor: pointer; backdrop-filter: blur(6px);
+    }
+    .stage-expand { display: none; }
     .nav-arrow {
         position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 74px; z-index: 4;
         background: rgba(0,0,0,0.35); color: #fff; border: none; cursor: pointer; border-radius: 8px;
@@ -490,6 +526,23 @@ enum WebClientHTML {
         .watch-side { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(20px + var(--safe-b)); }
         .un-thumb { width: 132px; }
     }
+    #player-modal.mini {
+        display: block; inset: auto 16px calc(var(--tabbar) + var(--safe-b) + 14px) auto;
+        width: min(360px, calc(100vw - 32px)); height: auto; background: transparent;
+        pointer-events: none; z-index: 85;
+    }
+    #player-modal.mini .watch { display: block; height: auto; padding: 0; overflow: visible; }
+    #player-modal.mini .watch-main { overflow: visible; }
+    #player-modal.mini .stage {
+        width: 100%; aspect-ratio: 16 / 9; max-height: none; border-radius: 12px;
+        pointer-events: auto; box-shadow: 0 16px 50px rgba(0,0,0,0.65); border: 1px solid var(--line);
+    }
+    #player-modal.mini .watch-info, #player-modal.mini .watch-side,
+    #player-modal.mini .chapters, #player-modal.mini .nav-arrow, #player-modal.mini .stage-mini { display: none; }
+    #player-modal.mini .stage-expand { display: grid; }
+    @media (min-width: 901px) {
+        #player-modal.mini { bottom: 20px; right: 20px; width: 360px; }
+    }
     /* 写真は全画面ビューア（漫画モード対応） */
     #player-modal.mode-photo { background: #000; }
     #player-modal.mode-photo .watch { display: block; padding: 0; max-width: none; overflow: hidden; }
@@ -521,6 +574,12 @@ enum WebClientHTML {
         border-radius: 999px; font-size: 13.5px; z-index: 300; opacity: 0; transition: opacity 0.25s; pointer-events: none;
     }
     .toast.show { opacity: 1; }
+    #sync-dot {
+        position: fixed; right: 12px; bottom: calc(var(--tabbar) + var(--safe-b) + 12px);
+        width: 8px; height: 8px; border-radius: 50%; background: #ffb347; opacity: 0;
+        box-shadow: 0 0 10px rgba(255,179,71,0.75); transition: opacity 0.2s; z-index: 299;
+    }
+    #sync-dot.on { opacity: 1; }
     @media (min-width: 901px) { .toast { bottom: 28px; } }
     </style>
     </head>
@@ -545,6 +604,9 @@ enum WebClientHTML {
         </button>
         <button class="icon-btn" id="refresh-btn" title="再読み込み">
             <svg class="ico" viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg>
+        </button>
+        <button class="icon-btn" id="shutdown-btn" title="サーバーを終了">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M11 3h2v10h-2z"/><path d="M17.8 5.2 16.4 6.6A7 7 0 1 1 7.6 6.6L6.2 5.2a9 9 0 1 0 11.6 0"/></svg>
         </button>
     </header>
 
@@ -632,6 +694,9 @@ enum WebClientHTML {
                         <svg class="ico-s" viewBox="0 0 24 24"><path d="M13.4 2.1c.5 2.7-.7 4.1-2.1 5.6-1.6 1.7-3.5 3.3-3.5 6.2a6.2 6.2 0 0 0 12.4 0c0-2.2-1-4.2-2.5-5.8.1 1.7-.5 3-1.7 3.7.8-3.8-1.1-7.4-2.6-9.7"/></svg>
                         ショート再生
                     </button>
+                    <button class="pill" id="rename-album-btn">名前を変更</button>
+                    <button class="pill danger" id="delete-album-btn">アルバムを削除</button>
+                    <button class="pill danger hidden" id="empty-trash-btn">ゴミ箱を空にする</button>
                     <button class="pill" id="select-btn">選択</button>
                     <button class="pill" id="upload-btn">アップロード</button>
                     <input type="file" id="file-input" multiple class="hidden"
@@ -649,6 +714,7 @@ enum WebClientHTML {
                     <button class="pill" id="bulk-fav">お気に入り</button>
                     <button class="pill" id="bulk-move">移動</button>
                     <button class="pill" id="bulk-trash">ゴミ箱へ</button>
+                    <button class="pill accent hidden" id="bulk-restore">復元</button>
                     <button class="pill danger" id="bulk-purge">完全に削除</button>
                     <button class="pill" id="bulk-cancel">やめる</button>
                 </div>
@@ -666,8 +732,20 @@ enum WebClientHTML {
                     <button class="stage-close" id="stage-close" title="閉じる">
                         <svg class="ico" viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z"/></svg>
                     </button>
+                    <button class="stage-mini" id="stage-mini" title="ミニプレイヤー">
+                        <svg class="ico-s" viewBox="0 0 24 24"><path d="M4 5h16v14H4zm9 7v5h5v-5z"/></svg>
+                    </button>
+                    <button class="stage-expand" id="stage-expand" title="プレイヤーを開く">
+                        <svg class="ico-s" viewBox="0 0 24 24"><path d="M4 4h7v2H6v5H4zm9 0h7v7h-2V6h-5zM4 13h2v5h5v2H4zm14 0h2v7h-7v-2h5z"/></svg>
+                    </button>
                     <button class="nav-arrow prev" id="arrow-prev"><svg class="ico" viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg></button>
                     <button class="nav-arrow next" id="arrow-next"><svg class="ico" viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
+                    <div class="playback-error hidden" id="playback-error">
+                        <div class="playback-error-title" id="playback-error-title">再生できませんでした</div>
+                        <div class="playback-error-message" id="playback-error-message"></div>
+                        <div class="playback-error-progress" id="playback-error-progress"></div>
+                        <button class="pill accent" id="convert-btn">1080pへ変換して再生</button>
+                    </div>
                 </div>
                 <div class="chapters hidden" id="chapters"></div>
                 <div class="watch-info">
@@ -694,10 +772,15 @@ enum WebClientHTML {
                             <option value="540p">540p（節約）</option>
                         </select>
                         <button class="pill" id="fav-btn">お気に入り</button>
+                        <button class="pill" id="queue-btn">次に再生</button>
+                        <button class="pill" id="playlist-btn">プレイリストに追加</button>
+                        <button class="pill" id="share-btn">リンクをコピー</button>
+                        <button class="pill" id="download-btn">ダウンロード</button>
                         <button class="pill" id="info-btn">詳細情報</button>
                         <button class="pill" id="manga-toggle">通常モード</button>
                         <button class="pill" id="watch-shorts">ショートで見る</button>
                         <button class="pill" id="trash-btn">ゴミ箱へ</button>
+                        <button class="pill accent hidden" id="restore-btn">ゴミ箱から復元</button>
                         <button class="pill danger" id="purge-btn">完全に削除</button>
                     </div>
                 </div>
@@ -757,6 +840,7 @@ enum WebClientHTML {
     </div>
 
     <div class="toast" id="toast"></div>
+    <div id="sync-dot" title="同期待ち"></div>
 
     <script>
     "use strict";
@@ -777,6 +861,8 @@ enum WebClientHTML {
         allVideosAt: 0,
         allPhotos: [],
         allPhotosAt: 0,
+        trash: [],
+        trashAt: 0,
         homeAll: [],        // シャッフル済み全動画
         homeFiltered: [],   // 検索適用後（フィードと再生リストの実体）
         homeRendered: 0,
@@ -789,13 +875,25 @@ enum WebClientHTML {
         albumFiltered: [],
         playerOrigin: null,
         playerIndex: 0,
+        isPlayerMini: false,
+        queue: [],
         chapterTimes: [],   // 10等分サムネの各時刻（秒）
         chapterToken: 0,    // 動画を切り替えたら古い読み込みを打ち切るための番号
         quality: '1080p',
         progress: {},       // {videoID: {t: 秒, at: 最後に見た時刻}}
-        favorites: [],      // お気に入りのID（新しい順）
+        // --- サーバー同期（websync.json）---
+        favMarks: {},       // {videoID: {on, at}} お気に入りの正本。外した記録(on:false)も残す
+        shortsFavMarks: {}, // {videoID: {on, t, at}} ショートお気に入りの正本
+        syncDirty: false,   // サーバーへ送り残しがあるか
+        syncSending: false, // PUT が飛んでいる最中か（同時発射を防ぐ）
+        syncGeneration: 0,  // PUT中に追加更新されたかを判定する世代番号
+        syncLastPushAt: 0,  // 直近の PUT 開始時刻。timeupdate の嵐で毎秒送らないための床
+        syncLastPullAt: 0,  // 直近の GET 完了時刻
+        syncBackoff: 0,     // 失敗時のバックオフ（ミリ秒）
+        favorites: [],      // お気に入りのID（新しい順）。favMarks からの派生。直接 push/splice しない。変更は toggleFavorite 経由
         history: [],        // [{id, at}] 最後に開いた順
-        shortsFavs: [],     // [{id, t, at}] ショートのお気に入り（クリップ位置つき）
+        historyRemoved: {}, // {videoID: 削除時刻} 他端末の古い履歴による復活を防ぐ
+        shortsFavs: [],     // [{id, t, at}] shortsFavMarks からの派生。直接 push/splice しない。変更は toggleShortsFav 経由
         continueList: [],   // 「続きを見る」タブの再生リスト
         playback: { autoplay: true, repeat: 'off', shuffle: false, rate: 1, volume: 1, muted: false },
         playedStack: [],    // シャッフル中に「前へ」で辿るための履歴
@@ -858,6 +956,247 @@ enum WebClientHTML {
         return Math.floor(diff / 31536000) + '年前';
     }
 
+    // ======================= サーバー同期（websync.json） =======================
+    // 揃えるのは「その動画が自分にとって何か」＝視聴位置・お気に入り・履歴だけ。
+    // localStorage は今までどおり書き込みキャッシュとして残し、全ミューテーションは
+    // 同期的にそこへ書いたうえで dirty フラグを立てるだけにする。サーバーが落ちていても
+    // 送信に失敗しても、アプリの挙動は同期を入れる前とまったく同じに退化する。
+    var SYNC_KEY_MIGRATED = 'mms_sync_migrated';
+    var SYNC_DEBOUNCE = 2000;      // 旧 scheduleProgressSave と同じ間隔。書き込みの体感を変えないため
+    var SYNC_MIN_INTERVAL = 5000;  // PUT の発射間隔の下限。timeupdate の嵐で毎秒送らないための床
+    var SYNC_PULL_TTL = 30000;     // タブに戻ったとき、これより古ければ引き直す
+    var SYNC_BACKOFF_MAX = 60000;
+    var syncPushTimer = null;
+
+    function syncHasOwn(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
+    /// サーバーへ送る「クライアントの全体像」。再生の設定（音量・速度など）は端末に閉じるので入れない。
+    function buildSyncDoc() {
+        return {
+            schemaVersion: 1,
+            progress: state.progress,
+            favorites: state.favMarks,
+            history: state.history,
+            historyRemoved: state.historyRemoved,
+            shortsFavs: state.shortsFavMarks
+        };
+    }
+
+    /// favMarks から state.favorites（on:true を at 降順）を作り直す
+    function rebuildFavorites() {
+        var out = [], id;
+        for (id in state.favMarks) {
+            if (!syncHasOwn(state.favMarks, id)) continue;
+            if (state.favMarks[id] && state.favMarks[id].on) out.push(id);
+        }
+        out.sort(function (a, b) { return (state.favMarks[b].at || 0) - (state.favMarks[a].at || 0); });
+        state.favorites = out;
+    }
+
+    /// shortsFavMarks から state.shortsFavs（[{id,t,at}] を at 降順）を作り直す
+    function rebuildShortsFavs() {
+        var out = [], id, m;
+        for (id in state.shortsFavMarks) {
+            if (!syncHasOwn(state.shortsFavMarks, id)) continue;
+            m = state.shortsFavMarks[id];
+            if (m && m.on) out.push({ id: id, t: m.t || 0, at: m.at || 0 });
+        }
+        out.sort(function (a, b) { return b.at - a.at; });
+        state.shortsFavs = out;
+    }
+
+    /// サーバーから受け取った内容を取り込む。置き換えではなく必ずマージする。
+    /// これがないと「サーバーが空／取得失敗のときローカルが消える」を防げない。
+    /// 規則はサーバー側 WebSyncStore.merge と同じ、キー単位の LWW（at の大きい方が勝つ）。
+    function mergeSyncDoc(remote) {
+        if (!remote || typeof remote !== 'object') return false;
+        var changed = false, id, r, l, i, e;
+
+        var rp = remote.progress || {};
+        for (id in rp) {
+            if (!syncHasOwn(rp, id)) continue;
+            r = rp[id]; if (!r) continue;
+            l = state.progress[id];
+            if (!l || (r.at || 0) > (l.at || 0)) {
+                state.progress[id] = { t: r.t || 0, at: r.at || 0 };
+                changed = true;
+            }
+        }
+
+        var rf = remote.favorites || {};
+        for (id in rf) {
+            if (!syncHasOwn(rf, id)) continue;
+            r = rf[id]; if (!r) continue;
+            l = state.favMarks[id];
+            if (!l || (r.at || 0) > (l.at || 0)) {
+                state.favMarks[id] = { on: !!r.on, at: r.at || 0 };
+                changed = true;
+            }
+        }
+
+        var rs = remote.shortsFavs || {};
+        for (id in rs) {
+            if (!syncHasOwn(rs, id)) continue;
+            r = rs[id]; if (!r) continue;
+            l = state.shortsFavMarks[id];
+            if (!l || (r.at || 0) > (l.at || 0)) {
+                state.shortsFavMarks[id] = { on: !!r.on, t: r.t || 0, at: r.at || 0 };
+                changed = true;
+            }
+        }
+
+        var rr = remote.historyRemoved || {};
+        for (id in rr) {
+            if (!syncHasOwn(rr, id)) continue;
+            if (!syncHasOwn(state.historyRemoved, id) || (rr[id] || 0) > (state.historyRemoved[id] || 0)) {
+                state.historyRemoved[id] = rr[id] || 0;
+                changed = true;
+            }
+        }
+
+        // 履歴は id ごとの max(at) を集め，それより新しい削除記録がある項目を除外する。
+        var rh = remote.history || [];
+        var best = {}, hChanged = changed;
+        for (i = 0; i < state.history.length; i++) {
+            e = state.history[i];
+            if (!e || !e.id) continue;
+            if ((state.historyRemoved[e.id] || 0) >= (e.at || 0)) continue;
+            if (!syncHasOwn(best, e.id) || (e.at || 0) > best[e.id]) best[e.id] = e.at || 0;
+        }
+        for (i = 0; i < rh.length; i++) {
+            e = rh[i];
+            if (!e || !e.id) continue;
+            if ((state.historyRemoved[e.id] || 0) >= (e.at || 0)) continue;
+            if (!syncHasOwn(best, e.id) || (e.at || 0) > best[e.id]) { best[e.id] = e.at || 0; hChanged = true; }
+        }
+        if (hChanged) {
+            var order = [];
+            for (id in best) {
+                if (!syncHasOwn(best, id)) continue;
+                order.push({ id: id, at: best[id] });
+            }
+            order.sort(function (a, b) { return b.at - a.at; });
+            if (order.length > HISTORY_MAX) order.length = HISTORY_MAX;
+            state.history = order;
+            changed = true;
+        }
+
+        if (changed) { rebuildFavorites(); rebuildShortsFavs(); }
+        return changed;
+    }
+
+    /// localStorage へ書き戻す。お気に入り2種はマップ形で保存する（旧配列形は migrateLocalSync でしか読まない）。
+    function persistLocal() {
+        // 視聴位置はトゥームストーン（t:0）も残す方式なので単調に増える。ここで古いものから捨てる。
+        var ids = Object.keys(state.progress);
+        if (ids.length > PROGRESS_MAX) {
+            ids.sort(function (a, b) { return (state.progress[b].at || 0) - (state.progress[a].at || 0); });
+            var trimmed = {};
+            for (var i = 0; i < PROGRESS_MAX; i++) trimmed[ids[i]] = state.progress[ids[i]];
+            state.progress = trimmed;
+        }
+        writeJSON(PROGRESS_KEY, state.progress);
+        writeJSON(FAV_KEY, state.favMarks);
+        writeJSON(HISTORY_KEY, state.history);
+        writeJSON(HISTORY_REMOVED_KEY, state.historyRemoved);
+        writeJSON(SHORTFAV_KEY, state.shortsFavMarks);
+    }
+
+    /// 送り残しがあることを右下の小さな点で示す。トーストだと LAN が揺れるたびに鳴って邪魔になる。
+    function updateSyncDot() {
+        var dot = el('sync-dot');
+        if (dot) dot.classList.toggle('on', !!state.syncDirty);
+    }
+
+    /// すべてのミューテーションはここを通す。保存経路を1本にしないと、
+    /// 「localStorage だけ書けてサーバーには送られていない」状態の切り分けができなくなる。
+    function markDirty() {
+        state.syncDirty = true;
+        state.syncGeneration++;
+        persistLocal();
+        updateSyncDot();
+        scheduleSyncPush();
+    }
+
+    function scheduleSyncPush() {
+        if (syncPushTimer) return;
+        var wait = SYNC_DEBOUNCE;
+        var floor = state.syncLastPushAt + SYNC_MIN_INTERVAL - Date.now();
+        if (floor > wait) wait = floor;
+        if (state.syncBackoff > wait) wait = state.syncBackoff;
+        syncPushTimer = setTimeout(function () {
+            syncPushTimer = null;
+            // 送信中なら重ねて撃たず、次の機会に回す（返ってきた結果で dirty が落ちる）
+            if (state.syncSending) { scheduleSyncPush(); return; }
+            pushSync(false);
+        }, wait);
+    }
+
+    /// 全体像を PUT し、返ってきたマージ結果を取り込む。
+    /// 応答がマージ結果なので、PUT の直後に GET し直す必要がない（往復が半分になる）。
+    /// 失敗してもトーストは出さない。LAN が揺れるたびに通知が鳴る方が、同期していないことより不快。
+    function pushSync(force) {
+        if (!state.syncDirty) return;   // 送るものが無ければ何もしない
+        if (state.syncSending) return;  // 同時発射を防ぐ
+        if (!force && Date.now() - state.syncLastPushAt < SYNC_MIN_INTERVAL) { scheduleSyncPush(); return; }
+        if (syncPushTimer) { clearTimeout(syncPushTimer); syncPushTimer = null; }
+        state.syncSending = true;
+        state.syncLastPushAt = Date.now();
+        var sentGeneration = state.syncGeneration;
+        api('/sync', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildSyncDoc())
+        }).then(function (r) { return r.json(); }).then(function (merged) {
+            state.syncSending = false;
+            // PUT中に別のtimeupdate等が走っていれば、その更新は送信本文に入っていない。
+            state.syncDirty = state.syncGeneration !== sentGeneration;
+            state.syncBackoff = 0;
+            state.syncLastPullAt = Date.now();  // マージ結果を受け取った＝引き直したのと同じ
+            var changed = mergeSyncDoc(merged);
+            if (changed) {
+                persistLocal();
+                // 一覧は作り直さず重ね物だけ差し替えるので、後追い反映でもスクロール位置が飛ばない
+                refreshCardOverlays();
+                if (state.tab === 'continue') renderContinue();
+            }
+            updateSyncDot();
+            if (state.syncDirty) scheduleSyncPush();
+        }).catch(function (err) {
+            state.syncSending = false;
+            // AuthError は api() がログインモーダルを出しているので、ここでは何もしない
+            if (!(err instanceof AuthError)) {
+                state.syncBackoff = state.syncBackoff ? Math.min(state.syncBackoff * 2, SYNC_BACKOFF_MAX) : SYNC_DEBOUNCE;
+                scheduleSyncPush();
+            }
+            updateSyncDot();
+        });
+    }
+
+    /// サーバーの内容を引き寄せてマージする。失敗は無視（ローカルのまま動く）。
+    function pullSync() {
+        return api('/sync').then(function (r) { return r.json(); }).then(function (remote) {
+            state.syncLastPullAt = Date.now();
+            var changed = mergeSyncDoc(remote);
+            persistLocal();
+            if (changed) {
+                refreshCardOverlays();
+                if (state.tab === 'continue') renderContinue();
+            }
+            return changed;
+        }).catch(function () { return false; });
+    }
+
+    /// ページ離脱時の最後の1回。unload では fetch が中断されるので beacon しか通せない。
+    /// ヘッダを付けられないため PIN は cookie 頼り（submitPIN が入れている）。
+    function flushSyncBeacon() {
+        if (!state.syncDirty || !navigator.sendBeacon) return;
+        try {
+            var blob = new Blob([JSON.stringify(buildSyncDoc())], { type: 'application/json' });
+            navigator.sendBeacon('/sync', blob);
+        } catch (e) {}
+    }
+
     // ======================= localStorage の小道具 =======================
     function readJSON(key, fallback) {
         try {
@@ -872,16 +1211,51 @@ enum WebClientHTML {
     // ======================= お気に入り / 履歴 =======================
     var FAV_KEY = 'mms_favorites';
     var HISTORY_KEY = 'mms_history';
+    var HISTORY_REMOVED_KEY = 'mms_history_removed';
     var SHORTFAV_KEY = 'mms_shorts_favorites';
     var HISTORY_MAX = 200;
+    var MIGRATION_AT_BASE = 1; // わざとほぼ epoch。移行分は「後の明示操作に必ず負ける」
+
+    /// 旧形式（裸の配列）のお気に入りを {id:{on,at}} のマップへ移す。
+    /// 配列だと「相手がまだ知らない」と「相手が外した」を区別できず、片方で外したお気に入りが
+    /// もう片方の古い配列で復活する。移行分に極端に古い at を振るのが要で、Date.now() を振ると
+    /// 「PC で昔つけたお気に入り」が「スマホで昨日外した記録」に勝って復活してしまう。
+    /// 読んだ値が配列かどうかで判断するので、フラグだけ先に立つ事故が起きても取りこぼさない。
+    function migrateLocalSync() {
+        var fav = readJSON(FAV_KEY, null);
+        if (Array.isArray(fav)) {
+            var marks = {};
+            for (var i = 0; i < fav.length; i++) {
+                // 降順（新しい順）の並びを at の降順として保ったまま、全体を極端に古くする
+                if (typeof fav[i] === 'string') marks[fav[i]] = { on: true, at: MIGRATION_AT_BASE + (fav.length - i) };
+            }
+            writeJSON(FAV_KEY, marks);
+        }
+        var sfav = readJSON(SHORTFAV_KEY, null);
+        if (Array.isArray(sfav)) {
+            var smarks = {};
+            for (var j = 0; j < sfav.length; j++) {
+                var e = sfav[j];
+                // ショートは元から at を持っているのでそれを尊重する
+                if (e && e.id) smarks[e.id] = { on: true, t: e.t || 0, at: e.at || MIGRATION_AT_BASE };
+            }
+            writeJSON(SHORTFAV_KEY, smarks);
+        }
+        // mms_history / mms_progress は形も at もそのままなので変換不要。
+        // 旧 resume_<id> キーは移行しない。タイムスタンプが無く、他端末の本物の進捗と衝突したときに
+        // 勝敗を決められないため。resumeSecondsFor の端末ローカルのフォールバックとして残す。
+        try { localStorage.setItem(SYNC_KEY_MIGRATED, '1'); } catch (e2) {}
+    }
 
     function isFavorite(id) { return state.favorites.indexOf(id) >= 0; }
     function toggleFavorite(id) {
-        var i = state.favorites.indexOf(id);
-        if (i >= 0) state.favorites.splice(i, 1);
-        else state.favorites.unshift(id);
-        writeJSON(FAV_KEY, state.favorites);
-        return isFavorite(id);
+        var m = state.favMarks[id];
+        var on = !(m && m.on);
+        // 外した事実を {on:false, at} として残さないと、他端末の古い記録とマージしたときに復活する
+        state.favMarks[id] = { on: on, at: Date.now() };
+        rebuildFavorites();
+        markDirty();
+        return on;
     }
 
     /// 履歴は「最後に開いた順」。同じものは前の記録を消して先頭へ積み直す。
@@ -891,7 +1265,7 @@ enum WebClientHTML {
         }
         state.history.unshift({ id: id, at: Date.now() });
         if (state.history.length > HISTORY_MAX) state.history.length = HISTORY_MAX;
-        writeJSON(HISTORY_KEY, state.history);
+        markDirty();
     }
 
     /// ショートのお気に入りは「動画＋クリップ開始位置」で覚える（iOS版と同じ考え方）
@@ -900,15 +1274,24 @@ enum WebClientHTML {
         return -1;
     }
     function toggleShortsFav(id, startTime) {
-        var i = shortsFavIndex(id);
-        if (i >= 0) state.shortsFavs.splice(i, 1);
-        else state.shortsFavs.unshift({ id: id, t: startTime || 0, at: Date.now() });
-        writeJSON(SHORTFAV_KEY, state.shortsFavs);
-        return shortsFavIndex(id) >= 0;
+        var m = state.shortsFavMarks[id];
+        var on = !(m && m.on);
+        // 外したときも t を残す。他端末の古い記録とマージした際にクリップ位置が 0 に潰れないため
+        state.shortsFavMarks[id] = { on: on, t: on ? (startTime || 0) : (m ? (m.t || 0) : 0), at: Date.now() };
+        rebuildShortsFavs();
+        markDirty();
+        return on;
     }
 
     // ======================= 再生の設定 =======================
     var PLAYBACK_KEY = 'mms_playback';
+    // 再生の設定は端末に閉じたまま同期しない。音量とミュートはその端末のスピーカー／イヤホンの
+    // 都合そのもので、Mac 側を 20% にしたせいで外出先のスマホまで 20% になるのは実害でしかない。
+    // 速度・自動再生・リピート・シャッフルも、その場のセッションで気軽に切り替えるものなので、
+    // 別端末の操作で再生中に勝手に変わる方が混乱が大きい。
+    // 同期するのは「その動画が自分にとって何か（見た位置・お気に入り・履歴）」だけ、
+    // 「この端末でどう再生するか」は同期しない、という切り分け。
+    // 同じ理由で state.mangaMode / shortsMuted / shortsZoom / state.quality も同期対象外。
     function savePlayback() { writeJSON(PLAYBACK_KEY, state.playback); }
 
     // ======================= 視聴位置の記録 =======================
@@ -916,7 +1299,8 @@ enum WebClientHTML {
     // 1つの辞書にまとめ直す。古いキーは読み取りだけ引き継ぐ。
     var PROGRESS_KEY = 'mms_progress';
     var PROGRESS_MAX = 300;
-    var progressSaveTimer = null;
+    // 保存のデバウンスは markDirty()／scheduleSyncPush() に一本化した。
+    // localStorage 用とサーバー送信用で経路が2本あると、片方だけ発火する状態が生まれて切り分けできない。
 
     function loadProgress() {
         try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') || {}; }
@@ -925,7 +1309,9 @@ enum WebClientHTML {
 
     function resumeSecondsFor(video) {
         var entry = state.progress[video.id];
-        if (entry && entry.t > 0) return entry.t;
+        // t<=0 は clearProgress が残した「見終わった」の記録。ここで legacy へ落とすと、
+        // 消したはずの再開位置が旧 resume_ キーから蘇る。
+        if (entry) return entry.t > 0 ? entry.t : 0;
         var legacy = parseFloat(localStorage.getItem('resume_' + video.id) || '0');
         return isFinite(legacy) ? legacy : 0;
     }
@@ -937,29 +1323,17 @@ enum WebClientHTML {
 
     function setProgress(id, seconds) {
         state.progress[id] = { t: seconds, at: Date.now() };
-        scheduleProgressSave();
+        markDirty();
     }
 
+    /// 「見終わった」はエントリの削除ではなくトゥームストーン（t:0）で残す。
+    /// 消してしまうと、まだ古い進捗を持っている別端末が「残り数秒」の再開位置を復活させ、
+    /// 続きを見るタブにも再登場する。isPartiallyWatched は progressFor 経由で t=0 → 0 と
+    /// 評価するので、既存の表示判定はそのまま正しく動く。
     function clearProgress(id) {
-        delete state.progress[id];
+        state.progress[id] = { t: 0, at: Date.now() };
         localStorage.removeItem('resume_' + id);
-        scheduleProgressSave();
-    }
-
-    function scheduleProgressSave() {
-        if (progressSaveTimer) return;
-        progressSaveTimer = setTimeout(function () {
-            progressSaveTimer = null;
-            var ids = Object.keys(state.progress);
-            if (ids.length > PROGRESS_MAX) {
-                // 古いものから捨てて localStorage を太らせない
-                ids.sort(function (a, b) { return (state.progress[b].at || 0) - (state.progress[a].at || 0); });
-                var trimmed = {};
-                for (var i = 0; i < PROGRESS_MAX; i++) trimmed[ids[i]] = state.progress[ids[i]];
-                state.progress = trimmed;
-            }
-            try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(state.progress)); } catch (e) {}
-        }, 2000);
+        markDirty();
     }
 
     /// 見終わった／始めていないものにはバーを出さない
@@ -1116,6 +1490,17 @@ enum WebClientHTML {
             var photos = list || [];
             if (photos.length) { state.allPhotos = photos; state.allPhotosAt = Date.now(); }
             return photos;
+        });
+    }
+
+    function loadTrash(force) {
+        if (!force && state.trashAt && (Date.now() - state.trashAt) < ALL_MEDIA_TTL) {
+            return Promise.resolve(state.trash);
+        }
+        return api('/trash').then(function (r) { return r.json(); }).then(function (items) {
+            state.trash = items || [];
+            state.trashAt = Date.now();
+            return state.trash;
         });
     }
 
@@ -1463,7 +1848,9 @@ enum WebClientHTML {
         { id: 'FAVORITES', name: 'お気に入り', type: 'video',
           icon: '<path d="M12 21S3.5 14.6 3.5 9.2A4.7 4.7 0 0 1 12 6.3a4.7 4.7 0 0 1 8.5 2.9C20.5 14.6 12 21 12 21"/>' },
         { id: 'SHORTS_FAVORITES', name: 'ショートのお気に入り', type: 'video',
-          icon: '<path d="M13.4 2.1c.5 2.7-.7 4.1-2.1 5.6-1.6 1.7-3.5 3.3-3.5 6.2a6.2 6.2 0 0 0 12.4 0c0-2.2-1-4.2-2.5-5.8.1 1.7-.5 3-1.7 3.7.8-3.8-1.1-7.4-2.6-9.7"/>' }
+          icon: '<path d="M13.4 2.1c.5 2.7-.7 4.1-2.1 5.6-1.6 1.7-3.5 3.3-3.5 6.2a6.2 6.2 0 0 0 12.4 0c0-2.2-1-4.2-2.5-5.8.1 1.7-.5 3-1.7 3.7.8-3.8-1.1-7.4-2.6-9.7"/>' },
+        { id: 'TRASH', name: 'ゴミ箱', type: 'mixed',
+          icon: '<path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2zm1-3h2V10H8zm6 0h2V10h-2zM4 4h5l1-1h4l1 1h5v2H4z"/>' }
     ];
     function isVirtualAlbumID(id) {
         for (var i = 0; i < VIRTUAL_ALBUMS.length; i++) if (VIRTUAL_ALBUMS[i].id === id) return true;
@@ -1472,7 +1859,8 @@ enum WebClientHTML {
     function virtualAlbumCount(id) {
         if (id === 'HISTORY') return state.history.length;
         if (id === 'FAVORITES') return state.favorites.length;
-        return state.shortsFavs.length;
+        if (id === 'SHORTS_FAVORITES') return state.shortsFavs.length;
+        return state.trash.length;
     }
     /// 一覧のHTMLは使い回すので、お気に入り・履歴が増えても件数だけは貼り替える
     function refreshVirtualCounts() {
@@ -1498,6 +1886,7 @@ enum WebClientHTML {
 
     /// 仮想アルバムの中身を、ローカルの記録と全件リストから組み立てる
     function virtualAlbumContents(id) {
+        if (id === 'TRASH') return loadTrash(true);
         // 写真もお気に入り・履歴に入りうるので、動画と写真の両方から引く
         return Promise.all([loadAllVideos(false), loadAllPhotos(false)]).then(function (pair) {
             var pool = pair[0].concat(pair[1]);
@@ -1543,6 +1932,7 @@ enum WebClientHTML {
         el('albums-list').innerHTML = html;
         el('albums-list').dataset.loaded = '1';
         el('new-album-btn').addEventListener('click', openCreateAlbum);
+        loadTrash(false).then(refreshVirtualCounts).catch(function () {});
         filterAlbums();
     }
 
@@ -1589,11 +1979,12 @@ enum WebClientHTML {
     var pickerChoice = null;
 
     /// 移動先などを選ばせる。onPick には選ばれたアルバムを渡す。
-    function openAlbumPicker(title, excludeID, onPick) {
+    function openAlbumPicker(title, excludeID, onPick, customOnly) {
         var html = '';
         for (var i = 0; i < state.albums.length; i++) {
             var a = state.albums[i];
             if (a.id === excludeID) continue;
+            if (customOnly && isSystemAlbum(a)) continue;
             html += '<button class="sheet-item" data-pick="' + esc(a.id) + '">' +
                 esc(a.name) + '<span class="count">' + a.videoCount + '</span></button>';
         }
@@ -1607,6 +1998,48 @@ enum WebClientHTML {
     function closeAlbumPicker() {
         el('picker-modal').classList.remove('open');
         pickerChoice = null;
+    }
+
+    function isSystemAlbum(album) {
+        return !!album && (album.name === 'ALL VIDEOS' || album.name === 'ALL PHOTOS');
+    }
+
+    function renameCurrentAlbum() {
+        var album = state.currentAlbum;
+        if (!album || isVirtualAlbumID(album.id) || isSystemAlbum(album)) return;
+        var value = prompt('新しいアルバム名を入力してください。', album.name);
+        if (value === null) return;
+        value = value.trim();
+        if (!value || value.length > 80 || value === 'ALL VIDEOS' || value === 'ALL PHOTOS') {
+            toast('そのアルバム名は使えません');
+            return;
+        }
+        api('/albums/' + encodeURIComponent(album.id) + '/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: value })
+        }).then(function () {
+            album.name = value;
+            el('detail-title').textContent = value;
+            toast('アルバム名を変更しました');
+            return reloadAlbumList();
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('同名のアルバムがあるか，名前を変更できませんでした');
+        });
+    }
+
+    function deleteCurrentAlbum() {
+        var album = state.currentAlbum;
+        if (!album || isVirtualAlbumID(album.id) || isSystemAlbum(album)) return;
+        if (!confirm('「' + album.name + '」を削除します。中のメディアはライブラリに残ります。よろしいですか？')) return;
+        api('/albums/' + encodeURIComponent(album.id), { method: 'DELETE' }).then(function () {
+            closeAlbum();
+            history.replaceState({ view: 'tab', tab: 'albums' }, '', '#albums');
+            toast('アルバムを削除しました');
+            return reloadAlbumList();
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('アルバムを削除できませんでした');
+        });
     }
 
     function filterAlbums() {
@@ -1641,10 +2074,19 @@ enum WebClientHTML {
             el('media-grid').innerHTML = '<div class="state-box" style="grid-column:1/-1"><div class="spinner"></div><div>読み込み中...</div></div>';
             el('detail-count').textContent = '';
             exitSelectMode();
-            // 仮想アルバムはサーバーに問い合わせず、ローカルの記録から組み立てる。
-            // 実体がないので選択・アップロードの対象にもしない。
-            el('select-btn').classList.toggle('hidden', isVirtualAlbumID(a.id));
-            el('upload-btn').classList.toggle('hidden', isVirtualAlbumID(a.id));
+            var virtualAlbum = isVirtualAlbumID(a.id);
+            var trashAlbum = a.id === 'TRASH';
+            // ゴミ箱だけは復元・完全削除のため選択できます。その他の仮想アルバムは読み取り専用です。
+            el('select-btn').classList.toggle('hidden', virtualAlbum && !trashAlbum);
+            el('upload-btn').classList.toggle('hidden', virtualAlbum);
+            el('rename-album-btn').classList.toggle('hidden', virtualAlbum || isSystemAlbum(a));
+            el('delete-album-btn').classList.toggle('hidden', virtualAlbum || isSystemAlbum(a));
+            el('empty-trash-btn').classList.toggle('hidden', !trashAlbum);
+            el('album-shorts-btn').classList.toggle('hidden', trashAlbum);
+            el('bulk-restore').classList.toggle('hidden', !trashAlbum);
+            el('bulk-trash').classList.toggle('hidden', trashAlbum);
+            el('bulk-move').classList.toggle('hidden', trashAlbum);
+            el('bulk-fav').classList.toggle('hidden', trashAlbum);
             if (push !== false) history.pushState({ view: 'album', id: a.id }, '', '#album/' + a.id);
             if (isVirtualAlbumID(a.id)) return virtualAlbumContents(a.id);
             return api('/albums/' + encodeURIComponent(a.id) + '/videos').then(function (r) { return r.json(); });
@@ -1767,6 +2209,7 @@ enum WebClientHTML {
         if (!state.selected.length) return;
         var ids = state.selected.slice();
         var path, body;
+        var affectsLibrary = complete;
         if (complete) {
             if (!confirm(ids.length + ' 件をMacから完全に削除します。元に戻せません。よろしいですか？')) return;
             path = '/deleteVideosCompletely';
@@ -1777,6 +2220,7 @@ enum WebClientHTML {
             var a = state.currentAlbum;
             if (!a) { toast('アルバムが選ばれていません'); return; }
             var custom = a.name !== 'ALL VIDEOS' && a.name !== 'ALL PHOTOS';
+            affectsLibrary = !custom;
             var albumId = a.id;
             if (!custom && !confirm(ids.length + ' 件をゴミ箱へ移動します。（Macのアプリから元に戻せます）')) return;
             path = '/deleteVideos';
@@ -1791,13 +2235,55 @@ enum WebClientHTML {
             var drop = function (arr) {
                 for (var i = arr.length - 1; i >= 0; i--) if (ids.indexOf(arr[i].id) >= 0) arr.splice(i, 1);
             };
-            drop(state.allVideos); drop(state.allPhotos); drop(state.homeAll); drop(state.homeFiltered);
-            drop(state.albumRaw); drop(state.shortsPool);
-            state.allVideosAt = 0; state.allPhotosAt = 0;
+            drop(state.albumRaw);
+            if (affectsLibrary) {
+                drop(state.allVideos); drop(state.allPhotos); drop(state.homeAll); drop(state.homeFiltered);
+                drop(state.shortsPool); drop(state.trash); drop(state.queue);
+                state.allVideosAt = 0; state.allPhotosAt = 0; state.trashAt = Date.now();
+                saveQueue();
+            }
+            refreshVirtualCounts();
             exitSelectMode();
             renderAlbumGrid();
         }).catch(function (e) {
             if (!(e instanceof AuthError)) toast('操作に失敗しました');
+        });
+    }
+
+    function restoreSelectedFromTrash() {
+        if (!state.selected.length) return;
+        var ids = state.selected.slice();
+        api('/trash/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoIds: ids })
+        }).then(function () {
+            state.trash = state.trash.filter(function (item) { return ids.indexOf(item.id) < 0; });
+            state.trashAt = Date.now();
+            state.albumRaw = state.trash.slice();
+            exitSelectMode();
+            renderAlbumGrid();
+            refreshVirtualCounts();
+            state.allVideosAt = 0;
+            state.allPhotosAt = 0;
+            toast(ids.length + ' 件を復元しました');
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('復元に失敗しました');
+        });
+    }
+
+    function emptyTrash() {
+        if (!state.trash.length) return;
+        if (!confirm('ゴミ箱の ' + state.trash.length + ' 件を完全に削除します。元に戻せません。よろしいですか？')) return;
+        api('/trash', { method: 'DELETE' }).then(function () {
+            state.trash = [];
+            state.trashAt = Date.now();
+            state.albumRaw = [];
+            renderAlbumGrid();
+            refreshVirtualCounts();
+            toast('ゴミ箱を空にしました');
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('ゴミ箱を空にできませんでした');
         });
     }
 
@@ -1939,7 +2425,68 @@ enum WebClientHTML {
         if (origin === 'album') return state.albumFiltered;
         if (origin === 'shorts') return state.shortsPool;
         if (origin === 'continue') return state.continueList;
+        if (origin === 'queue') return state.queue;
         return state.homeFiltered;
+    }
+
+    var conversionTimer = null;
+
+    function hidePlaybackError() {
+        if (conversionTimer) { clearTimeout(conversionTimer); conversionTimer = null; }
+        el('playback-error').classList.add('hidden');
+        el('playback-error-progress').textContent = '';
+        el('convert-btn').disabled = false;
+    }
+
+    function showPlaybackError(media, video) {
+        var extension = extensionOf(media.filename).toUpperCase();
+        var code = video && video.error ? video.error.code : 0;
+        var detail = code === 2
+            ? 'ネットワークまたはファイル読み込みでエラーが発生しました。'
+            : 'このブラウザは' + (extension ? extension + 'の' : '') + '映像形式またはコーデックを再生できません。';
+        el('playback-error-title').textContent = '「' + cleanTitle(media.filename) + '」を再生できませんでした';
+        el('playback-error-message').textContent = detail +
+            ' 1080pへ変換すると再生できる可能性があります。変換用プロキシはサーバー全体で1本だけ保持されるため、ほかの端末が利用中のプロキシは置き換わります。';
+        el('playback-error-progress').textContent = '';
+        el('playback-error').classList.remove('hidden');
+    }
+
+    function prepareCurrentMedia() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media || isPhoto(media)) return;
+        var button = el('convert-btn');
+        button.disabled = true;
+        el('playback-error-progress').textContent = '変換を開始しています…';
+
+        function poll(retry) {
+            var path = '/video/' + encodeURIComponent(media.id) + '/prepare?q=1080p' + (retry ? '&retry=true' : '');
+            api(path).then(function (response) { return response.json(); }).then(function (result) {
+                if (result.state === 'ready') {
+                    conversionTimer = null;
+                    state.quality = '1080p';
+                    el('quality-select').value = '1080p';
+                    hidePlaybackError();
+                    changeQuality('1080p');
+                    toast('変換が完了しました');
+                    return;
+                }
+                if (result.state === 'failed') {
+                    conversionTimer = null;
+                    button.disabled = false;
+                    el('playback-error-progress').textContent = '変換できませんでした: ' + (result.message || 'ファイル形式が変換機能に対応していません');
+                    return;
+                }
+                var percent = Math.max(0, Math.min(100, Math.round((result.progress || 0) * 100)));
+                el('playback-error-progress').textContent = '変換中… ' + percent + '%';
+                conversionTimer = setTimeout(function () { poll(false); }, 1000);
+            }).catch(function (error) {
+                conversionTimer = null;
+                button.disabled = false;
+                if (!(error instanceof AuthError)) el('playback-error-progress').textContent = '変換状態を取得できませんでした';
+            });
+        }
+
+        poll(true);
     }
 
     function openMedia(origin, index, push) {
@@ -1951,6 +2498,9 @@ enum WebClientHTML {
         var modal = el('player-modal');
         state.playerOrigin = origin;
         state.playerIndex = index;
+        state.isPlayerMini = false;
+        modal.classList.remove('mini');
+        hidePlaybackError();
 
         clearPreview();
         pauseShorts();
@@ -1974,6 +2524,7 @@ enum WebClientHTML {
         el('quality-select').classList.toggle('hidden', photo);
         el('watch-shorts').classList.toggle('hidden', photo);
         el('manga-toggle').classList.toggle('hidden', !photo);
+        el('stage-mini').classList.toggle('hidden', photo);
         updateMangaButton();
 
         if (photo) {
@@ -2000,6 +2551,8 @@ enum WebClientHTML {
                 applyPlaybackToVideo(video);
                 if (saved > 2 && (!video.duration || saved < video.duration - 5)) video.currentTime = saved;
             }, { once: true });
+            video.addEventListener('canplay', hidePlaybackError, { once: true });
+            video.addEventListener('error', function () { showPlaybackError(media, video); });
             video.addEventListener('timeupdate', function () {
                 if (video.currentTime > 2) setProgress(media.id, video.currentTime);
                 updateActiveChapter(video.currentTime);
@@ -2112,7 +2665,18 @@ enum WebClientHTML {
     function renderUpNext() {
         var list = playlistFor(state.playerOrigin);
         var side = el('up-next');
-        var html = '<div class="side-head">再生リスト（' + list.length + ' 件）</div>';
+        var html = '';
+        if (state.queue.length && state.playerOrigin !== 'queue') {
+            html += '<div class="side-head">次に再生（' + state.queue.length + ' 件）</div>';
+            for (var q = 0; q < state.queue.length; q++) {
+                var queued = state.queue[q];
+                html += '<div class="un-item" role="button" tabindex="0" data-action="play-queue" data-index="' + q + '">' +
+                    '<div class="un-thumb">' + imgTag(thumbURL(queued.id, !isPhoto(queued)), '') + '</div>' +
+                    '<div class="un-info"><div class="un-title">' + esc(cleanTitle(queued.filename)) + '</div>' +
+                    '<div class="un-meta">キュー</div></div></div>';
+            }
+        }
+        html += '<div class="side-head">再生リスト（' + list.length + ' 件）</div>';
         // 長大なライブラリでも重くならないよう、現在位置の前後だけを出す
         var from = Math.max(0, state.playerIndex - 5);
         var to = Math.min(list.length, from + 60);
@@ -2184,6 +2748,20 @@ enum WebClientHTML {
             return;
         }
         if (!state.playback.autoplay) return;
+        if (state.playerOrigin === 'queue') {
+            state.queue.splice(state.playerIndex, 1);
+            saveQueue();
+            if (state.queue.length) {
+                openMedia('queue', Math.min(state.playerIndex, state.queue.length - 1), false);
+                replacePlayerState();
+            }
+            return;
+        }
+        if (state.queue.length) {
+            openMedia('queue', 0, false);
+            replacePlayerState();
+            return;
+        }
         var target = nextIndexFor(state.playerIndex);
         if (target === null) return;
         openMedia(state.playerOrigin, target, false);
@@ -2207,9 +2785,102 @@ enum WebClientHTML {
         video.muted = state.playback.muted;
     }
 
+    var QUEUE_KEY = 'mms_queue';
+
+    function saveQueue() {
+        if (state.queue.length > 100) state.queue.length = 100;
+        writeJSON(QUEUE_KEY, state.queue);
+        if (el('player-modal').classList.contains('open')) renderUpNext();
+    }
+
+    function addCurrentToQueue() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        for (var i = 0; i < state.queue.length; i++) {
+            if (state.queue[i].id === media.id) { toast('すでにキューに入っています'); return; }
+        }
+        state.queue.push(media);
+        saveQueue();
+        toast('次に再生するキューへ追加しました');
+    }
+
+    function addCurrentToPlaylist() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var sourceID = libraryAlbumIDFor(media);
+        if (!sourceID) { toast('ライブラリアルバムが見つかりません'); return; }
+        openAlbumPicker('追加先のプレイリストを選んでください', sourceID, function (target) {
+            closeAlbumPicker();
+            api('/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ videoIds: [media.id], sourceAlbumId: sourceID, targetAlbumId: target.id })
+            }).then(function () {
+                toast('「' + target.name + '」へ追加しました');
+                return reloadAlbumList();
+            }).catch(function (error) {
+                if (!(error instanceof AuthError)) toast('プレイリストへ追加できませんでした');
+            });
+        }, true);
+    }
+
+    function copyCurrentLink() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var url = location.origin + location.pathname + '#watch/' + encodeURIComponent(media.id);
+        var copied = function () { toast('共有リンクをコピーしました'); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(copied).catch(function () { fallbackCopy(url, copied); });
+        } else {
+            fallbackCopy(url, copied);
+        }
+    }
+
+    function fallbackCopy(value, done) {
+        var input = document.createElement('textarea');
+        input.value = value;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        try { document.execCommand('copy'); done(); } catch (error) { toast('リンクをコピーできませんでした'); }
+        input.remove();
+    }
+
+    function downloadCurrentMedia() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var anchor = document.createElement('a');
+        anchor.href = mediaURL(media.id, 'original');
+        anchor.download = media.filename || 'media';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+    }
+
+    function minimizePlayer() {
+        var modal = el('player-modal');
+        var media = modal.querySelector('#main-media');
+        if (!media || media.tagName !== 'VIDEO') return;
+        state.isPlayerMini = true;
+        modal.classList.add('mini');
+        document.body.style.overflow = '';
+        history.replaceState({ view: 'tab', tab: state.tab }, '', '#' + state.tab);
+    }
+
+    function expandPlayer() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        state.isPlayerMini = false;
+        el('player-modal').classList.remove('mini');
+        document.body.style.overflow = 'hidden';
+        history.pushState({ view: 'player', origin: state.playerOrigin, index: state.playerIndex, tab: state.tab }, '', '#watch/' + media.id);
+    }
+
     function closePlayer(useHistory) {
         var stage = el('stage');
         var media = stage.querySelector('#main-media');
+        hidePlaybackError();
         if (media) {
             if (media.tagName === 'VIDEO') { media.pause(); media.removeAttribute('src'); media.load(); }
             media.remove();
@@ -2220,11 +2891,16 @@ enum WebClientHTML {
         el('chapters').innerHTML = '';
         el('chapters').classList.add('hidden');
         el('player-modal').classList.remove('open');
+        el('player-modal').classList.remove('mini');
+        state.isPlayerMini = false;
         document.body.style.overflow = '';
         // 一覧は作り直さず、視聴済みバーと「続きを見る」だけ更新する（スクロール位置を保つため）
         refreshCardOverlays();
         if (state.tab === 'continue') renderContinue();
         if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
+        // 「見るのをやめた瞬間」が視聴位置として一番価値が高い。
+        // デバウンス待ちの2秒の間に別端末へ移られると取りこぼすので、ここだけは即座に送る。
+        pushSync(true);
         if (useHistory !== false) history.back();
     }
 
@@ -2239,6 +2915,7 @@ enum WebClientHTML {
         var media = playlistFor(state.playerOrigin)[state.playerIndex];
         var video = document.querySelector('#main-media');
         if (!media || isPhoto(media) || !video) return;
+        hidePlaybackError();
         var t = video.currentTime, wasPlaying = !video.paused;
         video.src = mediaURL(media.id, q);
         video.addEventListener('loadedmetadata', function () {
@@ -2313,6 +2990,9 @@ enum WebClientHTML {
     /// それ以外（ホーム／ALL VIDEOS・ALL PHOTOS）は「ゴミ箱へ」。
     function removalContext(media) {
         var a = state.currentAlbum;
+        if (state.playerOrigin === 'album' && a && a.id === 'TRASH') {
+            return { albumId: null, label: 'ゴミ箱にあります', done: '', confirm: null };
+        }
         if (state.playerOrigin === 'album' && a && a.name !== 'ALL VIDEOS' && a.name !== 'ALL PHOTOS') {
             return { albumId: a.id, label: 'アルバムから外す', done: '「' + a.name + '」から外しました', confirm: null };
         }
@@ -2330,8 +3010,39 @@ enum WebClientHTML {
         var ctx = removalContext(media);
         var btn = el('trash-btn');
         btn.textContent = ctx.label;
+        var inTrash = state.playerOrigin === 'album' && state.currentAlbum && state.currentAlbum.id === 'TRASH';
         // ALL VIDEOS / ALL PHOTOS が見つからないときは押しても意味がないので隠す
-        btn.classList.toggle('hidden', !ctx.albumId);
+        btn.classList.toggle('hidden', !ctx.albumId || inTrash);
+        el('restore-btn').classList.toggle('hidden', !inTrash);
+        el('playlist-btn').classList.toggle('hidden', inTrash);
+        el('share-btn').classList.toggle('hidden', inTrash);
+    }
+
+    function restoreCurrentFromTrash() {
+        var list = playlistFor(state.playerOrigin);
+        var media = list[state.playerIndex];
+        if (!media) return;
+        api('/trash/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoIds: [media.id] })
+        }).then(function () {
+            var removeFrom = function (items) {
+                for (var i = items.length - 1; i >= 0; i--) if (items[i].id === media.id) items.splice(i, 1);
+            };
+            removeFrom(state.trash);
+            removeFrom(state.albumRaw);
+            removeFrom(state.albumFiltered);
+            state.trashAt = Date.now();
+            state.allVideosAt = 0;
+            state.allPhotosAt = 0;
+            refreshVirtualCounts();
+            toast('ゴミ箱から復元しました');
+            if (!list.length) { closePlayer(); return; }
+            openMedia(state.playerOrigin, Math.min(state.playerIndex, list.length - 1), false);
+        }).catch(function (error) {
+            if (!(error instanceof AuthError)) toast('復元に失敗しました');
+        });
     }
 
     /// complete=true は実ファイルごと消す取り返しのつかない削除。
@@ -2342,6 +3053,7 @@ enum WebClientHTML {
         if (!media) return;
 
         var path, body, doneMsg;
+        var affectsLibrary = complete;
         if (complete) {
             if (!confirm('このメディアをMacから完全に削除します。元に戻せません。よろしいですか？')) return;
             path = '/deleteVideosCompletely';
@@ -2354,6 +3066,7 @@ enum WebClientHTML {
             path = '/deleteVideos';
             body = { videoIds: [media.id], albumId: ctx.albumId };
             doneMsg = ctx.done;
+            affectsLibrary = ctx.label === 'ゴミ箱へ';
         }
 
         api(path, {
@@ -2365,9 +3078,14 @@ enum WebClientHTML {
             var removeFrom = function (arr) {
                 for (var i = arr.length - 1; i >= 0; i--) if (arr[i].id === media.id) arr.splice(i, 1);
             };
-            removeFrom(state.allVideos); removeFrom(state.homeAll); removeFrom(state.homeFiltered);
-            removeFrom(state.albumRaw); removeFrom(state.albumFiltered); removeFrom(state.shortsPool);
-            state.allVideosAt = 0;
+            removeFrom(state.albumRaw); removeFrom(state.albumFiltered);
+            if (affectsLibrary) {
+                removeFrom(state.allVideos); removeFrom(state.allPhotos); removeFrom(state.homeAll); removeFrom(state.homeFiltered);
+                removeFrom(state.shortsPool); removeFrom(state.trash); removeFrom(state.queue);
+                state.allVideosAt = 0; state.allPhotosAt = 0; state.trashAt = Date.now();
+                saveQueue();
+            }
+            refreshVirtualCounts();
             clearProgress(media.id);
             if (!list.length) { closePlayer(); return; }
             openMedia(state.playerOrigin, Math.min(state.playerIndex, list.length - 1), false);
@@ -2775,6 +3493,17 @@ enum WebClientHTML {
     }
 
     function bindGlobal() {
+        // 同期のライフサイクル。定期ポーリングは LAN 常時接続の小さなサーバーには過剰なので、
+        // 「タブを離れるとき送る／戻ってきたとき引く」だけにする。
+        // これで「スマホで一時停止 → Mac に移動」という実際の使い方をほぼ全部カバーできる。
+        // ショート用の visibilitychange は bindShortsMedia 側にあるので、そちらは触らず別に足す。
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) { pushSync(true); return; }
+            if (Date.now() - state.syncLastPullAt > SYNC_PULL_TTL) pullSync();
+        });
+        // unload では fetch が中断される。beacon だけが最後の1回を通せる。
+        window.addEventListener('pagehide', function () { flushSyncBeacon(); });
+
         // ナビ
         var items = document.querySelectorAll('.nav-item');
         for (var i = 0; i < items.length; i++) {
@@ -2808,6 +3537,7 @@ enum WebClientHTML {
             var btn = this;
             btn.classList.add('spinning');
             state.allVideos = []; state.allVideosAt = 0; state.homeAll = [];
+            state.trash = []; state.trashAt = 0;
             el('albums-list').dataset.loaded = '';
             loadAlbums(true).then(function () {
                 if (state.tab === 'home') { el('home-feed').innerHTML = ''; ensureHome(); }
@@ -2820,8 +3550,20 @@ enum WebClientHTML {
             });
         });
 
+        el('shutdown-btn').addEventListener('click', function () {
+            if (!confirm('Mac Media Serverアプリを完全に終了します。よろしいですか？')) return;
+            api('/server/shutdown', { method: 'POST' }).then(function () {
+                toast('サーバーを終了します');
+            }).catch(function (error) {
+                if (!(error instanceof AuthError)) toast('サーバーを終了できませんでした');
+            });
+        });
+
         el('detail-back').addEventListener('click', function () { history.back(); });
         el('sort-select').addEventListener('change', renderAlbumGrid);
+        el('rename-album-btn').addEventListener('click', renameCurrentAlbum);
+        el('delete-album-btn').addEventListener('click', deleteCurrentAlbum);
+        el('empty-trash-btn').addEventListener('click', emptyTrash);
         el('album-shorts-btn').addEventListener('click', function () {
             if (!state.currentAlbum) return;
             var vids = state.albumFiltered.filter(function (v) { return !isPhoto(v); });
@@ -2843,6 +3585,7 @@ enum WebClientHTML {
             if (action === 'play-home') openMedia('home', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-album') openMedia('album', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-index') { openMedia(state.playerOrigin, parseInt(target.dataset.index, 10), false); }
+            else if (action === 'play-queue') { openMedia('queue', parseInt(target.dataset.index, 10), true); }
             else if (action === 'seek') seekTo(parseFloat(target.dataset.time));
             else if (action === 'play-continue') openMedia('continue', parseInt(target.dataset.index, 10), true);
             else if (action === 'open-album') openAlbum(target.dataset.id, true);
@@ -2862,12 +3605,20 @@ enum WebClientHTML {
         }
 
         // プレイヤー
-        el('stage-close').addEventListener('click', function () { closePlayer(); });
+        el('stage-close').addEventListener('click', function () { closePlayer(state.isPlayerMini ? false : undefined); });
+        el('stage-mini').addEventListener('click', minimizePlayer);
+        el('stage-expand').addEventListener('click', expandPlayer);
+        el('convert-btn').addEventListener('click', prepareCurrentMedia);
         el('arrow-prev').addEventListener('click', function () { navMedia(-1); });
         el('arrow-next').addEventListener('click', function () { navMedia(1); });
         el('quality-select').addEventListener('change', function () { changeQuality(this.value); });
         el('trash-btn').addEventListener('click', function () { removeCurrent(false); });
+        el('restore-btn').addEventListener('click', restoreCurrentFromTrash);
         el('purge-btn').addEventListener('click', function () { removeCurrent(true); });
+        el('queue-btn').addEventListener('click', addCurrentToQueue);
+        el('playlist-btn').addEventListener('click', addCurrentToPlaylist);
+        el('share-btn').addEventListener('click', copyCurrentLink);
+        el('download-btn').addEventListener('click', downloadCurrentMedia);
 
         // --- お気に入り・詳細情報 ---
         el('fav-btn').addEventListener('click', function () {
@@ -2928,6 +3679,7 @@ enum WebClientHTML {
         });
         el('bulk-fav').addEventListener('click', bulkFavorite);
         el('bulk-move').addEventListener('click', bulkMove);
+        el('bulk-restore').addEventListener('click', restoreSelectedFromTrash);
 
         // --- アップロード ---
         el('upload-btn').addEventListener('click', function () { el('file-input').click(); });
@@ -3020,7 +3772,7 @@ enum WebClientHTML {
             if (playerOpen) {
                 var media = document.querySelector('#main-media');
                 var isVideo = media && media.tagName === 'VIDEO';
-                if (e.key === 'Escape') { e.preventDefault(); closePlayer(); return; }
+                if (e.key === 'Escape') { e.preventDefault(); closePlayer(state.isPlayerMini ? false : undefined); return; }
                 if (!isVideo) {
                     if (e.key === 'ArrowLeft') { e.preventDefault(); navMedia(-1); }
                     if (e.key === 'ArrowRight') { e.preventDefault(); navMedia(1); }
@@ -3044,6 +3796,10 @@ enum WebClientHTML {
                     case 'arrowdown': e.preventDefault(); media.volume = Math.max(0, media.volume - 0.1); break;
                     case 'm': e.preventDefault(); media.muted = !media.muted; break;
                     case 'f': e.preventDefault(); toggleFullscreen(media); break;
+                    case 'n': e.preventDefault(); navMedia(1); break;
+                    case 'p': e.preventDefault(); navMedia(-1); break;
+                    case 'i': e.preventDefault(); if (state.isPlayerMini) expandPlayer(); else minimizePlayer(); break;
+                    case 'q': e.preventDefault(); addCurrentToQueue(); break;
                 }
                 return;
             }
@@ -3088,6 +3844,10 @@ enum WebClientHTML {
     function boot(afterLogin) {
         loadAlbums(true).then(function () {
             el('login-modal').classList.remove('open');
+            // 同期の往復で起動を遅らせない。投げっぱなしにして、解決したら
+            // mergeSyncDoc → refreshCardOverlays で後から追いつく。
+            // その直後に「ローカルにしかない分」を押し戻す経路が、そのまま初回移行の吸い上げになる。
+            pullSync().then(function () { if (state.syncDirty) pushSync(true); }).catch(function () {});
             renderShortsRail();
             applyLocation(!afterLogin);
         }).catch(function (e) {
@@ -3096,10 +3856,18 @@ enum WebClientHTML {
         });
     }
 
+    // 「ローカルを読む → 移行 → GET でマージ → PUT」の順序が、初回同期でサーバーの空データに
+    // 上書きされないための本体。順序が安全性そのものなので入れ替えないこと。
     state.progress = loadProgress();
-    state.favorites = readJSON(FAV_KEY, []);
+    state.queue = readJSON(QUEUE_KEY, []);
     state.history = readJSON(HISTORY_KEY, []);
-    state.shortsFavs = readJSON(SHORTFAV_KEY, []);
+    state.historyRemoved = readJSON(HISTORY_REMOVED_KEY, {});
+    migrateLocalSync();                     // 旧形式(配列)の favorites / shortsFavs をマップへ
+    state.favMarks = readJSON(FAV_KEY, {});
+    state.shortsFavMarks = readJSON(SHORTFAV_KEY, {});
+    rebuildFavorites();
+    rebuildShortsFavs();
+    state.syncDirty = true;                 // サーバーが空でも自分の分が必ず1回押し戻されるように
     var savedPlayback = readJSON(PLAYBACK_KEY, null);
     if (savedPlayback) {
         for (var pk in state.playback) {

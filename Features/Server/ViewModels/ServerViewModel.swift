@@ -103,8 +103,22 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
 
     var maxUploadBytes: Int { maxUploadBytesCache }
 
+    /// ブラウザクライアントの視聴位置・お気に入り・履歴の同期保管庫。
+    /// lazy var にしないのは、複数の HTTP ワーカースレッドから同時に初回アクセスされうるため。
+    let syncStore: WebSyncStore
+
+    /// PWAのホーム画面アイコンとして配信するPNGです。
+    /// AppKitの画像変換をHTTPワーカースレッドで行わないよう、初期化時に生成します。
+    let pwaIconData: Data
+
     init(dataManager: LibraryViewModel) {
         self.dataManager = dataManager
+        // init は main で走るので @MainActor な LibraryViewModel の appRootURL をここで読んでおく。
+        // 以後 WebSyncStore は LibraryViewModel に一切依存せず、ワーカースレッドから直接叩ける。
+        self.syncStore = WebSyncStore(rootURL: dataManager.appRootURL)
+        self.pwaIconData = NSApplication.shared.applicationIconImage.tiffRepresentation
+            .flatMap(NSBitmapImageRep.init(data:))?
+            .representation(using: .png, properties: [:]) ?? Data()
 
         let savedPort = UserDefaults.standard.integer(forKey: "serverPort")
         self.targetPort = savedPort == 0 ? 8080 : savedPort
