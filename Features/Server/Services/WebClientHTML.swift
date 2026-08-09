@@ -145,7 +145,98 @@ enum WebClientHTML {
     }
     .badge-photo { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.7); color: var(--accent); font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
 
-    /* ============ ホームフィード ============ */
+    /* キーボード操作のフォーカス表示（カードは div + role=button なので自前で出す） */
+    [data-action]:focus-visible, .icon-btn:focus-visible, .pill:focus-visible, .select:focus-visible {
+        outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px;
+    }
+
+    /* お気に入りのハート（サムネの左上） */
+    .fav-badge {
+        position: absolute; top: 6px; left: 6px; width: 24px; height: 24px; border-radius: 50%;
+        background: rgba(0,0,0,0.6); display: grid; place-items: center; color: #FF5A8A; backdrop-filter: blur(4px);
+    }
+    .fav-badge svg { width: 14px; height: 14px; fill: currentColor; }
+    .pill.fav-on { color: #FF5A8A; border-color: rgba(255,90,138,0.5); background: rgba(255,90,138,0.12); }
+    .pill.on { background: var(--accent); color: #000; border-color: transparent; }
+
+    /* 複数選択 */
+    .sel-check {
+        position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.85); background: rgba(0,0,0,0.45); z-index: 2;
+        display: grid; place-items: center; color: #000;
+    }
+    .sel-check svg { width: 14px; height: 14px; fill: currentColor; opacity: 0; }
+    .media-card.selected .sel-check { background: var(--accent); border-color: var(--accent); }
+    .media-card.selected .sel-check svg { opacity: 1; }
+    .media-card.selected .media-thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .bulk-bar {
+        display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+        padding: 12px 14px; margin-bottom: 16px; border-radius: 14px;
+        background: var(--bg-1); border: 1px solid var(--accent-soft);
+    }
+    .bulk-bar.hidden { display: none; }
+    .bulk-count { font-size: 13px; font-weight: 700; color: var(--accent); }
+
+    /* アップロード */
+    .upload-bar {
+        display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+        padding: 12px 14px; margin-bottom: 16px; border-radius: 14px;
+        background: var(--bg-1); border: 1px solid var(--accent-soft);
+    }
+    .upload-bar.hidden { display: none; }
+    .upload-text { font-size: 13px; font-weight: 600; flex: 1 1 220px; min-width: 0; }
+    .upload-track { flex: 1 1 160px; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.14); overflow: hidden; }
+    .upload-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s; }
+    .dropzone { position: relative; }
+    .dropzone.dragging::after {
+        content: 'ここにドロップしてアップロード';
+        position: absolute; inset: -8px; z-index: 30; border-radius: 16px;
+        border: 2px dashed var(--accent); background: rgba(217,186,115,0.12);
+        display: grid; place-items: center; font-weight: 700; color: var(--accent); pointer-events: none;
+    }
+
+    /* アルバム選択・作成のシート */
+    .sheet-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+    .sheet-item {
+        display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+        padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line);
+        background: var(--bg-2); color: var(--text); font-size: 14px; cursor: pointer;
+    }
+    .sheet-item:hover { border-color: var(--accent); }
+    .sheet-item .count { margin-left: auto; color: var(--text-3); font-size: 12px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 12px; color: var(--text-2); margin-bottom: 6px; font-weight: 600; }
+    .field input, .field select {
+        width: 100%; background: var(--bg-2); border: 1px solid var(--line); color: var(--text);
+        border-radius: 12px; padding: 12px 14px; font-size: 14px; outline: none;
+    }
+    .field input:focus, .field select:focus { border-color: var(--accent); }
+
+    /* 詳細情報 */
+    #info-modal, #picker-modal, #create-modal {
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+        z-index: 120; justify-content: center; align-items: center; padding: 20px;
+    }
+    #info-modal.open, #picker-modal.open, #create-modal.open { display: flex; }
+    .info-card {
+        background: var(--bg-1); border: 1px solid var(--line); border-radius: 18px;
+        width: 100%; max-width: 460px; max-height: 80vh; overflow-y: auto; padding: 22px;
+    }
+    .info-card h3 { margin: 0 0 16px; font-size: 17px; }
+    .info-row { display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+    .info-key { flex: 0 0 108px; color: var(--text-2); }
+    .info-val { flex: 1; min-width: 0; word-break: break-word; }
+
+    /* サムネ下端の視聴済みバー */
+    .watched { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,0.55); }
+    .watched-fill { height: 100%; background: var(--accent); }
+
+    /* 「続きを見る」タブ */
+    .crow-empty { display: grid; place-items: center; gap: 10px; padding: 90px 20px; color: var(--text-2); text-align: center; }
+    .crow-empty .big { font-size: 17px; font-weight: 700; color: var(--text); }
+    .cw-left { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+
+    /* ============ ホームフィード（「続きを見る」タブも同じ形） ============ */
     .feed { display: grid; }
     @media (min-width: 901px) {
         .feed { grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 38px 16px; padding: 24px; max-width: 1900px; margin: 0 auto; }
@@ -261,14 +352,30 @@ enum WebClientHTML {
         .shorts-frame { height: calc(100% - 32px); width: auto; aspect-ratio: 9 / 16; border-radius: 16px; border: 1px solid var(--line); }
     }
     .shorts-frame video { width: 100%; height: 100%; object-fit: contain; display: block; transition: transform 0.12s; background: #000; }
-    .shorts-overlay { position: absolute; inset: auto 0 0 0; padding: 16px 16px 20px; pointer-events: none;
+    /* z-index を持たせないと、下の .shorts-tap（z-index:1）に覆われてシークバーを掴めない */
+    .shorts-overlay { position: absolute; inset: auto 0 0 0; padding: 16px 16px 20px; pointer-events: none; z-index: 3;
         background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.35) 55%, transparent); }
     @media (max-width: 900px) { .shorts-overlay { padding-right: 76px; } }
     .shorts-count { font-size: 11.5px; color: var(--accent); font-weight: 700; letter-spacing: 0.5px; }
     .shorts-title { font-size: 15px; font-weight: 700; margin: 4px 0 10px; text-shadow: 0 2px 6px rgba(0,0,0,0.9);
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .shorts-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.25); cursor: pointer; pointer-events: auto; position: relative; }
+    .shorts-bar {
+        height: 8px; border-radius: 4px; background: rgba(255,255,255,0.25); cursor: pointer;
+        pointer-events: auto; position: relative; transition: height 0.12s;
+        touch-action: none;  /* ドラッグをブラウザのスクロール操作に取られないようにする */
+    }
+    /* 見た目は細いまま、指で掴める高さの当たり判定を足す */
+    .shorts-bar::before { content: ''; position: absolute; left: 0; right: 0; top: -13px; bottom: -13px; }
+    .shorts-bar.scrubbing { height: 12px; }
     .shorts-bar-fill { height: 100%; width: 0%; border-radius: 4px; background: var(--accent); pointer-events: none; }
+    .shorts-bar-knob {
+        position: absolute; top: 50%; left: 0; width: 16px; height: 16px; margin-left: -8px;
+        border-radius: 50%; background: var(--accent); transform: translateY(-50%);
+        pointer-events: none; box-shadow: 0 1px 5px rgba(0,0,0,0.6);
+        opacity: 0; transition: opacity 0.12s;
+    }
+    .shorts-bar:hover .shorts-bar-knob, .shorts-bar.scrubbing .shorts-bar-knob { opacity: 1; }
+    @media (hover: none) { .shorts-bar-knob { opacity: 1; } }
     .shorts-rail { position: absolute; right: 12px; bottom: 24px; display: flex; flex-direction: column; gap: 14px; z-index: 3; }
     @media (min-width: 901px) { .shorts-rail { position: static; justify-content: flex-end; padding-bottom: 24px; } }
     .rail-btn {
@@ -451,6 +558,10 @@ enum WebClientHTML {
             <span class="nav-ico"><svg class="ico" viewBox="0 0 24 24"><path d="M13.4 2.1c.5 2.7-.7 4.1-2.1 5.6-1.6 1.7-3.5 3.3-3.5 6.2a6.2 6.2 0 0 0 12.4 0c0-2.2-1-4.2-2.5-5.8.1 1.7-.5 3-1.7 3.7.8-3.8-1.1-7.4-2.6-9.7M11 14.4c.8.6 1.2 1.4 1.2 2.4 0 1.2-.8 2.2-1.9 2.5 1.3 1 3 .9 4.2-.2.8-.8 1.1-1.9.8-2.9-.6.4-1.3.5-2 .3.5-1.4-.8-2.4-2.3-2.1"/></svg></span>
             <span class="nav-label">ショート</span>
         </button>
+        <button class="nav-item" data-tab="continue">
+            <span class="nav-ico"><svg class="ico" viewBox="0 0 24 24"><path d="M4 3.5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2m5.6 3v7l6-3.5z"/><rect x="2" y="19" width="20" height="2.6" rx="1.3" opacity=".35"/><rect x="2" y="19" width="11" height="2.6" rx="1.3"/></svg></span>
+            <span class="nav-label">続きを見る</span>
+        </button>
         <button class="nav-item" data-tab="albums">
             <span class="nav-ico"><svg class="ico" viewBox="0 0 24 24"><path d="M8 2h11a3 3 0 0 1 3 3v11h-2.2V5c0-.4-.4-.8-.8-.8H8z"/><path d="M4.5 6h11A2.5 2.5 0 0 1 18 8.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 2 19.5v-11A2.5 2.5 0 0 1 4.5 6"/></svg></span>
             <span class="nav-label">アルバム</span>
@@ -467,6 +578,11 @@ enum WebClientHTML {
             <div class="state-box" id="home-state"><div class="spinner"></div><div>読み込み中...</div></div>
         </section>
 
+        <section class="tab-panel" id="panel-continue">
+            <div class="feed" id="continue-feed"></div>
+            <div class="state-box" id="continue-state"><div class="spinner"></div><div>読み込み中...</div></div>
+        </section>
+
         <section class="tab-panel" id="panel-shorts">
             <div class="shorts-stage" id="shorts-stage">
                 <div class="shorts-frame" id="shorts-frame">
@@ -476,7 +592,10 @@ enum WebClientHTML {
                     <div class="shorts-overlay">
                         <div class="shorts-count" id="shorts-count"></div>
                         <div class="shorts-title" id="shorts-title"></div>
-                        <div class="shorts-bar" id="shorts-bar"><div class="shorts-bar-fill" id="shorts-bar-fill"></div></div>
+                        <div class="shorts-bar" id="shorts-bar">
+                            <div class="shorts-bar-fill" id="shorts-bar-fill"></div>
+                            <div class="shorts-bar-knob" id="shorts-bar-knob"></div>
+                        </div>
                     </div>
                     <div class="shorts-rail mobile-only" id="shorts-rail-m"></div>
                 </div>
@@ -487,7 +606,7 @@ enum WebClientHTML {
 
         <section class="tab-panel" id="panel-albums">
             <div class="page-pad" id="albums-list"></div>
-            <div class="page-pad hidden" id="album-detail">
+            <div class="page-pad hidden dropzone" id="album-detail">
                 <div class="detail-head">
                     <button class="icon-btn" id="detail-back" title="戻る">
                         <svg class="ico" viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
@@ -503,14 +622,38 @@ enum WebClientHTML {
                         <option value="durationDesc">長さが長い順</option>
                         <option value="durationAsc">長さが短い順</option>
                         <option value="nameAsc">名前順</option>
+                        <option value="sizeDesc">サイズが大きい順</option>
+                        <option value="sizeAsc">サイズが小さい順</option>
+                        <option value="modifiedDesc">更新日が新しい順</option>
+                        <option value="modifiedAsc">更新日が古い順</option>
+                        <option value="lastOpenedDesc">最後に開いた順</option>
                     </select>
                     <button class="pill accent" id="album-shorts-btn">
                         <svg class="ico-s" viewBox="0 0 24 24"><path d="M13.4 2.1c.5 2.7-.7 4.1-2.1 5.6-1.6 1.7-3.5 3.3-3.5 6.2a6.2 6.2 0 0 0 12.4 0c0-2.2-1-4.2-2.5-5.8.1 1.7-.5 3-1.7 3.7.8-3.8-1.1-7.4-2.6-9.7"/></svg>
                         ショート再生
                     </button>
+                    <button class="pill" id="select-btn">選択</button>
+                    <button class="pill" id="upload-btn">アップロード</button>
+                    <input type="file" id="file-input" multiple class="hidden"
+                           accept=".mp4,.mov,.m4v,.avi,.jpg,.jpeg,.png,.heic,.webp,.gif,.tiff">
                     <span id="detail-count" style="color:var(--text-3); font-size:12.5px"></span>
                 </div>
+                <div class="upload-bar hidden" id="upload-bar">
+                    <div class="upload-text" id="upload-text"></div>
+                    <div class="upload-track"><div class="upload-fill" id="upload-fill"></div></div>
+                    <button class="pill" id="upload-cancel">中止</button>
+                </div>
+                <div class="bulk-bar hidden" id="bulk-bar">
+                    <span class="bulk-count" id="bulk-count">0 件</span>
+                    <button class="pill" id="bulk-all">すべて選択</button>
+                    <button class="pill" id="bulk-fav">お気に入り</button>
+                    <button class="pill" id="bulk-move">移動</button>
+                    <button class="pill" id="bulk-trash">ゴミ箱へ</button>
+                    <button class="pill danger" id="bulk-purge">完全に削除</button>
+                    <button class="pill" id="bulk-cancel">やめる</button>
+                </div>
                 <div class="media-grid ratio-video" id="media-grid"></div>
+                <div id="album-sentinel" style="height:1px"></div>
             </div>
         </section>
     </main>
@@ -530,15 +673,32 @@ enum WebClientHTML {
                 <div class="watch-info">
                     <h2 class="watch-title" id="watch-title"></h2>
                     <div class="watch-sub" id="watch-sub"></div>
+                    <div class="watch-actions" id="playback-actions">
+                        <button class="pill" id="autoplay-btn" title="再生が終わったら次へ進むか">自動再生</button>
+                        <button class="pill" id="repeat-btn" title="リピート（なし → 1本 → 全体）">リピート: なし</button>
+                        <button class="pill" id="shuffle-btn" title="次の動画をランダムに選ぶ">シャッフル</button>
+                        <select class="select" id="rate-select" title="再生速度">
+                            <option value="0.5">0.5倍</option>
+                            <option value="0.75">0.75倍</option>
+                            <option value="1" selected>等倍</option>
+                            <option value="1.25">1.25倍</option>
+                            <option value="1.5">1.5倍</option>
+                            <option value="2">2倍</option>
+                        </select>
+                        <button class="pill" id="pip-btn" title="ピクチャインピクチャ">PiP</button>
+                    </div>
                     <div class="watch-actions">
                         <select class="select" id="quality-select">
                             <option value="original">オリジナル画質</option>
                             <option value="1080p" selected>1080p（軽量）</option>
                             <option value="540p">540p（節約）</option>
                         </select>
+                        <button class="pill" id="fav-btn">お気に入り</button>
+                        <button class="pill" id="info-btn">詳細情報</button>
                         <button class="pill" id="manga-toggle">通常モード</button>
                         <button class="pill" id="watch-shorts">ショートで見る</button>
-                        <button class="pill danger" id="delete-btn">削除</button>
+                        <button class="pill" id="trash-btn">ゴミ箱へ</button>
+                        <button class="pill danger" id="purge-btn">完全に削除</button>
                     </div>
                 </div>
             </div>
@@ -554,6 +714,45 @@ enum WebClientHTML {
             <input type="password" inputmode="numeric" class="pin-input" id="pin-input" placeholder="••••••" maxlength="12">
             <button class="login-btn" id="login-btn">ロック解除</button>
             <div class="login-error" id="login-error"></div>
+        </div>
+    </div>
+
+    <div id="picker-modal">
+        <div class="info-card">
+            <h3 id="picker-title">移動先のアルバム</h3>
+            <div class="sheet-list" id="picker-list"></div>
+            <button class="pill" id="picker-close" style="margin-top:18px; width:100%; justify-content:center">やめる</button>
+        </div>
+    </div>
+
+    <div id="create-modal">
+        <div class="info-card">
+            <h3>新しいアルバム</h3>
+            <div class="field">
+                <label for="create-name">アルバム名</label>
+                <input id="create-name" type="text" maxlength="80" placeholder="例: 旅行 2026" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="create-type">種類</label>
+                <select id="create-type">
+                    <option value="video">動画アルバム</option>
+                    <option value="photo">写真アルバム</option>
+                    <option value="mixed">動画と写真</option>
+                </select>
+            </div>
+            <div style="display:flex; gap:10px">
+                <button class="pill" id="create-cancel" style="flex:1; justify-content:center">やめる</button>
+                <button class="pill accent" id="create-ok" style="flex:1; justify-content:center">作成</button>
+            </div>
+            <div class="login-error" id="create-error"></div>
+        </div>
+    </div>
+
+    <div id="info-modal">
+        <div class="info-card">
+            <h3 id="info-title">詳細情報</h3>
+            <div id="info-body"></div>
+            <button class="pill" id="info-close" style="margin-top:18px; width:100%; justify-content:center">閉じる</button>
         </div>
     </div>
 
@@ -576,6 +775,8 @@ enum WebClientHTML {
         albums: [],
         allVideos: [],
         allVideosAt: 0,
+        allPhotos: [],
+        allPhotosAt: 0,
         homeAll: [],        // シャッフル済み全動画
         homeFiltered: [],   // 検索適用後（フィードと再生リストの実体）
         homeRendered: 0,
@@ -591,6 +792,17 @@ enum WebClientHTML {
         chapterTimes: [],   // 10等分サムネの各時刻（秒）
         chapterToken: 0,    // 動画を切り替えたら古い読み込みを打ち切るための番号
         quality: '1080p',
+        progress: {},       // {videoID: {t: 秒, at: 最後に見た時刻}}
+        favorites: [],      // お気に入りのID（新しい順）
+        history: [],        // [{id, at}] 最後に開いた順
+        shortsFavs: [],     // [{id, t, at}] ショートのお気に入り（クリップ位置つき）
+        continueList: [],   // 「続きを見る」タブの再生リスト
+        playback: { autoplay: true, repeat: 'off', shuffle: false, rate: 1, volume: 1, muted: false },
+        playedStack: [],    // シャッフル中に「前へ」で辿るための履歴
+        maxUploadBytes: 0,  // /server/status から取得（アップロード前のサイズ判定に使う）
+        selectMode: false,
+        selected: [],       // アルバム詳細で選択中のID
+        albumRendered: 0,   // アルバム詳細の遅延描画で描き終えた件数
         mangaMode: localStorage.getItem('isMangaMode') === 'true',
         shortsPool: [],
         shortsIndex: 0,
@@ -599,6 +811,7 @@ enum WebClientHTML {
         shortsMuted: localStorage.getItem('shortsMuted') !== 'false',
         shortsZoom: parseInt(localStorage.getItem('shortsZoom') || '0', 10),
         shortsReady: false,
+        isScrubbing: false,   // ショートのシークバーをドラッグ中か
         loading: false
     };
 
@@ -643,6 +856,150 @@ enum WebClientHTML {
         if (diff < 2592000) return Math.floor(diff / 86400) + '日前';
         if (diff < 31536000) return Math.floor(diff / 2592000) + 'か月前';
         return Math.floor(diff / 31536000) + '年前';
+    }
+
+    // ======================= localStorage の小道具 =======================
+    function readJSON(key, fallback) {
+        try {
+            var v = JSON.parse(localStorage.getItem(key));
+            return (v === null || v === undefined) ? fallback : v;
+        } catch (e) { return fallback; }
+    }
+    function writeJSON(key, value) {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+    }
+
+    // ======================= お気に入り / 履歴 =======================
+    var FAV_KEY = 'mms_favorites';
+    var HISTORY_KEY = 'mms_history';
+    var SHORTFAV_KEY = 'mms_shorts_favorites';
+    var HISTORY_MAX = 200;
+
+    function isFavorite(id) { return state.favorites.indexOf(id) >= 0; }
+    function toggleFavorite(id) {
+        var i = state.favorites.indexOf(id);
+        if (i >= 0) state.favorites.splice(i, 1);
+        else state.favorites.unshift(id);
+        writeJSON(FAV_KEY, state.favorites);
+        return isFavorite(id);
+    }
+
+    /// 履歴は「最後に開いた順」。同じものは前の記録を消して先頭へ積み直す。
+    function recordHistory(id) {
+        for (var i = state.history.length - 1; i >= 0; i--) {
+            if (state.history[i].id === id) state.history.splice(i, 1);
+        }
+        state.history.unshift({ id: id, at: Date.now() });
+        if (state.history.length > HISTORY_MAX) state.history.length = HISTORY_MAX;
+        writeJSON(HISTORY_KEY, state.history);
+    }
+
+    /// ショートのお気に入りは「動画＋クリップ開始位置」で覚える（iOS版と同じ考え方）
+    function shortsFavIndex(id) {
+        for (var i = 0; i < state.shortsFavs.length; i++) if (state.shortsFavs[i].id === id) return i;
+        return -1;
+    }
+    function toggleShortsFav(id, startTime) {
+        var i = shortsFavIndex(id);
+        if (i >= 0) state.shortsFavs.splice(i, 1);
+        else state.shortsFavs.unshift({ id: id, t: startTime || 0, at: Date.now() });
+        writeJSON(SHORTFAV_KEY, state.shortsFavs);
+        return shortsFavIndex(id) >= 0;
+    }
+
+    // ======================= 再生の設定 =======================
+    var PLAYBACK_KEY = 'mms_playback';
+    function savePlayback() { writeJSON(PLAYBACK_KEY, state.playback); }
+
+    // ======================= 視聴位置の記録 =======================
+    // 旧版は resume_<id> に秒数だけ入れていた。並べ替えに「最後に見た時刻」が要るので
+    // 1つの辞書にまとめ直す。古いキーは読み取りだけ引き継ぐ。
+    var PROGRESS_KEY = 'mms_progress';
+    var PROGRESS_MAX = 300;
+    var progressSaveTimer = null;
+
+    function loadProgress() {
+        try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') || {}; }
+        catch (e) { return {}; }
+    }
+
+    function resumeSecondsFor(video) {
+        var entry = state.progress[video.id];
+        if (entry && entry.t > 0) return entry.t;
+        var legacy = parseFloat(localStorage.getItem('resume_' + video.id) || '0');
+        return isFinite(legacy) ? legacy : 0;
+    }
+
+    function progressFor(video) {
+        if (!(video.duration > 0)) return 0;
+        return Math.max(0, Math.min(1, resumeSecondsFor(video) / video.duration));
+    }
+
+    function setProgress(id, seconds) {
+        state.progress[id] = { t: seconds, at: Date.now() };
+        scheduleProgressSave();
+    }
+
+    function clearProgress(id) {
+        delete state.progress[id];
+        localStorage.removeItem('resume_' + id);
+        scheduleProgressSave();
+    }
+
+    function scheduleProgressSave() {
+        if (progressSaveTimer) return;
+        progressSaveTimer = setTimeout(function () {
+            progressSaveTimer = null;
+            var ids = Object.keys(state.progress);
+            if (ids.length > PROGRESS_MAX) {
+                // 古いものから捨てて localStorage を太らせない
+                ids.sort(function (a, b) { return (state.progress[b].at || 0) - (state.progress[a].at || 0); });
+                var trimmed = {};
+                for (var i = 0; i < PROGRESS_MAX; i++) trimmed[ids[i]] = state.progress[ids[i]];
+                state.progress = trimmed;
+            }
+            try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(state.progress)); } catch (e) {}
+        }, 2000);
+    }
+
+    /// 見終わった／始めていないものにはバーを出さない
+    function isPartiallyWatched(v) {
+        var p = progressFor(v);
+        return p > 0.02 && p < 0.98;
+    }
+
+    function watchedBarHTML(v) {
+        if (!isPartiallyWatched(v)) return '';
+        return '<div class="watched"><div class="watched-fill" style="width:' +
+            (progressFor(v) * 100).toFixed(1) + '%"></div></div>';
+    }
+
+    function findVideoByID(id) {
+        var pools = [state.homeAll, state.albumRaw, state.shortsPool];
+        for (var p = 0; p < pools.length; p++) {
+            for (var i = 0; i < pools[p].length; i++) if (pools[p][i].id === id) return pools[p][i];
+        }
+        return null;
+    }
+
+    /// 描画済みカードの重ね物（視聴済みバー・お気に入りのハート）だけ差し替える。
+    /// 一覧を作り直すとスクロール位置が飛ぶので、こちらで済ませる。
+    function refreshCardOverlays() {
+        var nodes = document.querySelectorAll('[data-watch-id]');
+        for (var i = 0; i < nodes.length; i++) {
+            var id = nodes[i].getAttribute('data-watch-id');
+
+            var heart = nodes[i].querySelector('.fav-badge');
+            if (isFavorite(id) && !heart) nodes[i].insertAdjacentHTML('beforeend', FAV_ICON);
+            else if (!isFavorite(id) && heart) heart.remove();
+
+            var v = findVideoByID(id);
+            if (!v) continue;
+            var bar = nodes[i].querySelector('.watched');
+            if (!isPartiallyWatched(v)) { if (bar) bar.remove(); continue; }
+            if (bar) bar.firstElementChild.style.width = (progressFor(v) * 100).toFixed(1) + '%';
+            else nodes[i].insertAdjacentHTML('beforeend', watchedBarHTML(v));
+        }
     }
 
     function shuffle(arr) {
@@ -745,6 +1102,23 @@ enum WebClientHTML {
         });
     }
 
+    /// ALL PHOTOS の中身。お気に入り・履歴に写真が混じるため別に持つ。
+    function loadAllPhotos(force) {
+        if (!force && state.allPhotos.length && (Date.now() - state.allPhotosAt) < ALL_MEDIA_TTL) {
+            return Promise.resolve(state.allPhotos);
+        }
+        return loadAlbums(force).then(function (albums) {
+            var ap = null;
+            for (var i = 0; i < albums.length; i++) if (albums[i].name === 'ALL PHOTOS') ap = albums[i];
+            if (!ap) return [];
+            return api('/albums/' + encodeURIComponent(ap.id) + '/videos').then(function (r) { return r.json(); });
+        }).then(function (list) {
+            var photos = list || [];
+            if (photos.length) { state.allPhotos = photos; state.allPhotosAt = Date.now(); }
+            return photos;
+        });
+    }
+
     function renderNavFoot() {
         var vids = 0, photos = 0;
         for (var i = 0; i < state.albums.length; i++) {
@@ -758,7 +1132,7 @@ enum WebClientHTML {
     // keepAlbum: 履歴でアルバム詳細へ戻るときだけ true（詳細を閉じずに開き直す）
     function showTab(tab, push, keepAlbum) {
         state.tab = tab;
-        var panels = ['home', 'shorts', 'albums'];
+        var panels = ['home', 'continue', 'shorts', 'albums'];
         for (var i = 0; i < panels.length; i++) {
             el('panel-' + panels[i]).classList.toggle('active', panels[i] === tab);
         }
@@ -774,6 +1148,7 @@ enum WebClientHTML {
         if (push !== false) history.pushState({ view: 'tab', tab: tab }, '', '#' + tab);
 
         if (tab === 'home') ensureHome();
+        if (tab === 'continue') ensureContinue();
         if (tab === 'albums') ensureAlbums(keepAlbum);
         if (tab === 'shorts') ensureShorts();
     }
@@ -781,8 +1156,45 @@ enum WebClientHTML {
     function applyLocation(push) {
         var h = (location.hash || '').replace(/^#/, '');
         if (h.indexOf('album/') === 0) { showTab('albums', false, true); openAlbum(h.slice(6), false); return; }
-        if (h === 'shorts' || h === 'albums' || h === 'home') { showTab(h, push); return; }
+        if (h.indexOf('watch/') === 0) {
+            // 共有された動画リンク。履歴の起点をホームに直してから重ねるので、
+            // 「戻る」でサイトの外に出ずホームへ帰れる。
+            var wantID = h.slice(6);
+            history.replaceState({ view: 'tab', tab: 'home' }, '', '#home');
+            showTab('home', false);
+            openDeepLink(wantID);
+            return;
+        }
+        if (h === 'shorts' || h === 'albums' || h === 'home' || h === 'continue') { showTab(h, push); return; }
         showTab('home', push);
+    }
+
+    function indexOfID(list, id) {
+        for (var i = 0; i < list.length; i++) if (list[i].id === id) return i;
+        return -1;
+    }
+
+    /// #watch/<id> で開かれたメディアを探して再生する。
+    /// 動画はホームの並びから、写真はホームに含まれないので ALL PHOTOS から探す。
+    function openDeepLink(id) {
+        ensureHome().then(function () {
+            var idx = indexOfID(state.homeFiltered, id);
+            if (idx >= 0) { openMedia('home', idx, true); return; }
+
+            var photoAlbum = null;
+            for (var i = 0; i < state.albums.length; i++) {
+                if (state.albums[i].name === 'ALL PHOTOS') photoAlbum = state.albums[i];
+            }
+            if (!photoAlbum) { toast('このメディアは見つかりませんでした'); return; }
+            showTab('albums', false, true);
+            return openAlbum(photoAlbum.id, false).then(function () {
+                var j = indexOfID(state.albumFiltered, id);
+                if (j >= 0) openMedia('album', j, true);
+                else toast('このメディアは見つかりませんでした');
+            });
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('このメディアは見つかりませんでした');
+        });
     }
 
     window.addEventListener('popstate', function (e) {
@@ -799,16 +1211,21 @@ enum WebClientHTML {
     });
 
     // ======================= ホームフィード =======================
+    // 直リンク（#watch/<id>）から待ち合わせるため、読み込み中の Promise を使い回す
+    var homeLoadPromise = null;
     function ensureHome() {
-        if (state.homeAll.length) return;
+        if (state.homeAll.length) return Promise.resolve();
+        if (homeLoadPromise) return homeLoadPromise;
         el('home-state').classList.remove('hidden');
-        loadAllVideos(false).then(function (vids) {
+        homeLoadPromise = loadAllVideos(false).then(function (vids) {
             state.homeAll = shuffle(vids);
             applyHomeFilter();
         }).catch(function (e) {
-            if (e instanceof AuthError) return;
-            el('home-state').innerHTML = '<div>読み込みに失敗しました</div>';
+            if (!(e instanceof AuthError)) el('home-state').innerHTML = '<div>読み込みに失敗しました</div>';
+        }).then(function () {
+            homeLoadPromise = null;
         });
+        return homeLoadPromise;
     }
 
     function applyHomeFilter() {
@@ -828,6 +1245,66 @@ enum WebClientHTML {
         // 描画中は固定なので、スクロールで棚が作り直されても中身は動かない。
         state.shortsDeck = shuffle(state.homeFiltered.filter(isShortVideo));
         rerenderHomeFeed();
+    }
+
+    // ======================= 続きを見る（タブ） =======================
+    /// 途中まで見た動画だけを、最後に見た順に並べる。
+    /// このタブ専用の再生リストを作るので、開いた動画の「次の動画」も続きを見るの並びになる。
+    function ensureContinue() {
+        el('continue-state').innerHTML = '<div class="spinner"></div><div>読み込み中...</div>';
+        el('continue-state').classList.remove('hidden');
+        return loadAllVideos(false).then(function () {
+            renderContinue();
+        }).catch(function (e) {
+            if (e instanceof AuthError) return;
+            el('continue-state').innerHTML = '<div>読み込みに失敗しました</div>';
+        });
+    }
+
+    function renderContinue() {
+        var q = el('global-search').value.trim().toLowerCase();
+        var items = [];
+        for (var i = 0; i < state.allVideos.length; i++) {
+            var v = state.allVideos[i];
+            if (!isPartiallyWatched(v)) continue;
+            if (q && v.filename.toLowerCase().indexOf(q) < 0) continue;
+            var entry = state.progress[v.id];
+            items.push({ v: v, at: entry ? (entry.at || 0) : 0 });
+        }
+        items.sort(function (a, b) { return b.at - a.at; });
+        state.continueList = items.map(function (x) { return x.v; });
+
+        var host = el('continue-feed');
+        if (!state.continueList.length) {
+            host.innerHTML = '';
+            el('continue-state').classList.remove('hidden');
+            el('continue-state').innerHTML = q
+                ? '<div>一致する動画がありません</div>'
+                : '<div class="crow-empty"><div class="big">途中まで見た動画はありません</div>' +
+                  '<div>再生の途中でやめた動画が、ここに並びます。</div></div>';
+            return;
+        }
+        el('continue-state').classList.add('hidden');
+
+        var html = '';
+        for (var j = 0; j < state.continueList.length; j++) {
+            var vid = state.continueList[j];
+            var left = Math.max(0, vid.duration - resumeSecondsFor(vid));
+            html += '<div class="feed-card" role="button" tabindex="0" data-action="play-continue" data-index="' + j + '">' +
+                '<div class="feed-thumb" data-id="' + esc(vid.id) + '" data-watch-id="' + esc(vid.id) + '">' +
+                    imgTag(thumbURL(vid.id, true), '') +
+                    '<div class="badge-dur">残り ' + formatDur(left) + '</div>' +
+                    (isFavorite(vid.id) ? FAV_ICON : '') + watchedBarHTML(vid) + '</div>' +
+                '<div class="feed-meta">' +
+                    '<div class="avatar"><svg class="ico-s" viewBox="0 0 24 24"><path d="M10 8.6 15.5 12 10 15.4zM21 6.5c-.2-1.7-.9-2.9-2.7-3.1C16.4 3.1 13.9 3 12 3s-4.4.1-6.3.4C3.9 3.6 3.2 4.8 3 6.5 2.9 7.7 2.8 9.3 2.8 12s.1 4.3.2 5.5c.2 1.7.9 2.9 2.7 3.1 1.9.3 4.4.4 6.3.4s4.4-.1 6.3-.4c1.8-.2 2.5-1.4 2.7-3.1.1-1.2.2-2.8.2-5.5s-.1-4.3-.2-5.5"/></svg></div>' +
+                    '<div class="feed-text">' +
+                        '<div class="feed-title" title="' + esc(vid.filename) + '">' + esc(cleanTitle(vid.filename)) + '</div>' +
+                        '<div class="feed-sub">' + esc(albumNameOf(vid)) + ' • ' + esc(timeAgo(vid.importDate)) + '</div>' +
+                        '<div class="cw-left">' + Math.round(progressFor(vid) * 100) + '% 視聴済み</div>' +
+                    '</div>' +
+                '</div></div>';
+        }
+        host.innerHTML = html;
     }
 
     function rerenderHomeFeed() {
@@ -883,8 +1360,10 @@ enum WebClientHTML {
 
     function feedCardHTML(v, index) {
         var dur = !isPhoto(v) && v.duration > 0 ? '<div class="badge-dur">' + formatDur(v.duration) + '</div>' : '';
-        return '<div class="feed-card" data-action="play-home" data-index="' + index + '">' +
-            '<div class="feed-thumb" data-id="' + esc(v.id) + '">' + imgTag(thumbURL(v.id, true), '') + dur + '</div>' +
+        return '<div class="feed-card" role="button" tabindex="0" data-action="play-home" data-index="' + index + '">' +
+            '<div class="feed-thumb" data-id="' + esc(v.id) + '" data-watch-id="' + esc(v.id) + '">' +
+                imgTag(thumbURL(v.id, true), '') + dur +
+                (isFavorite(v.id) ? FAV_ICON : '') + watchedBarHTML(v) + '</div>' +
             '<div class="feed-meta">' +
                 '<div class="avatar"><svg class="ico-s" viewBox="0 0 24 24"><path d="M10 8.6 15.5 12 10 15.4zM21 6.5c-.2-1.7-.9-2.9-2.7-3.1C16.4 3.1 13.9 3 12 3s-4.4.1-6.3.4C3.9 3.6 3.2 4.8 3 6.5 2.9 7.7 2.8 9.3 2.8 12s.1 4.3.2 5.5c.2 1.7.9 2.9 2.7 3.1 1.9.3 4.4.4 6.3.4s4.4-.1 6.3-.4c1.8-.2 2.5-1.4 2.7-3.1.1-1.2.2-2.8.2-5.5s-.1-4.3-.2-5.5"/></svg></div>' +
                 '<div class="feed-text">' +
@@ -900,7 +1379,7 @@ enum WebClientHTML {
         var cards = '';
         for (var i = 0; i < items.length; i++) {
             var v = items[i];
-            cards += '<div class="short-card" data-action="play-short" data-id="' + esc(v.id) + '">' +
+            cards += '<div class="short-card" role="button" tabindex="0" data-action="play-short" data-id="' + esc(v.id) + '">' +
                 '<div class="short-thumb">' + imgTag(thumbURL(v.id, true), '') +
                     '<div class="badge-dur">' + formatDur(v.duration) + '</div></div>' +
                 '<div class="short-title">' + esc(cleanTitle(v.filename)) + '</div></div>';
@@ -969,11 +1448,76 @@ enum WebClientHTML {
     function ensureAlbums(keepAlbum) {
         // アルバムタブに戻ってきたのに詳細が開いたまま、を防ぐ
         if (!keepAlbum && state.currentAlbum) closeAlbum();
-        if (el('albums-list').dataset.loaded === '1') { filterAlbums(); return; }
+        if (el('albums-list').dataset.loaded === '1') { refreshVirtualCounts(); filterAlbums(); return; }
         el('albums-list').innerHTML = '<div class="state-box"><div class="spinner"></div><div>読み込み中...</div></div>';
         loadAlbums(false).then(renderAlbums).catch(function (e) {
             if (e instanceof AuthError) return;
             el('albums-list').innerHTML = '<div class="state-box">読み込みに失敗しました</div>';
+        });
+    }
+
+    // ブラウザ側だけで組み立てる「仮想アルバム」。サーバーは関与しない（iOS版と同じ考え方）。
+    var VIRTUAL_ALBUMS = [
+        { id: 'HISTORY', name: '再生履歴', type: 'video',
+          icon: '<path d="M12 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7zm1 4h-2v6l5 3 1-1.7-4-2.3z"/>' },
+        { id: 'FAVORITES', name: 'お気に入り', type: 'video',
+          icon: '<path d="M12 21S3.5 14.6 3.5 9.2A4.7 4.7 0 0 1 12 6.3a4.7 4.7 0 0 1 8.5 2.9C20.5 14.6 12 21 12 21"/>' },
+        { id: 'SHORTS_FAVORITES', name: 'ショートのお気に入り', type: 'video',
+          icon: '<path d="M13.4 2.1c.5 2.7-.7 4.1-2.1 5.6-1.6 1.7-3.5 3.3-3.5 6.2a6.2 6.2 0 0 0 12.4 0c0-2.2-1-4.2-2.5-5.8.1 1.7-.5 3-1.7 3.7.8-3.8-1.1-7.4-2.6-9.7"/>' }
+    ];
+    function isVirtualAlbumID(id) {
+        for (var i = 0; i < VIRTUAL_ALBUMS.length; i++) if (VIRTUAL_ALBUMS[i].id === id) return true;
+        return false;
+    }
+    function virtualAlbumCount(id) {
+        if (id === 'HISTORY') return state.history.length;
+        if (id === 'FAVORITES') return state.favorites.length;
+        return state.shortsFavs.length;
+    }
+    /// 一覧のHTMLは使い回すので、お気に入り・履歴が増えても件数だけは貼り替える
+    function refreshVirtualCounts() {
+        for (var i = 0; i < VIRTUAL_ALBUMS.length; i++) {
+            var badge = el('albums-list').querySelector('.album-card[data-id="' + VIRTUAL_ALBUMS[i].id + '"] .album-count');
+            if (badge) badge.textContent = virtualAlbumCount(VIRTUAL_ALBUMS[i].id);
+        }
+    }
+
+    function virtualAlbumCards() {
+        var html = '';
+        for (var i = 0; i < VIRTUAL_ALBUMS.length; i++) {
+            var a = VIRTUAL_ALBUMS[i];
+            html += '<div class="album-card" role="button" tabindex="0" data-action="open-album" data-id="' + a.id +
+                    '" data-name="' + esc(a.name.toLowerCase()) + '">' +
+                '<div class="album-thumb"><div class="album-empty">' +
+                    '<svg viewBox="0 0 24 24" fill="currentColor">' + a.icon + '</svg></div>' +
+                    '<div class="album-count">' + virtualAlbumCount(a.id) + '</div></div>' +
+                '<div class="album-name">' + esc(a.name) + '</div></div>';
+        }
+        return html;
+    }
+
+    /// 仮想アルバムの中身を、ローカルの記録と全件リストから組み立てる
+    function virtualAlbumContents(id) {
+        // 写真もお気に入り・履歴に入りうるので、動画と写真の両方から引く
+        return Promise.all([loadAllVideos(false), loadAllPhotos(false)]).then(function (pair) {
+            var pool = pair[0].concat(pair[1]);
+            var byID = {};
+            for (var i = 0; i < pool.length; i++) byID[pool[i].id] = pool[i];
+            var out = [], j;
+            if (id === 'HISTORY') {
+                for (j = 0; j < state.history.length; j++) {
+                    if (byID[state.history[j].id]) out.push(byID[state.history[j].id]);
+                }
+            } else if (id === 'FAVORITES') {
+                for (j = 0; j < state.favorites.length; j++) {
+                    if (byID[state.favorites[j]]) out.push(byID[state.favorites[j]]);
+                }
+            } else {
+                for (j = 0; j < state.shortsFavs.length; j++) {
+                    if (byID[state.shortsFavs[j].id]) out.push(byID[state.shortsFavs[j].id]);
+                }
+            }
+            return out;
         });
     }
 
@@ -984,19 +1528,85 @@ enum WebClientHTML {
             var inner = a.coverVideoID
                 ? imgTag(thumbURL(a.coverVideoID, false), '')
                 : '<div class="album-empty"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg></div>';
-            var card = '<div class="album-card" data-action="open-album" data-id="' + esc(a.id) + '" data-name="' + esc(a.name.toLowerCase()) + '">' +
+            var card = '<div class="album-card" role="button" tabindex="0" data-action="open-album" data-id="' + esc(a.id) + '" data-name="' + esc(a.name.toLowerCase()) + '">' +
                 '<div class="album-thumb">' + inner + '<div class="album-count">' + a.videoCount + '</div></div>' +
                 '<div class="album-name' + (a.type === 'photo' ? ' photo' : '') + '">' + esc(a.name) + '</div></div>';
             if (a.name === 'ALL VIDEOS' || a.name === 'ALL PHOTOS' || a.type === 'mixed') lib += card;
             else if (a.type === 'photo') { pho += card; hasPho = true; }
             else { vid += card; hasVid = true; }
         }
-        var html = '<div class="section-title">ライブラリ</div><div class="album-grid">' + lib + '</div>';
+        var html = '<div class="toolbar"><button class="pill accent" id="new-album-btn">＋ 新規アルバム</button></div>';
+        html += '<div class="section-title">マイライブラリ</div><div class="album-grid">' + virtualAlbumCards() + '</div>';
+        html += '<div class="section-title">ライブラリ</div><div class="album-grid">' + lib + '</div>';
         if (hasVid) html += '<div class="section-title">動画アルバム</div><div class="album-grid">' + vid + '</div>';
         if (hasPho) html += '<div class="section-title">写真アルバム</div><div class="album-grid">' + pho + '</div>';
         el('albums-list').innerHTML = html;
         el('albums-list').dataset.loaded = '1';
+        el('new-album-btn').addEventListener('click', openCreateAlbum);
         filterAlbums();
+    }
+
+    // ======================= アルバムの作成 =======================
+    function openCreateAlbum() {
+        el('create-name').value = '';
+        el('create-error').textContent = '';
+        el('create-modal').classList.add('open');
+        setTimeout(function () { el('create-name').focus(); }, 100);
+    }
+
+    function submitCreateAlbum() {
+        var name = el('create-name').value.trim();
+        if (!name) { el('create-error').textContent = '名前を入力してください。'; return; }
+        // サーバーは ALL VIDEOS / ALL PHOTOS と同名を弾いて何も作らないので、手前で伝える
+        if (name === 'ALL VIDEOS' || name === 'ALL PHOTOS') {
+            el('create-error').textContent = 'この名前は使えません。';
+            return;
+        }
+        for (var i = 0; i < state.albums.length; i++) {
+            if (state.albums[i].name === name) { el('create-error').textContent = '同じ名前のアルバムがあります。'; return; }
+        }
+        el('create-ok').disabled = true;
+        api('/albums/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, type: el('create-type').value })
+        }).then(function () {
+            el('create-modal').classList.remove('open');
+            toast('「' + name + '」を作成しました');
+            return reloadAlbumList();
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) el('create-error').textContent = '作成に失敗しました。';
+        }).then(function () { el('create-ok').disabled = false; });
+    }
+
+    /// アルバム一覧を作り直す（作成・アップロード後に件数を合わせるため）
+    function reloadAlbumList() {
+        el('albums-list').dataset.loaded = '';
+        return loadAlbums(true).then(renderAlbums).catch(function () {});
+    }
+
+    // ======================= アルバムの選択シート =======================
+    var pickerChoice = null;
+
+    /// 移動先などを選ばせる。onPick には選ばれたアルバムを渡す。
+    function openAlbumPicker(title, excludeID, onPick) {
+        var html = '';
+        for (var i = 0; i < state.albums.length; i++) {
+            var a = state.albums[i];
+            if (a.id === excludeID) continue;
+            html += '<button class="sheet-item" data-pick="' + esc(a.id) + '">' +
+                esc(a.name) + '<span class="count">' + a.videoCount + '</span></button>';
+        }
+        if (!html) html = '<div style="color:var(--text-2); font-size:13px">選べるアルバムがありません。</div>';
+        el('picker-title').textContent = title;
+        el('picker-list').innerHTML = html;
+        pickerChoice = onPick;
+        el('picker-modal').classList.add('open');
+    }
+
+    function closeAlbumPicker() {
+        el('picker-modal').classList.remove('open');
+        pickerChoice = null;
     }
 
     function filterAlbums() {
@@ -1011,12 +1621,17 @@ enum WebClientHTML {
     function openAlbum(albumId, push) {
         var album = null;
         for (var i = 0; i < state.albums.length; i++) if (state.albums[i].id === albumId) album = state.albums[i];
+        if (!album && isVirtualAlbumID(albumId)) {
+            for (var k = 0; k < VIRTUAL_ALBUMS.length; k++) {
+                if (VIRTUAL_ALBUMS[k].id === albumId) album = VIRTUAL_ALBUMS[k];
+            }
+        }
         var go = album ? Promise.resolve(album) : loadAlbums(true).then(function (list) {
             for (var j = 0; j < list.length; j++) if (list[j].id === albumId) return list[j];
             return null;
         });
 
-        go.then(function (a) {
+        return go.then(function (a) {
             if (!a) { toast('アルバムが見つかりません'); return; }
             state.currentAlbum = a;
             el('albums-list').classList.add('hidden');
@@ -1025,7 +1640,13 @@ enum WebClientHTML {
             el('media-grid').className = 'media-grid ' + (a.type === 'photo' ? 'ratio-square' : 'ratio-video');
             el('media-grid').innerHTML = '<div class="state-box" style="grid-column:1/-1"><div class="spinner"></div><div>読み込み中...</div></div>';
             el('detail-count').textContent = '';
+            exitSelectMode();
+            // 仮想アルバムはサーバーに問い合わせず、ローカルの記録から組み立てる。
+            // 実体がないので選択・アップロードの対象にもしない。
+            el('select-btn').classList.toggle('hidden', isVirtualAlbumID(a.id));
+            el('upload-btn').classList.toggle('hidden', isVirtualAlbumID(a.id));
             if (push !== false) history.pushState({ view: 'album', id: a.id }, '', '#album/' + a.id);
+            if (isVirtualAlbumID(a.id)) return virtualAlbumContents(a.id);
             return api('/albums/' + encodeURIComponent(a.id) + '/videos').then(function (r) { return r.json(); });
         }).then(function (list) {
             if (!list) return;
@@ -1046,46 +1667,278 @@ enum WebClientHTML {
         filterAlbums();
     }
 
+    var ALBUM_CHUNK = 24;
+    var FAV_ICON = '<div class="fav-badge"><svg viewBox="0 0 24 24"><path d="M12 21S3.5 14.6 3.5 9.2A4.7 4.7 0 0 1 12 6.3a4.7 4.7 0 0 1 8.5 2.9C20.5 14.6 12 21 12 21"/></svg></div>';
+    var CHECK_ICON = '<div class="sel-check"><svg viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg></div>';
+
+    function timeValue(iso) { var t = new Date(iso).getTime(); return isFinite(t) ? t : 0; }
+
     function renderAlbumGrid() {
         var q = el('global-search').value.trim().toLowerCase();
         var order = el('sort-select').value;
         var list = state.albumRaw.filter(function (v) { return !q || v.filename.toLowerCase().indexOf(q) >= 0; });
-        var dateOf = function (v) { return new Date(v.creationDate || v.importDate).getTime() || 0; };
-        list.sort(function (a, b) {
-            switch (order) {
-                case 'importAsc': return new Date(a.importDate) - new Date(b.importDate);
-                case 'creationDesc': return dateOf(b) - dateOf(a);
-                case 'creationAsc': return dateOf(a) - dateOf(b);
-                case 'durationDesc': return (b.duration || 0) - (a.duration || 0);
-                case 'durationAsc': return (a.duration || 0) - (b.duration || 0);
-                case 'nameAsc': return a.filename.localeCompare(b.filename, 'ja');
-                default: return new Date(b.importDate) - new Date(a.importDate);
-            }
-        });
+        var shot = function (v) { return timeValue(v.creationDate || v.importDate); };
+        // 履歴とお気に入りは「記録した順」そのものが意味を持つので並べ替えない
+        if (!isVirtualAlbumID(state.currentAlbum ? state.currentAlbum.id : '')) {
+            list.sort(function (a, b) {
+                switch (order) {
+                    case 'importAsc': return timeValue(a.importDate) - timeValue(b.importDate);
+                    case 'creationDesc': return shot(b) - shot(a);
+                    case 'creationAsc': return shot(a) - shot(b);
+                    case 'durationDesc': return (b.duration || 0) - (a.duration || 0);
+                    case 'durationAsc': return (a.duration || 0) - (b.duration || 0);
+                    case 'nameAsc': return a.filename.localeCompare(b.filename, 'ja');
+                    case 'sizeDesc': return (b.fileSize || 0) - (a.fileSize || 0);
+                    case 'sizeAsc': return (a.fileSize || 0) - (b.fileSize || 0);
+                    case 'modifiedDesc': return timeValue(b.modificationDate) - timeValue(a.modificationDate);
+                    case 'modifiedAsc': return timeValue(a.modificationDate) - timeValue(b.modificationDate);
+                    case 'lastOpenedDesc': return timeValue(b.accessDate) - timeValue(a.accessDate);
+                    default: return timeValue(b.importDate) - timeValue(a.importDate);
+                }
+            });
+        }
         state.albumFiltered = list;
         el('detail-count').textContent = list.length + ' 件';
+        el('sort-select').classList.toggle('hidden', isVirtualAlbumID(state.currentAlbum ? state.currentAlbum.id : ''));
 
+        state.albumRendered = 0;
+        el('media-grid').innerHTML = '';
         if (!list.length) {
             el('media-grid').innerHTML = '<div class="state-box" style="grid-column:1/-1">メディアがありません</div>';
             return;
         }
+        renderAlbumChunk();
+    }
+
+    /// 数千件のアルバムでも固まらないよう、24件ずつ足していく
+    function renderAlbumChunk() {
+        var list = state.albumFiltered;
+        if (state.albumRendered >= list.length) return;
+        var end = Math.min(state.albumRendered + ALBUM_CHUNK, list.length);
         var html = '';
-        for (var i = 0; i < list.length; i++) {
+        for (var i = state.albumRendered; i < end; i++) {
             var v = list[i];
             var photo = isPhoto(v);
             var badge = photo ? '<div class="badge-photo">写真</div>'
                 : (v.duration > 0 ? '<div class="badge-dur">' + formatDur(v.duration) + '</div>' : '');
-            html += '<div class="media-card" data-action="play-album" data-index="' + i + '">' +
-                '<div class="media-thumb">' + imgTag(thumbURL(v.id, !photo), '') + badge + '</div>' +
+            var sel = state.selected.indexOf(v.id) >= 0;
+            html += '<div class="media-card' + (sel ? ' selected' : '') + '" role="button" tabindex="0"' +
+                    ' data-action="play-album" data-index="' + i + '" data-id="' + esc(v.id) + '">' +
+                '<div class="media-thumb" data-watch-id="' + esc(v.id) + '">' +
+                    imgTag(thumbURL(v.id, !photo), '') + badge +
+                    (isFavorite(v.id) ? FAV_ICON : '') +
+                    (state.selectMode ? CHECK_ICON : '') + watchedBarHTML(v) + '</div>' +
                 '<div class="media-name" title="' + esc(v.filename) + '">' + esc(cleanTitle(v.filename)) + '</div></div>';
         }
-        el('media-grid').innerHTML = html;
+        el('media-grid').insertAdjacentHTML('beforeend', html);
+        state.albumRendered = end;
+    }
+
+    var albumObserver = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting && state.currentAlbum) renderAlbumChunk();
+    }, { rootMargin: '800px' });
+
+    // ======================= 複数選択 =======================
+    function enterSelectMode() {
+        state.selectMode = true;
+        state.selected = [];
+        el('bulk-bar').classList.remove('hidden');
+        el('select-btn').classList.add('on');
+        updateBulkBar();
+        renderAlbumGrid();
+    }
+    function exitSelectMode() {
+        state.selectMode = false;
+        state.selected = [];
+        el('bulk-bar').classList.add('hidden');
+        el('select-btn').classList.remove('on');
+    }
+    function updateBulkBar() { el('bulk-count').textContent = state.selected.length + ' 件'; }
+
+    function toggleSelected(id, card) {
+        var i = state.selected.indexOf(id);
+        if (i >= 0) state.selected.splice(i, 1); else state.selected.push(id);
+        if (card) card.classList.toggle('selected', state.selected.indexOf(id) >= 0);
+        updateBulkBar();
+    }
+
+    /// 選択したものをまとめて処理する。complete=true は完全削除。
+    function bulkRemove(complete) {
+        if (!state.selected.length) return;
+        var ids = state.selected.slice();
+        var path, body;
+        if (complete) {
+            if (!confirm(ids.length + ' 件をMacから完全に削除します。元に戻せません。よろしいですか？')) return;
+            path = '/deleteVideosCompletely';
+            body = { videoIds: ids };
+        } else {
+            // 一括操作はアルバム詳細でしか出せないので、外す先は常に「いま開いているアルバム」。
+            // それが ALL VIDEOS / ALL PHOTOS ならサーバー側でゴミ箱行きになる。
+            var a = state.currentAlbum;
+            if (!a) { toast('アルバムが選ばれていません'); return; }
+            var custom = a.name !== 'ALL VIDEOS' && a.name !== 'ALL PHOTOS';
+            var albumId = a.id;
+            if (!custom && !confirm(ids.length + ' 件をゴミ箱へ移動します。（Macのアプリから元に戻せます）')) return;
+            path = '/deleteVideos';
+            body = { videoIds: ids, albumId: albumId };
+        }
+        api(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }).then(function () {
+            toast(ids.length + ' 件を処理しました');
+            var drop = function (arr) {
+                for (var i = arr.length - 1; i >= 0; i--) if (ids.indexOf(arr[i].id) >= 0) arr.splice(i, 1);
+            };
+            drop(state.allVideos); drop(state.allPhotos); drop(state.homeAll); drop(state.homeFiltered);
+            drop(state.albumRaw); drop(state.shortsPool);
+            state.allVideosAt = 0; state.allPhotosAt = 0;
+            exitSelectMode();
+            renderAlbumGrid();
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('操作に失敗しました');
+        });
+    }
+
+    /// 選択したメディアを別アルバムへ。
+    /// サーバー側は「ALL VIDEOS / ALL PHOTOS が移動元なら所属を外さない」ので、そこからは実質「追加」になる。
+    function bulkMove() {
+        if (!state.selected.length) return;
+        var a = state.currentAlbum;
+        if (!a) return;
+        var ids = state.selected.slice();
+        var fromLibrary = a.name === 'ALL VIDEOS' || a.name === 'ALL PHOTOS';
+        openAlbumPicker(fromLibrary ? 'どのアルバムに追加しますか' : 'どこへ移動しますか', a.id, function (target) {
+            closeAlbumPicker();
+            api('/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ videoIds: ids, sourceAlbumId: a.id, targetAlbumId: target.id })
+            }).then(function () {
+                toast(ids.length + ' 件を「' + target.name + '」へ' + (fromLibrary ? '追加' : '移動') + 'しました');
+                state.allVideosAt = 0; state.allPhotosAt = 0;
+                exitSelectMode();
+                return reloadAlbumList().then(function () { return openAlbum(a.id, false); });
+            }).catch(function (e) {
+                if (!(e instanceof AuthError)) toast('移動に失敗しました');
+            });
+        });
+    }
+
+    // ======================= アップロード =======================
+    var ALLOWED_EXT = ['mp4', 'mov', 'm4v', 'avi', 'jpg', 'jpeg', 'png', 'heic', 'webp', 'gif', 'tiff'];
+    var uploadXHR = null;
+    var uploadAborted = false;
+
+    function extensionOf(name) {
+        var m = /\.([^.]+)$/.exec(name || '');
+        return m ? m[1].toLowerCase() : '';
+    }
+
+    /// サーバーは Swifter がボディを丸ごとメモリに載せてから処理するため、
+    /// 上限を超えるものは送る前に弾く（/server/status が上限を教えてくれる）。
+    function ensureUploadLimit() {
+        if (state.maxUploadBytes) return Promise.resolve(state.maxUploadBytes);
+        return api('/server/status').then(function (r) { return r.json(); }).then(function (s) {
+            state.maxUploadBytes = s.maxUploadBytes || 0;
+            return state.maxUploadBytes;
+        }).catch(function () { return 0; });
+    }
+
+    function uploadOne(file, albumId, onProgress) {
+        return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            uploadXHR = xhr;
+            xhr.open('POST', '/upload');
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            // ヘッダにそのまま日本語は載せられないので、パーセントエンコードして渡す
+            xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+            if (albumId) xhr.setRequestHeader('X-Album-ID', albumId);
+            xhr.upload.onprogress = function (e) {
+                if (e.lengthComputable) onProgress(e.loaded / e.total);
+            };
+            xhr.onload = function () {
+                uploadXHR = null;
+                if (xhr.status === 401) { showLogin(true); reject(new AuthError()); return; }
+                if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+                reject(new Error(xhr.status === 413 ? 'サーバーの上限を超えています' : ('エラー ' + xhr.status)));
+            };
+            xhr.onerror = function () { uploadXHR = null; reject(new Error('通信エラー')); };
+            xhr.onabort = function () { uploadXHR = null; reject(new Error('中止しました')); };
+            xhr.send(file);
+        });
+    }
+
+    function startUpload(fileList) {
+        var album = state.currentAlbum;
+        if (!album || isVirtualAlbumID(album.id)) { toast('アップロード先のアルバムを開いてください'); return; }
+
+        var files = Array.prototype.slice.call(fileList);
+        if (!files.length) return;
+
+        ensureUploadLimit().then(function (limit) {
+            var queue = [], skipped = [];
+            for (var i = 0; i < files.length; i++) {
+                if (ALLOWED_EXT.indexOf(extensionOf(files[i].name)) < 0) { skipped.push(files[i].name + '（形式）'); continue; }
+                if (limit && files[i].size > limit) { skipped.push(files[i].name + '（サイズ）'); continue; }
+                queue.push(files[i]);
+            }
+            if (skipped.length) toast(skipped.length + ' 件を除外しました: ' + skipped[0]);
+            if (!queue.length) return;
+
+            uploadAborted = false;
+            el('upload-bar').classList.remove('hidden');
+            var done = 0, failed = 0;
+
+            var step = function () {
+                if (uploadAborted || done + failed >= queue.length) return Promise.resolve();
+                var file = queue[done + failed];
+                el('upload-text').textContent =
+                    (done + failed + 1) + ' / ' + queue.length + '　' + file.name + '（' + formatBytes(file.size) + '）';
+                el('upload-fill').style.width = '0%';
+                return uploadOne(file, album.id, function (p) {
+                    el('upload-fill').style.width = (p * 100).toFixed(1) + '%';
+                }).then(function () { done++; }, function (e) {
+                    if (e instanceof AuthError) { uploadAborted = true; return; }
+                    failed++;
+                    toast(file.name + ': ' + e.message);
+                }).then(step);
+            };
+
+            return step().then(function () {
+                el('upload-bar').classList.add('hidden');
+                el('upload-fill').style.width = '0%';
+                if (!done) return;
+                toast(done + ' 件をアップロードしました' + (failed ? '（' + failed + ' 件失敗）' : ''));
+                state.allVideosAt = 0; state.allPhotosAt = 0;
+                // サーバーは取り込みを非同期で走らせて即 OK を返すので、少し待ってから読み直す
+                setTimeout(function () {
+                    reloadAlbumList().then(function () { openAlbum(album.id, false); });
+                }, 1800);
+            });
+        });
+    }
+
+    function bulkFavorite() {
+        if (!state.selected.length) return;
+        // 1つでも未登録があれば「全部つける」、すでに全部ついていれば「全部外す」
+        var turnOn = false;
+        for (var i = 0; i < state.selected.length; i++) {
+            if (!isFavorite(state.selected[i])) { turnOn = true; break; }
+        }
+        for (var j = 0; j < state.selected.length; j++) {
+            if (isFavorite(state.selected[j]) !== turnOn) toggleFavorite(state.selected[j]);
+        }
+        toast(turnOn ? 'お気に入りに追加しました' : 'お気に入りから外しました');
+        renderAlbumGrid();
     }
 
     // ======================= 再生（ウォッチ画面） =======================
     function playlistFor(origin) {
         if (origin === 'album') return state.albumFiltered;
         if (origin === 'shorts') return state.shortsPool;
+        if (origin === 'continue') return state.continueList;
         return state.homeFiltered;
     }
 
@@ -1140,23 +1993,44 @@ enum WebClientHTML {
             video.controls = true;
             video.playsInline = true;
             video.src = mediaURL(media.id, state.quality);
-            var saved = localStorage.getItem('resume_' + media.id);
-            if (saved) {
-                video.addEventListener('loadedmetadata', function () {
-                    var t = parseFloat(saved);
-                    if (t > 2 && (!video.duration || t < video.duration - 5)) video.currentTime = t;
-                }, { once: true });
-            }
+            applyPlaybackToVideo(video);
+            var saved = resumeSecondsFor(media);
+            video.addEventListener('loadedmetadata', function () {
+                // メタデータ読み込みで速度が既定に戻る実装があるので入れ直す
+                applyPlaybackToVideo(video);
+                if (saved > 2 && (!video.duration || saved < video.duration - 5)) video.currentTime = saved;
+            }, { once: true });
             video.addEventListener('timeupdate', function () {
-                if (video.currentTime > 2) localStorage.setItem('resume_' + media.id, String(video.currentTime));
+                if (video.currentTime > 2) setProgress(media.id, video.currentTime);
                 updateActiveChapter(video.currentTime);
             });
-            video.addEventListener('ended', function () { navMedia(1); });
+            // 音量と速度はネイティブのコントロールからも変わるので、そこから拾って覚える
+            video.addEventListener('volumechange', function () {
+                state.playback.volume = video.volume;
+                state.playback.muted = video.muted;
+                savePlayback();
+            });
+            video.addEventListener('ratechange', function () {
+                if (video.playbackRate <= 0) return;
+                state.playback.rate = video.playbackRate;
+                el('rate-select').value = String(video.playbackRate);
+                savePlayback();
+            });
+            video.addEventListener('ended', function () { handleEnded(media, video); });
             stage.appendChild(video);
             video.play().catch(function () {});
         }
 
+        recordHistory(media.id);
+        if (state.playedStack[state.playedStack.length - 1] !== index) state.playedStack.push(index);
+        if (state.playedStack.length > 200) state.playedStack.shift();
+
         renderChapters(media);
+        updateRemovalButtons();
+        updateFavButton();
+        updatePlaybackButtons();
+        el('pip-btn').classList.toggle('hidden', photo || !document.pictureInPictureEnabled);
+        el('playback-actions').classList.toggle('hidden', photo);
         renderUpNext();
         if (push !== false) {
             history.pushState({ view: 'player', origin: origin, index: index, tab: state.tab }, '', '#watch/' + media.id);
@@ -1246,8 +2120,9 @@ enum WebClientHTML {
             var v = list[i];
             var photo = isPhoto(v);
             var badge = photo ? '' : (v.duration > 0 ? '<div class="badge-dur">' + formatDur(v.duration) + '</div>' : '');
-            html += '<div class="un-item' + (i === state.playerIndex ? ' current' : '') + '" data-action="play-index" data-index="' + i + '">' +
-                '<div class="un-thumb">' + imgTag(thumbURL(v.id, !photo), '') + badge + '</div>' +
+            html += '<div class="un-item' + (i === state.playerIndex ? ' current' : '') + '" role="button" tabindex="0" data-action="play-index" data-index="' + i + '">' +
+                '<div class="un-thumb" data-watch-id="' + esc(v.id) + '">' +
+                    imgTag(thumbURL(v.id, !photo), '') + badge + watchedBarHTML(v) + '</div>' +
                 '<div class="un-info"><div class="un-title">' + esc(cleanTitle(v.filename)) + '</div>' +
                 '<div class="un-meta">' + (photo ? '写真' : '動画') + ' • ' + esc(albumNameOf(v)) + '</div></div></div>';
         }
@@ -1256,12 +2131,80 @@ enum WebClientHTML {
         if (cur) cur.scrollIntoView({ block: 'nearest' });
     }
 
+    /// 次に再生する番号。末尾でリピートしないなら null（＝そこで止まる）。
+    function nextIndexFor(i) {
+        var list = playlistFor(state.playerOrigin);
+        if (!list.length) return null;
+        if (state.playback.shuffle && list.length > 1) {
+            var j;
+            do { j = Math.floor(Math.random() * list.length); } while (j === i);
+            return j;
+        }
+        if (i + 1 < list.length) return i + 1;
+        return state.playback.repeat === 'all' ? 0 : null;
+    }
+
+    function prevIndexFor(i) {
+        var list = playlistFor(state.playerOrigin);
+        if (!list.length) return null;
+        // シャッフル中は「実際に見てきた順」を辿らないと戻る先がランダムになってしまう
+        if (state.playback.shuffle && state.playedStack.length > 1) {
+            state.playedStack.pop();
+            return state.playedStack[state.playedStack.length - 1];
+        }
+        if (i - 1 >= 0) return i - 1;
+        return state.playback.repeat === 'all' ? list.length - 1 : null;
+    }
+
     function navMedia(dir) {
         var media = playlistFor(state.playerOrigin)[state.playerIndex];
-        // 漫画モードの写真は右→左に読むので送り方向を反転する
-        if (media && isPhoto(media) && state.mangaMode) dir = -dir;
-        openMedia(state.playerOrigin, state.playerIndex + dir, false);
+        // 写真はシャッフル・リピートの対象外。順送りのみ（漫画モードでは左右反転）。
+        if (media && isPhoto(media)) {
+            if (state.mangaMode) dir = -dir;
+            openMedia(state.playerOrigin, state.playerIndex + dir, false);
+            replacePlayerState();
+            return;
+        }
+        var target = dir > 0 ? nextIndexFor(state.playerIndex) : prevIndexFor(state.playerIndex);
+        if (target === null) return;
+        openMedia(state.playerOrigin, target, false);
+        replacePlayerState();
+    }
+
+    function replacePlayerState() {
         history.replaceState({ view: 'player', origin: state.playerOrigin, index: state.playerIndex, tab: state.tab }, '', location.hash);
+    }
+
+    /// 再生し終わったときの分岐。ここが「常に次へ行く」を止める入口。
+    function handleEnded(media, video) {
+        clearProgress(media.id);
+        if (state.playback.repeat === 'one') {
+            video.currentTime = 0;
+            video.play().catch(function () {});
+            return;
+        }
+        if (!state.playback.autoplay) return;
+        var target = nextIndexFor(state.playerIndex);
+        if (target === null) return;
+        openMedia(state.playerOrigin, target, false);
+        replacePlayerState();
+    }
+
+    var REPEAT_LABEL = { off: 'リピート: なし', one: 'リピート: 1本', all: 'リピート: 全体' };
+
+    function updatePlaybackButtons() {
+        el('autoplay-btn').classList.toggle('on', state.playback.autoplay);
+        el('shuffle-btn').classList.toggle('on', state.playback.shuffle);
+        var rp = el('repeat-btn');
+        rp.textContent = REPEAT_LABEL[state.playback.repeat] || REPEAT_LABEL.off;
+        rp.classList.toggle('on', state.playback.repeat !== 'off');
+        el('rate-select').value = String(state.playback.rate);
+    }
+
+    function applyPlaybackToVideo(video) {
+        video.playbackRate = state.playback.rate;
+        video.volume = state.playback.volume;
+        video.muted = state.playback.muted;
     }
 
     function closePlayer(useHistory) {
@@ -1278,6 +2221,9 @@ enum WebClientHTML {
         el('chapters').classList.add('hidden');
         el('player-modal').classList.remove('open');
         document.body.style.overflow = '';
+        // 一覧は作り直さず、視聴済みバーと「続きを見る」だけ更新する（スクロール位置を保つため）
+        refreshCardOverlays();
+        if (state.tab === 'continue') renderContinue();
         if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
         if (useHistory !== false) history.back();
     }
@@ -1301,29 +2247,135 @@ enum WebClientHTML {
         }, { once: true });
     }
 
-    function deleteCurrent() {
+    function updateFavButton() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var on = isFavorite(media.id);
+        var btn = el('fav-btn');
+        btn.textContent = on ? 'お気に入り済み' : 'お気に入り';
+        btn.classList.toggle('fav-on', on);
+    }
+
+    function formatBytes(n) {
+        if (!n || n <= 0) return '—';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0, v = n;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i];
+    }
+    function formatDateTime(iso) {
+        if (!iso) return '—';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return '—';
+        return d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' +
+            ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    }
+
+    function showInfo() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var node = document.querySelector('#main-media');
+        var dims = '—';
+        if (node) {
+            if (node.videoWidth) dims = node.videoWidth + ' × ' + node.videoHeight;
+            else if (node.naturalWidth) dims = node.naturalWidth + ' × ' + node.naturalHeight;
+        }
+        var rows = [
+            ['ファイル名', media.filename],
+            ['種類', isPhoto(media) ? '写真' : '動画'],
+            ['解像度', dims],
+            ['長さ', isPhoto(media) ? '—' : formatDur(media.duration)],
+            ['サイズ', formatBytes(media.fileSize)],
+            ['アルバム', albumNameOf(media)],
+            ['追加日', formatDateTime(media.importDate)],
+            ['撮影日', formatDateTime(media.creationDate)],
+            ['更新日', formatDateTime(media.modificationDate)],
+            ['最後に開いた日', formatDateTime(media.accessDate)],
+            ['視聴位置', isPhoto(media) ? '—' : (formatDur(resumeSecondsFor(media)) + ' / ' + formatDur(media.duration))],
+            ['ID', media.id]
+        ];
+        var html = '';
+        for (var i = 0; i < rows.length; i++) {
+            html += '<div class="info-row"><div class="info-key">' + esc(rows[i][0]) + '</div>' +
+                '<div class="info-val">' + esc(rows[i][1]) + '</div></div>';
+        }
+        el('info-title').textContent = cleanTitle(media.filename);
+        el('info-body').innerHTML = html;
+        el('info-modal').classList.add('open');
+    }
+
+    function libraryAlbumIDFor(media) {
+        var want = isPhoto(media) ? 'ALL PHOTOS' : 'ALL VIDEOS';
+        for (var i = 0; i < state.albums.length; i++) if (state.albums[i].name === want) return state.albums[i].id;
+        return null;
+    }
+
+    /// 通常アルバムを開いているときだけ「そのアルバムから外す」になる。
+    /// それ以外（ホーム／ALL VIDEOS・ALL PHOTOS）は「ゴミ箱へ」。
+    function removalContext(media) {
+        var a = state.currentAlbum;
+        if (state.playerOrigin === 'album' && a && a.name !== 'ALL VIDEOS' && a.name !== 'ALL PHOTOS') {
+            return { albumId: a.id, label: 'アルバムから外す', done: '「' + a.name + '」から外しました', confirm: null };
+        }
+        return {
+            albumId: libraryAlbumIDFor(media),
+            label: 'ゴミ箱へ',
+            done: 'ゴミ箱へ移動しました',
+            confirm: 'このメディアをゴミ箱へ移動します。（Macのアプリから元に戻せます）'
+        };
+    }
+
+    function updateRemovalButtons() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var ctx = removalContext(media);
+        var btn = el('trash-btn');
+        btn.textContent = ctx.label;
+        // ALL VIDEOS / ALL PHOTOS が見つからないときは押しても意味がないので隠す
+        btn.classList.toggle('hidden', !ctx.albumId);
+    }
+
+    /// complete=true は実ファイルごと消す取り返しのつかない削除。
+    /// false はゴミ箱行き（または通常アルバムからの除外）。
+    function removeCurrent(complete) {
         var list = playlistFor(state.playerOrigin);
         var media = list[state.playerIndex];
         if (!media) return;
-        if (!confirm('このメディアをMacから完全に削除します。元に戻せません。よろしいですか？')) return;
-        api('/deleteVideosCompletely', {
+
+        var path, body, doneMsg;
+        if (complete) {
+            if (!confirm('このメディアをMacから完全に削除します。元に戻せません。よろしいですか？')) return;
+            path = '/deleteVideosCompletely';
+            body = { videoIds: [media.id] };
+            doneMsg = '完全に削除しました';
+        } else {
+            var ctx = removalContext(media);
+            if (!ctx.albumId) { toast('移動先のアルバムが見つかりません'); return; }
+            if (ctx.confirm && !confirm(ctx.confirm)) return;
+            path = '/deleteVideos';
+            body = { videoIds: [media.id], albumId: ctx.albumId };
+            doneMsg = ctx.done;
+        }
+
+        api(path, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ videoIds: [media.id] })
+            body: JSON.stringify(body)
         }).then(function () {
-            toast('削除しました');
+            toast(doneMsg);
             var removeFrom = function (arr) {
                 for (var i = arr.length - 1; i >= 0; i--) if (arr[i].id === media.id) arr.splice(i, 1);
             };
             removeFrom(state.allVideos); removeFrom(state.homeAll); removeFrom(state.homeFiltered);
             removeFrom(state.albumRaw); removeFrom(state.albumFiltered); removeFrom(state.shortsPool);
             state.allVideosAt = 0;
+            clearProgress(media.id);
             if (!list.length) { closePlayer(); return; }
             openMedia(state.playerOrigin, Math.min(state.playerIndex, list.length - 1), false);
             if (state.tab === 'home') rerenderHomeFeed();
+            if (state.tab === 'continue') renderContinue();
             if (state.currentAlbum) renderAlbumGrid();
         }).catch(function (e) {
-            if (!(e instanceof AuthError)) toast('削除に失敗しました');
+            if (!(e instanceof AuthError)) toast('操作に失敗しました');
         });
     }
 
@@ -1378,9 +2430,13 @@ enum WebClientHTML {
 
         state.shortsClipStart = (v.duration > SHORTS_CLIP) ? Math.random() * (v.duration - SHORTS_CLIP) : 0;
         state.shortsReady = false;
-        el('shorts-bar-fill').style.width = '0%';
+        state.isScrubbing = false;
+        el('shorts-bar').classList.remove('scrubbing');
+        setShortsProgress(0);
         el('shorts-count').textContent = (state.shortsIndex + 1) + ' / ' + pool.length + ' • ' + state.shortsSource;
         el('shorts-title').textContent = cleanTitle(v.filename);
+        recordHistory(v.id);
+        renderShortsRail();   // ハートの状態は動画ごとに変わる
 
         video.muted = state.shortsMuted;
         video.src = mediaURL(v.id);
@@ -1424,6 +2480,39 @@ enum WebClientHTML {
             var url = mediaURL(next.id);
             if (preloadEl.getAttribute('src') !== url) { preloadEl.src = url; preloadEl.load(); }
         }, 1500);
+    }
+
+    /// いま再生しているクリップの長さ（秒）。まだ読めていなければ 0。
+    function shortsClipLength() {
+        var video = el('shorts-video');
+        if (!video.duration || !isFinite(video.duration)) return 0;
+        return Math.max(0.1, Math.min(SHORTS_CLIP, video.duration - state.shortsClipStart));
+    }
+
+    function setShortsProgress(pct) {
+        var p = Math.max(0, Math.min(1, pct)) * 100;
+        el('shorts-bar-fill').style.width = p + '%';
+        el('shorts-bar-knob').style.left = p + '%';
+    }
+
+    /// precise=false はドラッグ中。見た目は毎回更新しつつ、実際のシークは間引いて
+    /// 追従を軽くする（連続シークは読み込みが詰まりやすい）。
+    var lastScrubSeek = 0;
+    function scrubShortsTo(pct, precise) {
+        setShortsProgress(pct);
+        var clipLen = shortsClipLength();
+        if (!clipLen) return;
+        var now = Date.now();
+        if (!precise && now - lastScrubSeek < 120) return;
+        lastScrubSeek = now;
+
+        var video = el('shorts-video');
+        // 末尾ちょうどに合わせると自動送りが即発火してしまうので少し手前で止める
+        var target = state.shortsClipStart + clipLen * Math.min(pct, 0.995);
+        if (!precise && typeof video.fastSeek === 'function') {
+            try { video.fastSeek(target); return; } catch (err) {}
+        }
+        try { video.currentTime = target; } catch (err) {}
     }
 
     function nextShort() { playShortAt(state.shortsIndex + 1); }
@@ -1508,8 +2597,15 @@ enum WebClientHTML {
     var ICO_FULL = '<svg class="ico" viewBox="0 0 24 24"><path d="M10 8.6 15.5 12 10 15.4zM21 6.5c-.2-1.7-.9-2.9-2.7-3.1C16.4 3.1 13.9 3 12 3s-4.4.1-6.3.4C3.9 3.6 3.2 4.8 3 6.5 2.9 7.7 2.8 9.3 2.8 12s.1 4.3.2 5.5c.2 1.7.9 2.9 2.7 3.1 1.9.3 4.4.4 6.3.4s4.4-.1 6.3-.4c1.8-.2 2.5-1.4 2.7-3.1.1-1.2.2-2.8.2-5.5s-.1-4.3-.2-5.5"/></svg>';
     var ICO_SHUFFLE = '<svg class="ico" viewBox="0 0 24 24"><path d="M10.6 8.6 7 5H3v2h3.2l3 3zM14 5v2h2.6l-9 9H3v2h5.4l9.6-9.6V13h2V5zm2.6 11H14v2h2.6l-1.3 1.3 1.4 1.4L21 17l-4.3-3.7-1.4 1.4z"/></svg>';
 
+    var ICO_HEART = '<svg class="ico" viewBox="0 0 24 24"><path d="M12 21S3.5 14.6 3.5 9.2A4.7 4.7 0 0 1 12 6.3a4.7 4.7 0 0 1 8.5 2.9C20.5 14.6 12 21 12 21"/></svg>';
+
+    function currentShort() { return state.shortsPool[state.shortsIndex] || null; }
+
     function renderShortsRail() {
+        var cur = currentShort();
+        var favOn = cur ? shortsFavIndex(cur.id) >= 0 : false;
         var html =
+            railButton('shortfav', favOn ? 'お気に入りから外す' : 'お気に入りに追加', ICO_HEART, favOn) +
             railButton('mute', state.shortsMuted ? 'ミュート解除' : 'ミュート', state.shortsMuted ? ICO_MUTE : ICO_SOUND, false) +
             railButton('zoom', 'サイズ調整', ICO_ZOOM, state.shortsZoom > 0) +
             railButton('full', 'この動画を通常再生', ICO_FULL, false) +
@@ -1528,6 +2624,13 @@ enum WebClientHTML {
             video.muted = state.shortsMuted;
             if (!state.shortsMuted && video.paused) tryPlayShorts();
             renderShortsRail();
+        } else if (action === 'shortfav') {
+            var cur = currentShort();
+            if (!cur) return;
+            // 「どのクリップが良かったか」を残したいので開始位置ごと覚える
+            var on = toggleShortsFav(cur.id, state.shortsClipStart);
+            renderShortsRail();
+            toast(on ? 'ショートのお気に入りに追加しました' : 'お気に入りから外しました');
         } else if (action === 'zoom') {
             el('shorts-zoom').classList.toggle('hidden');
             updateZoomHint();
@@ -1561,11 +2664,14 @@ enum WebClientHTML {
         });
 
         video.addEventListener('timeupdate', function () {
-            if (!video.duration || !isFinite(video.duration)) return;
-            var clipLen = Math.max(0.1, Math.min(SHORTS_CLIP, video.duration - state.shortsClipStart));
+            // ドラッグ中は再生位置にバーを引き戻さない。自動送りもここで止める
+            // （終端付近を掴んだだけで次の動画へ飛んでしまうため）。
+            if (state.isScrubbing) return;
+            var clipLen = shortsClipLength();
+            if (!clipLen) return;
             var elapsed = video.currentTime - state.shortsClipStart;
             if (elapsed >= clipLen) { nextShort(); return; }
-            el('shorts-bar-fill').style.width = Math.max(0, Math.min(100, (elapsed / clipLen) * 100)) + '%';
+            setShortsProgress(elapsed / clipLen);
         });
 
         video.addEventListener('ended', function () { nextShort(); });
@@ -1576,13 +2682,45 @@ enum WebClientHTML {
 
         el('shorts-tap').addEventListener('click', toggleShortsPlay);
 
-        el('shorts-bar').addEventListener('click', function (e) {
+        // シークバーは「押した位置へジャンプ」＋「掴んだままドラッグ」の両方に対応する。
+        // マウスもタッチも同じ扱いにしたいのでポインタイベントを使う。
+        var bar = el('shorts-bar');
+
+        function pctAt(clientX) {
+            var rect = bar.getBoundingClientRect();
+            if (rect.width <= 0) return 0;
+            return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        }
+
+        bar.addEventListener('pointerdown', function (e) {
+            if (!shortsClipLength()) return;
+            e.preventDefault();
             e.stopPropagation();
-            var rect = this.getBoundingClientRect();
-            var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            if (!video.duration || !isFinite(video.duration)) return;
-            var clipLen = Math.max(0.1, Math.min(SHORTS_CLIP, video.duration - state.shortsClipStart));
-            video.currentTime = state.shortsClipStart + clipLen * pct;
+            state.isScrubbing = true;
+            bar.classList.add('scrubbing');
+            // 掴んだ指／カーソルがバーの外へ出ても追従させる
+            try { bar.setPointerCapture(e.pointerId); } catch (err) {}
+            scrubShortsTo(pctAt(e.clientX), false);
+        });
+
+        bar.addEventListener('pointermove', function (e) {
+            if (!state.isScrubbing) return;
+            e.preventDefault();
+            scrubShortsTo(pctAt(e.clientX), false);
+        });
+
+        function endScrub(e) {
+            if (!state.isScrubbing) return;
+            e.stopPropagation();
+            state.isScrubbing = false;
+            bar.classList.remove('scrubbing');
+            try { bar.releasePointerCapture(e.pointerId); } catch (err) {}
+            scrubShortsTo(pctAt(e.clientX), true);   // 離した位置へ正確に合わせる
+        }
+        bar.addEventListener('pointerup', endScrub);
+        bar.addEventListener('pointercancel', function () {
+            state.isScrubbing = false;
+            bar.classList.remove('scrubbing');
         });
 
         // ホイールは連続で飛ばないよう間引く
@@ -1602,6 +2740,7 @@ enum WebClientHTML {
             touchX = e.changedTouches[0].screenX;
         }, { passive: true });
         el('panel-shorts').addEventListener('touchend', function (e) {
+            if (state.isScrubbing) return;   // シークバー操作を送り／戻しと取り違えない
             var dy = e.changedTouches[0].screenY - touchY;
             var dx = e.changedTouches[0].screenX - touchX;
             if (Math.abs(dy) < 60 || Math.abs(dx) > Math.abs(dy)) return;
@@ -1660,6 +2799,7 @@ enum WebClientHTML {
             clearTimeout(searchTimer);
             searchTimer = setTimeout(function () {
                 if (state.tab === 'home') applyHomeFilter();
+                else if (state.tab === 'continue') renderContinue();
                 else if (state.tab === 'albums') { if (state.currentAlbum) renderAlbumGrid(); else filterAlbums(); }
             }, 200);
         });
@@ -1672,6 +2812,7 @@ enum WebClientHTML {
             loadAlbums(true).then(function () {
                 if (state.tab === 'home') { el('home-feed').innerHTML = ''; ensureHome(); }
                 if (state.tab === 'albums') { if (state.currentAlbum) openAlbum(state.currentAlbum.id, false); else ensureAlbums(); }
+                if (state.tab === 'continue') ensureContinue();
                 if (state.tab === 'shorts') { state.shortsPool = []; ensureShorts(); }
                 toast('更新しました');
             }).catch(function () {}).then(function () {
@@ -1694,10 +2835,16 @@ enum WebClientHTML {
             if (!target) return;
             if (target.dataset.rail) { onRailAction(target.dataset.rail); return; }
             var action = target.dataset.action;
+            // 選択モード中のカードは再生せずチェックの付け外しにする
+            if (state.selectMode && action === 'play-album') {
+                toggleSelected(target.dataset.id, target);
+                return;
+            }
             if (action === 'play-home') openMedia('home', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-album') openMedia('album', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-index') { openMedia(state.playerOrigin, parseInt(target.dataset.index, 10), false); }
             else if (action === 'seek') seekTo(parseFloat(target.dataset.time));
+            else if (action === 'play-continue') openMedia('continue', parseInt(target.dataset.index, 10), true);
             else if (action === 'open-album') openAlbum(target.dataset.id, true);
             else if (action === 'play-short') startShortsWith(target.dataset.id, state.homeAll, 'おすすめショート');
         });
@@ -1719,7 +2866,120 @@ enum WebClientHTML {
         el('arrow-prev').addEventListener('click', function () { navMedia(-1); });
         el('arrow-next').addEventListener('click', function () { navMedia(1); });
         el('quality-select').addEventListener('change', function () { changeQuality(this.value); });
-        el('delete-btn').addEventListener('click', deleteCurrent);
+        el('trash-btn').addEventListener('click', function () { removeCurrent(false); });
+        el('purge-btn').addEventListener('click', function () { removeCurrent(true); });
+
+        // --- お気に入り・詳細情報 ---
+        el('fav-btn').addEventListener('click', function () {
+            var media = playlistFor(state.playerOrigin)[state.playerIndex];
+            if (!media) return;
+            var on = toggleFavorite(media.id);
+            updateFavButton();
+            refreshCardOverlays();
+            toast(on ? 'お気に入りに追加しました' : 'お気に入りから外しました');
+        });
+        el('info-btn').addEventListener('click', showInfo);
+        el('info-close').addEventListener('click', function () { el('info-modal').classList.remove('open'); });
+        el('info-modal').addEventListener('click', function (e) {
+            if (e.target === this) this.classList.remove('open');
+        });
+
+        // --- 再生の設定 ---
+        el('autoplay-btn').addEventListener('click', function () {
+            state.playback.autoplay = !state.playback.autoplay;
+            savePlayback(); updatePlaybackButtons();
+            toast(state.playback.autoplay ? '自動再生: オン' : '自動再生: オフ');
+        });
+        el('repeat-btn').addEventListener('click', function () {
+            var order = ['off', 'one', 'all'];
+            state.playback.repeat = order[(order.indexOf(state.playback.repeat) + 1) % order.length];
+            savePlayback(); updatePlaybackButtons();
+        });
+        el('shuffle-btn').addEventListener('click', function () {
+            state.playback.shuffle = !state.playback.shuffle;
+            savePlayback(); updatePlaybackButtons();
+            toast(state.playback.shuffle ? 'シャッフル: オン' : 'シャッフル: オフ');
+        });
+        el('rate-select').addEventListener('change', function () {
+            state.playback.rate = parseFloat(this.value) || 1;
+            savePlayback();
+            var v = document.querySelector('#main-media');
+            if (v && v.tagName === 'VIDEO') v.playbackRate = state.playback.rate;
+        });
+        el('pip-btn').addEventListener('click', function () {
+            var v = document.querySelector('#main-media');
+            if (!v || v.tagName !== 'VIDEO') return;
+            if (document.pictureInPictureElement) { document.exitPictureInPicture().catch(function () {}); return; }
+            if (!v.requestPictureInPicture) { toast('この環境では使えません'); return; }
+            v.requestPictureInPicture().catch(function () { toast('ピクチャインピクチャを開始できません'); });
+        });
+
+        // --- 複数選択 ---
+        el('select-btn').addEventListener('click', function () {
+            if (state.selectMode) { exitSelectMode(); renderAlbumGrid(); }
+            else enterSelectMode();
+        });
+        el('bulk-cancel').addEventListener('click', function () { exitSelectMode(); renderAlbumGrid(); });
+        el('bulk-all').addEventListener('click', function () {
+            var all = state.selected.length === state.albumFiltered.length;
+            state.selected = all ? [] : state.albumFiltered.map(function (v) { return v.id; });
+            updateBulkBar();
+            renderAlbumGrid();
+        });
+        el('bulk-fav').addEventListener('click', bulkFavorite);
+        el('bulk-move').addEventListener('click', bulkMove);
+
+        // --- アップロード ---
+        el('upload-btn').addEventListener('click', function () { el('file-input').click(); });
+        el('file-input').addEventListener('change', function () {
+            startUpload(this.files);
+            this.value = '';   // 同じファイルを続けて選べるように空にしておく
+        });
+        el('upload-cancel').addEventListener('click', function () {
+            uploadAborted = true;
+            if (uploadXHR) uploadXHR.abort();
+            el('upload-bar').classList.add('hidden');
+            toast('アップロードを中止しました');
+        });
+
+        var dz = el('album-detail');
+        var dragDepth = 0;
+        dz.addEventListener('dragenter', function (e) {
+            if (!state.currentAlbum || isVirtualAlbumID(state.currentAlbum.id)) return;
+            e.preventDefault(); dragDepth++; dz.classList.add('dragging');
+        });
+        dz.addEventListener('dragover', function (e) {
+            if (!state.currentAlbum || isVirtualAlbumID(state.currentAlbum.id)) return;
+            e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+        });
+        dz.addEventListener('dragleave', function () {
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (!dragDepth) dz.classList.remove('dragging');
+        });
+        dz.addEventListener('drop', function (e) {
+            if (!state.currentAlbum || isVirtualAlbumID(state.currentAlbum.id)) return;
+            e.preventDefault();
+            dragDepth = 0; dz.classList.remove('dragging');
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) startUpload(e.dataTransfer.files);
+        });
+
+        // --- アルバムの選択シート / 作成 ---
+        el('picker-list').addEventListener('click', function (e) {
+            var btn = e.target.closest ? e.target.closest('[data-pick]') : null;
+            if (!btn || !pickerChoice) return;
+            for (var i = 0; i < state.albums.length; i++) {
+                if (state.albums[i].id === btn.dataset.pick) { pickerChoice(state.albums[i]); return; }
+            }
+        });
+        el('picker-close').addEventListener('click', closeAlbumPicker);
+        el('picker-modal').addEventListener('click', function (e) { if (e.target === this) closeAlbumPicker(); });
+        el('create-ok').addEventListener('click', submitCreateAlbum);
+        el('create-cancel').addEventListener('click', function () { el('create-modal').classList.remove('open'); });
+        el('create-modal').addEventListener('click', function (e) { if (e.target === this) this.classList.remove('open'); });
+        el('create-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') submitCreateAlbum(); });
+        el('bulk-trash').addEventListener('click', function () { bulkRemove(false); });
+        el('bulk-purge').addEventListener('click', function () { bulkRemove(true); });
+        albumObserver.observe(el('album-sentinel'));
         el('manga-toggle').addEventListener('click', function () {
             state.mangaMode = !state.mangaMode;
             localStorage.setItem('isMangaMode', String(state.mangaMode));
@@ -1740,6 +3000,15 @@ enum WebClientHTML {
     }
 
     function bindKeyboard() {
+        // カードは div なので、Enter / Space で押せるようにする（Tab で辿れる）
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            var node = document.activeElement;
+            if (!node || !node.dataset || !node.dataset.action) return;
+            e.preventDefault();
+            node.click();
+        });
+
         document.addEventListener('keydown', function (e) {
             var tag = document.activeElement ? document.activeElement.tagName : '';
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
@@ -1784,12 +3053,23 @@ enum WebClientHTML {
                 if (e.key === 'ArrowDown') { e.preventDefault(); nextShort(); return; }
                 if (e.key === ' ') { e.preventDefault(); toggleShortsPlay(); return; }
                 if (e.key === 'm' || e.key === 'M') { e.preventDefault(); onRailAction('mute'); return; }
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    var clipLen = shortsClipLength();
+                    if (!clipLen) return;
+                    var video = el('shorts-video');
+                    var elapsed = video.currentTime - state.shortsClipStart;
+                    var step = e.key === 'ArrowRight' ? 5 : -5;
+                    scrubShortsTo((elapsed + step) / clipLen, true);
+                    return;
+                }
             }
 
             // タブ切り替えショートカット（1/2/3）
             if (e.key === '1') showTab('home');
             if (e.key === '2') showTab('shorts');
-            if (e.key === '3') showTab('albums');
+            if (e.key === '3') showTab('continue');
+            if (e.key === '4') showTab('albums');
             if (e.key === '/') { e.preventDefault(); el('search-wrap').classList.add('open'); el('global-search').focus(); }
         });
     }
@@ -1816,6 +3096,17 @@ enum WebClientHTML {
         });
     }
 
+    state.progress = loadProgress();
+    state.favorites = readJSON(FAV_KEY, []);
+    state.history = readJSON(HISTORY_KEY, []);
+    state.shortsFavs = readJSON(SHORTFAV_KEY, []);
+    var savedPlayback = readJSON(PLAYBACK_KEY, null);
+    if (savedPlayback) {
+        for (var pk in state.playback) {
+            if (Object.prototype.hasOwnProperty.call(savedPlayback, pk)) state.playback[pk] = savedPlayback[pk];
+        }
+    }
+    updatePlaybackButtons();
     bindGlobal();
     bindShortsMedia();
     bindKeyboard();
