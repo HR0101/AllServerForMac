@@ -289,9 +289,10 @@ enum WebClientHTML {
         position: absolute; right: 72px; bottom: 96px; z-index: 4; width: 210px; padding: 14px;
         background: rgba(28,28,40,0.95); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(10px);
     }
-    @media (min-width: 901px) { .shorts-zoom { right: 90px; bottom: 120px; } }
+    @media (min-width: 901px) { .shorts-zoom { right: 12px; bottom: 110px; } }
     .shorts-zoom label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 10px; text-align: center; color: var(--text-2); }
     .shorts-zoom input { width: 100%; accent-color: var(--accent); }
+    .shorts-zoom .hint { margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--text-3); text-align: center; }
 
     /* ============ 再生モーダル ============ */
     #player-modal { display: none; position: fixed; inset: 0; background: var(--bg); z-index: 90; }
@@ -315,6 +316,36 @@ enum WebClientHTML {
     .nav-arrow.prev { left: 14px; }
     .nav-arrow.next { right: 14px; }
     @media (hover: none) { .nav-arrow { display: none; } }
+    /* 動画を10等分した地点のサムネ。押すとその位置へ飛ぶ。 */
+    .chapters {
+        display: flex; gap: 8px; overflow-x: auto; padding: 12px 16px 0;
+        scroll-padding-left: 16px; -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent;
+    }
+    .chapters::-webkit-scrollbar { height: 6px; }
+    .chapters::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+    .chapters.hidden { display: none; }
+    .chapter {
+        flex: none; width: 96px; padding: 0; border: none; background: none;
+        color: inherit; text-align: left; cursor: pointer; font: inherit;
+    }
+    .chapter-thumb {
+        display: block; position: relative; width: 100%; aspect-ratio: 16 / 9;
+        border-radius: 8px; overflow: hidden; background: #000; border: 1px solid var(--line);
+    }
+    .chapter-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .chapter-time {
+        display: block; margin-top: 5px; font-size: 11px; font-weight: 700;
+        color: var(--text-2); font-variant-numeric: tabular-nums;
+    }
+    .chapter:hover .chapter-thumb { border-color: var(--accent); }
+    .chapter.active .chapter-thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .chapter.active .chapter-time { color: var(--accent); }
+    @media (min-width: 901px) {
+        .chapters { padding: 14px 0 0; scroll-padding-left: 0; }
+        .chapter { width: 116px; }
+    }
+
     .watch-info { padding: 16px; }
     .watch-title { font-size: 17px; font-weight: 700; line-height: 1.4; margin: 0; }
     .watch-sub { font-size: 12.5px; color: var(--text-2); margin-top: 6px; }
@@ -333,12 +364,17 @@ enum WebClientHTML {
     .un-meta { font-size: 11px; color: var(--text-2); margin-top: 4px; }
 
     @media (min-width: 901px) {
-        .watch { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px;
-                 padding: 20px; max-width: 1900px; margin: 0 auto; overflow-y: auto; align-items: start; }
+        /* 左（プレイヤー）と右（再生リスト）を別々にスクロールさせる。
+           1つのスクロール領域にすると、リストを下に送っただけで動画が画面外へ逃げてしまう。 */
+        .watch { display: flex; gap: 24px; padding: 20px; max-width: 1900px; margin: 0 auto;
+                 height: 100%; overflow: hidden; }
+        .watch-main { flex: 1 1 auto; min-width: 0; overflow-y: auto; }
         .stage { aspect-ratio: 16 / 9; max-height: calc(100vh - 190px); border-radius: 14px; }
         .watch-info { padding: 18px 2px 0; }
         .watch-title { font-size: 20px; }
-        .watch-side { border-top: none; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+        .watch-side { flex: 0 0 400px; border-top: none; border: 1px solid var(--line);
+                      border-radius: 14px; overflow-y: auto; overscroll-behavior: contain; }
+        .watch-side .side-head { position: sticky; top: 0; z-index: 1; background: var(--bg); }
     }
     @media (max-width: 900px) {
         .watch { display: flex; flex-direction: column; }
@@ -490,6 +526,7 @@ enum WebClientHTML {
                     <button class="nav-arrow prev" id="arrow-prev"><svg class="ico" viewBox="0 0 24 24"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg></button>
                     <button class="nav-arrow next" id="arrow-next"><svg class="ico" viewBox="0 0 24 24"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg></button>
                 </div>
+                <div class="chapters hidden" id="chapters"></div>
                 <div class="watch-info">
                     <h2 class="watch-title" id="watch-title"></h2>
                     <div class="watch-sub" id="watch-sub"></div>
@@ -530,6 +567,9 @@ enum WebClientHTML {
     var SHORT_MAX_DURATION = 60;   // 「ショート棚」に載せる動画の最大長
     var ALL_MEDIA_TTL = 60000;     // 全件リストのキャッシュ寿命（ミリ秒）
     var FEED_CHUNK = 12;
+    var SHELF_SIZE = 15;           // 棚1枚に並べるショートの本数
+    var CHAPTER_COUNT = 10;        // 再生画面の下に出す「10等分」サムネの枚数
+    var CHAPTER_MIN_DURATION = 20; // これより短い動画では出さない（秒）
 
     var state = {
         tab: 'home',
@@ -539,11 +579,17 @@ enum WebClientHTML {
         homeAll: [],        // シャッフル済み全動画
         homeFiltered: [],   // 検索適用後（フィードと再生リストの実体）
         homeRendered: 0,
+        shortsDeck: [],     // 棚に配るショートの山札（描画中は固定）
+        shelfPlan: {},      // 棚を挟むフィード位置
+        shelfOrdinal: 0,    // 何枚目の棚か（山札を切り出す位置に使う）
+        feedCols: 1,
         currentAlbum: null,
         albumRaw: [],
         albumFiltered: [],
         playerOrigin: null,
         playerIndex: 0,
+        chapterTimes: [],   // 10等分サムネの各時刻（秒）
+        chapterToken: 0,    // 動画を切り替えたら古い読み込みを打ち切るための番号
         quality: '1080p',
         mangaMode: localStorage.getItem('isMangaMode') === 'true',
         shortsPool: [],
@@ -597,13 +643,6 @@ enum WebClientHTML {
         if (diff < 2592000) return Math.floor(diff / 86400) + '日前';
         if (diff < 31536000) return Math.floor(diff / 2592000) + 'か月前';
         return Math.floor(diff / 31536000) + '年前';
-    }
-
-    // 決定的な文字列ハッシュ（棚の中身を再描画のたびに変えないため）
-    function hashStr(s) {
-        var h = 2166136261 >>> 0;
-        for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-        return h >>> 0;
     }
 
     function shuffle(arr) {
@@ -785,27 +824,61 @@ enum WebClientHTML {
             return;
         }
         el('home-state').classList.add('hidden');
+        // ショートの山札は読み込み（と検索・更新）のたびに切り直す。
+        // 描画中は固定なので、スクロールで棚が作り直されても中身は動かない。
+        state.shortsDeck = shuffle(state.homeFiltered.filter(isShortVideo));
+        rerenderHomeFeed();
+    }
+
+    function rerenderHomeFeed() {
+        state.homeRendered = 0;
+        state.shelfOrdinal = 0;
+        state.feedCols = feedColumns();
+        state.shelfPlan = buildShelfPlan(state.homeFiltered.length, state.feedCols);
+        el('home-feed').innerHTML = '';
         renderHomeChunk();
     }
 
-    // ショート棚を挟む位置（index 1、以降は 4〜10 本おき）— iOS版と同じ規則
-    function isShelfIndex(i) {
-        if (i === 1) return true;
-        if (i < 1) return false;
-        var cur = 1, seed = 12345;
-        while (cur < i) {
-            seed = (Math.imul(seed, 1103515245) + 12345) | 0;
-            cur += 4 + (Math.abs(seed) % 7);
-            if (cur === i) return true;
-        }
-        return false;
+    /// フィードが何列で並んでいるか。棚の間隔をこれで決める。
+    function feedColumns() {
+        if (!isDesktop()) return 1;
+        var feed = el('home-feed');
+        var tracks = getComputedStyle(feed).gridTemplateColumns.split(' ').filter(function (s) {
+            return s && s !== 'none';
+        }).length;
+        if (tracks > 0) return tracks;
+        return Math.max(1, Math.floor((feed.clientWidth || 0) / 326));
     }
 
-    function shelfVideos(shelfIndex, shorts) {
-        var byKey = function (mul) {
-            return function (a, b) { return (hashStr(a.id) ^ (shelfIndex * mul)) - (hashStr(b.id) ^ (shelfIndex * mul)); };
-        };
-        return shorts.slice().sort(byKey(1)).slice(0, 15).sort(byKey(2));
+    /// 棚を挟む位置をあらかじめ決める。
+    /// Mac は1行に何本も並ぶので「何本おき」で数えると棚だらけになる。行数で数える。
+    function buildShelfPlan(total, cols) {
+        var plan = {};
+        if (total < 2) return plan;
+        var at = cols > 1 ? cols * 2 - 1 : 1;   // Mac は横動画を2行見せてから最初の棚
+        var seed = 12345;
+        while (at < total) {
+            plan[at] = true;
+            seed = (Math.imul(seed, 1103515245) + 12345) | 0;
+            at += cols > 1
+                ? cols * (2 + (Math.abs(seed) % 3))   // Mac: 2〜4行おき
+                : 4 + (Math.abs(seed) % 7);           // スマホ: 4〜10本おき（iOS版と同じ）
+        }
+        return plan;
+    }
+
+    /// 棚ごとに山札の違う区間を配る。
+    /// 棚ごとに無作為抽出すると偶然かぶるので、順に切り出して重複を避ける。
+    function shelfVideos(ordinal) {
+        var deck = state.shortsDeck;
+        if (!deck.length) return [];
+        var per = Math.min(SHELF_SIZE, deck.length);
+        // 山札が棚1枚に満たないときは全部出すしかないので、開始位置だけずらして並びを変える
+        var stride = deck.length > per ? per : Math.max(1, Math.floor(deck.length / 3));
+        var start = (ordinal * stride) % deck.length;
+        var out = [];
+        for (var i = 0; i < per; i++) out.push(deck[(start + i) % deck.length]);
+        return out;
     }
 
     function feedCardHTML(v, index) {
@@ -821,8 +894,8 @@ enum WebClientHTML {
             '</div></div>';
     }
 
-    function shelfHTML(shelfIndex, shorts) {
-        var items = shelfVideos(shelfIndex, shorts);
+    function shelfHTML(ordinal) {
+        var items = shelfVideos(ordinal);
         if (!items.length) return '';
         var cards = '';
         for (var i = 0; i < items.length; i++) {
@@ -840,14 +913,21 @@ enum WebClientHTML {
     function renderHomeChunk() {
         var list = state.homeFiltered;
         if (state.homeRendered >= list.length) return;
-        var shorts = list.filter(isShortVideo);
         var end = Math.min(state.homeRendered + FEED_CHUNK, list.length);
+        var hasShorts = state.shortsDeck.length > 0;
         var html = '';
         for (var i = state.homeRendered; i < end; i++) {
             html += feedCardHTML(list[i], i);
-            if (isShelfIndex(i) && shorts.length) html += shelfHTML(i, shorts);
+            if (hasShorts && state.shelfPlan[i]) {
+                html += shelfHTML(state.shelfOrdinal);
+                state.shelfOrdinal++;
+            }
         }
-        if (end === list.length && list.length <= 1 && shorts.length) html += shelfHTML(1, shorts);
+        // 動画が少なく棚を挟む位置が取れなかったときは、最後に1枚だけ付ける
+        if (end === list.length && hasShorts && state.shelfOrdinal === 0) {
+            html += shelfHTML(0);
+            state.shelfOrdinal++;
+        }
         el('home-feed').insertAdjacentHTML('beforeend', html);
         state.homeRendered = end;
     }
@@ -1069,16 +1149,90 @@ enum WebClientHTML {
             }
             video.addEventListener('timeupdate', function () {
                 if (video.currentTime > 2) localStorage.setItem('resume_' + media.id, String(video.currentTime));
+                updateActiveChapter(video.currentTime);
             });
             video.addEventListener('ended', function () { navMedia(1); });
             stage.appendChild(video);
             video.play().catch(function () {});
         }
 
+        renderChapters(media);
         renderUpNext();
         if (push !== false) {
             history.pushState({ view: 'player', origin: origin, index: index, tab: state.tab }, '', '#watch/' + media.id);
         }
+    }
+
+    /// 動画を10等分した地点のサムネを並べる。押すとその時間へ飛ぶ。
+    function renderChapters(media) {
+        var strip = el('chapters');
+        state.chapterToken++;
+        state.chapterTimes = [];
+        strip.innerHTML = '';
+
+        // 写真と、区切っても意味がない短い動画では出さない。
+        // サーバーのサムネ名は秒を切り捨てた整数なので、刻みが1秒未満だと同じ絵が並んでしまう。
+        if (isPhoto(media) || !(media.duration > CHAPTER_MIN_DURATION)) {
+            strip.classList.add('hidden');
+            return;
+        }
+        strip.classList.remove('hidden');
+
+        var html = '';
+        for (var i = 0; i < CHAPTER_COUNT; i++) {
+            // 先頭は真っ黒なことが多いので少しだけ後ろの絵を使う（飛び先も同じ位置）
+            var t = Math.floor(media.duration * (i === 0 ? 0.01 : i / CHAPTER_COUNT));
+            state.chapterTimes.push(t);
+            html += '<button class="chapter" data-action="seek" data-time="' + t + '" title="' + formatDur(t) + ' へ移動">' +
+                '<span class="chapter-thumb"><img alt="" decoding="async" data-src="' +
+                    esc(thumbURL(media.id, true) + '&time=' + t) + '"></span>' +
+                '<span class="chapter-time">' + formatDur(t) + '</span></button>';
+        }
+        strip.innerHTML = html;
+        loadChaptersInOrder(strip, state.chapterToken);
+        updateActiveChapter(0);
+    }
+
+    /// 10枚を一斉に要求すると、サーバーのフレーム抽出と接続数を動画本体の読み込みと奪い合う。
+    /// 2本ずつ順番に読ませて、再生を妨げないようにする。
+    function loadChaptersInOrder(strip, token) {
+        var imgs = Array.prototype.slice.call(strip.querySelectorAll('img[data-src]'));
+        var cursor = 0;
+        function startNext() {
+            if (token !== state.chapterToken) return;   // 別の動画に切り替わったら打ち切る
+            if (cursor >= imgs.length) return;
+            var img = imgs[cursor++];
+            var url = img.getAttribute('data-src');
+            img.removeAttribute('data-src');
+            var advanced = false;
+            var advance = function () { if (!advanced) { advanced = true; startNext(); } };
+            img.onload = function () { thumbLoaded(img); advance(); };
+            img.onerror = function () { thumbFailed(img); advance(); };
+            img.src = url;
+        }
+        startNext();
+        startNext();
+    }
+
+    function updateActiveChapter(currentTime) {
+        var times = state.chapterTimes;
+        if (!times.length) return;
+        var active = 0;
+        for (var i = 0; i < times.length; i++) {
+            if (currentTime >= times[i]) active = i;
+        }
+        var nodes = el('chapters').children;
+        for (var j = 0; j < nodes.length; j++) {
+            nodes[j].classList.toggle('active', j === active);
+        }
+    }
+
+    function seekTo(seconds) {
+        var video = document.querySelector('#main-media');
+        if (!video || video.tagName !== 'VIDEO') return;
+        video.currentTime = seconds;
+        updateActiveChapter(seconds);
+        video.play().catch(function () {});
     }
 
     function renderUpNext() {
@@ -1117,6 +1271,11 @@ enum WebClientHTML {
             if (media.tagName === 'VIDEO') { media.pause(); media.removeAttribute('src'); media.load(); }
             media.remove();
         }
+        // 閉じたあともサムネ読み込みが走り続けないよう、合図の番号を進めて打ち切る
+        state.chapterToken++;
+        state.chapterTimes = [];
+        el('chapters').innerHTML = '';
+        el('chapters').classList.add('hidden');
         el('player-modal').classList.remove('open');
         document.body.style.overflow = '';
         if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
@@ -1161,7 +1320,7 @@ enum WebClientHTML {
             state.allVideosAt = 0;
             if (!list.length) { closePlayer(); return; }
             openMedia(state.playerOrigin, Math.min(state.playerIndex, list.length - 1), false);
-            if (state.tab === 'home') { state.homeRendered = 0; el('home-feed').innerHTML = ''; renderHomeChunk(); }
+            if (state.tab === 'home') rerenderHomeFeed();
             if (state.currentAlbum) renderAlbumGrid();
         }).catch(function (e) {
             if (!(e instanceof AuthError)) toast('削除に失敗しました');
@@ -1283,21 +1442,59 @@ enum WebClientHTML {
         if (video && !video.paused) video.pause();
     }
     function resumeShorts() {
-        if (state.shortsPool.length && el('shorts-video').getAttribute('src')) tryPlayShorts();
+        if (!state.shortsPool.length || !el('shorts-video').getAttribute('src')) return;
+        // タブを離れている間に幅が変わっていることがあるので、枠を測り直してから再生する
+        applyShortsZoom();
+        updateZoomHint();
+        tryPlayShorts();
     }
+
+    var PHONE_ASPECT = 9 / 16;
 
     function applyShortsZoom() {
         var video = el('shorts-video');
         var frame = el('shorts-frame');
         var val = state.shortsZoom / 100;
+        var videoAspect = (video.videoWidth && video.videoHeight) ? (video.videoWidth / video.videoHeight) : 0;
+
+        if (isDesktop()) {
+            // Mac: 映像を切り取って拡大するのではなく「枠そのもの」を動画の形に近づける。
+            // 高さは常に目一杯なので、横長の動画ほど枠が横に広がって大きく見える。
+            video.style.transform = 'scale(1)';
+            var stage = el('shorts-stage');
+            var railW = el('shorts-rail-d').offsetWidth || 48;
+            var availH = Math.max(200, stage.clientHeight - 32);
+            var availW = Math.max(200, stage.clientWidth - railW - 26);
+            var target = videoAspect
+                ? PHONE_ASPECT + (videoAspect - PHONE_ASPECT) * val
+                : PHONE_ASPECT;
+            target = Math.max(0.3, target);
+            var w = availH * target, h = availH;
+            if (w > availW) { w = availW; h = w / target; }
+            frame.style.width = Math.round(w) + 'px';
+            frame.style.height = Math.round(h) + 'px';
+            return;
+        }
+
+        // スマホ: 枠は画面いっぱいのまま、映像を拡大して余白を埋める（従来どおり）
+        frame.style.width = '';
+        frame.style.height = '';
         if (!val) { video.style.transform = 'scale(1)'; return; }
         var viewAspect = frame.clientWidth / Math.max(1, frame.clientHeight);
-        var videoAspect = (video.videoWidth && video.videoHeight) ? (video.videoWidth / video.videoHeight) : viewAspect;
-        var fill = videoAspect > viewAspect
-            ? frame.clientHeight / (frame.clientWidth / videoAspect)
-            : frame.clientWidth / (frame.clientHeight * videoAspect);
+        var srcAspect = videoAspect || viewAspect;
+        var fill = srcAspect > viewAspect
+            ? frame.clientHeight / (frame.clientWidth / srcAspect)
+            : frame.clientWidth / (frame.clientHeight * srcAspect);
         fill = Math.max(1, fill);
         video.style.transform = 'scale(' + (1 + (fill - 1) * val) + ')';
+    }
+
+    function updateZoomHint() {
+        var hint = el('shorts-zoom-hint');
+        if (!hint) return;
+        hint.textContent = isDesktop()
+            ? (state.shortsZoom === 0 ? '縦型の枠（9:16）' : '枠を広げて大きく表示 ' + state.shortsZoom + '%')
+            : (state.shortsZoom === 0 ? '全体を表示' : '拡大して余白を埋める ' + state.shortsZoom + '%');
     }
 
     function railButton(id, title, svg, on) {
@@ -1333,6 +1530,7 @@ enum WebClientHTML {
             renderShortsRail();
         } else if (action === 'zoom') {
             el('shorts-zoom').classList.toggle('hidden');
+            updateZoomHint();
         } else if (action === 'full') {
             // ショートの並びをそのまま再生リストにしてウォッチ画面を重ねる。
             // ホームの再生リストには触らない（表示中のカードと再生対象がずれるため）。
@@ -1413,16 +1611,25 @@ enum WebClientHTML {
         var zoomBox = document.createElement('div');
         zoomBox.className = 'shorts-zoom hidden';
         zoomBox.id = 'shorts-zoom';
-        zoomBox.innerHTML = '<label>サイズ調整</label><input type="range" id="shorts-zoom-range" min="0" max="100" value="' + state.shortsZoom + '">';
+        zoomBox.innerHTML = '<label id="shorts-zoom-label">表示サイズ</label>' +
+            '<input type="range" id="shorts-zoom-range" min="0" max="100" value="' + state.shortsZoom + '">' +
+            '<div class="hint" id="shorts-zoom-hint"></div>';
         el('shorts-frame').appendChild(zoomBox);
         zoomBox.addEventListener('click', function (e) { e.stopPropagation(); });
         el('shorts-zoom-range').addEventListener('input', function () {
             state.shortsZoom = parseInt(this.value, 10);
             localStorage.setItem('shortsZoom', String(state.shortsZoom));
             applyShortsZoom();
+            updateZoomHint();
         });
+        updateZoomHint();
 
-        window.addEventListener('resize', function () { if (state.tab === 'shorts') applyShortsZoom(); });
+        // 非表示のときに測ると 0 になるので、ショートタブを見ているときだけ測り直す
+        window.addEventListener('resize', function () {
+            if (state.tab !== 'shorts') return;
+            applyShortsZoom();
+            updateZoomHint();
+        });
         document.addEventListener('visibilitychange', function () {
             if (document.hidden) pauseShorts();
         });
@@ -1490,6 +1697,7 @@ enum WebClientHTML {
             if (action === 'play-home') openMedia('home', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-album') openMedia('album', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-index') { openMedia(state.playerOrigin, parseInt(target.dataset.index, 10), false); }
+            else if (action === 'seek') seekTo(parseFloat(target.dataset.time));
             else if (action === 'open-album') openAlbum(target.dataset.id, true);
             else if (action === 'play-short') startShortsWith(target.dataset.id, state.homeAll, 'おすすめショート');
         });
