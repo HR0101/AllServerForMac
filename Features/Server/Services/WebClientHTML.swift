@@ -145,6 +145,37 @@ enum WebClientHTML {
     }
     .badge-photo { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.7); color: var(--accent); font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
 
+    /* サムネ下端の視聴済みバー */
+    .watched { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,0.55); }
+    .watched-fill { height: 100%; background: var(--accent); }
+
+    /* 「続きを見る」列 */
+    .crow { background: rgba(255,255,255,0.028); border-bottom: 1px solid var(--line); padding: 18px 0 20px; }
+    .crow.hidden { display: none; }
+    .crow-head { display: flex; align-items: center; gap: 9px; padding: 0 16px 14px; font-size: 17px; font-weight: 800; }
+    .crow-head .ico { color: var(--accent); }
+    .crow-row {
+        display: flex; gap: 12px; overflow-x: auto; padding: 0 16px 6px;
+        scroll-padding-left: 16px; -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent;
+    }
+    .crow-row::-webkit-scrollbar { height: 6px; }
+    .crow-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+    .cw-card { flex: none; width: 200px; cursor: pointer; }
+    .cw-thumb { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+    .cw-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cw-card:hover .cw-thumb { border-color: rgba(217,186,115,0.5); }
+    .cw-title {
+        margin-top: 8px; font-size: 12.5px; font-weight: 600; line-height: 1.35;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .cw-left { margin-top: 3px; font-size: 11px; color: var(--text-2); }
+    @media (min-width: 901px) {
+        .crow-head, .crow-row { padding-left: 24px; padding-right: 24px; }
+        .crow-row { scroll-padding-left: 24px; }
+        .cw-card { width: 240px; }
+    }
+
     /* ============ ホームフィード ============ */
     .feed { display: grid; }
     @media (min-width: 901px) {
@@ -261,14 +292,30 @@ enum WebClientHTML {
         .shorts-frame { height: calc(100% - 32px); width: auto; aspect-ratio: 9 / 16; border-radius: 16px; border: 1px solid var(--line); }
     }
     .shorts-frame video { width: 100%; height: 100%; object-fit: contain; display: block; transition: transform 0.12s; background: #000; }
-    .shorts-overlay { position: absolute; inset: auto 0 0 0; padding: 16px 16px 20px; pointer-events: none;
+    /* z-index を持たせないと、下の .shorts-tap（z-index:1）に覆われてシークバーを掴めない */
+    .shorts-overlay { position: absolute; inset: auto 0 0 0; padding: 16px 16px 20px; pointer-events: none; z-index: 3;
         background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.35) 55%, transparent); }
     @media (max-width: 900px) { .shorts-overlay { padding-right: 76px; } }
     .shorts-count { font-size: 11.5px; color: var(--accent); font-weight: 700; letter-spacing: 0.5px; }
     .shorts-title { font-size: 15px; font-weight: 700; margin: 4px 0 10px; text-shadow: 0 2px 6px rgba(0,0,0,0.9);
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .shorts-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.25); cursor: pointer; pointer-events: auto; position: relative; }
+    .shorts-bar {
+        height: 8px; border-radius: 4px; background: rgba(255,255,255,0.25); cursor: pointer;
+        pointer-events: auto; position: relative; transition: height 0.12s;
+        touch-action: none;  /* ドラッグをブラウザのスクロール操作に取られないようにする */
+    }
+    /* 見た目は細いまま、指で掴める高さの当たり判定を足す */
+    .shorts-bar::before { content: ''; position: absolute; left: 0; right: 0; top: -13px; bottom: -13px; }
+    .shorts-bar.scrubbing { height: 12px; }
     .shorts-bar-fill { height: 100%; width: 0%; border-radius: 4px; background: var(--accent); pointer-events: none; }
+    .shorts-bar-knob {
+        position: absolute; top: 50%; left: 0; width: 16px; height: 16px; margin-left: -8px;
+        border-radius: 50%; background: var(--accent); transform: translateY(-50%);
+        pointer-events: none; box-shadow: 0 1px 5px rgba(0,0,0,0.6);
+        opacity: 0; transition: opacity 0.12s;
+    }
+    .shorts-bar:hover .shorts-bar-knob, .shorts-bar.scrubbing .shorts-bar-knob { opacity: 1; }
+    @media (hover: none) { .shorts-bar-knob { opacity: 1; } }
     .shorts-rail { position: absolute; right: 12px; bottom: 24px; display: flex; flex-direction: column; gap: 14px; z-index: 3; }
     @media (min-width: 901px) { .shorts-rail { position: static; justify-content: flex-end; padding-bottom: 24px; } }
     .rail-btn {
@@ -462,6 +509,7 @@ enum WebClientHTML {
     <main class="content" id="content">
 
         <section class="tab-panel active" id="panel-home">
+            <div class="crow hidden" id="continue-row"></div>
             <div class="feed" id="home-feed"></div>
             <div id="home-sentinel" style="height:1px"></div>
             <div class="state-box" id="home-state"><div class="spinner"></div><div>読み込み中...</div></div>
@@ -476,7 +524,10 @@ enum WebClientHTML {
                     <div class="shorts-overlay">
                         <div class="shorts-count" id="shorts-count"></div>
                         <div class="shorts-title" id="shorts-title"></div>
-                        <div class="shorts-bar" id="shorts-bar"><div class="shorts-bar-fill" id="shorts-bar-fill"></div></div>
+                        <div class="shorts-bar" id="shorts-bar">
+                            <div class="shorts-bar-fill" id="shorts-bar-fill"></div>
+                            <div class="shorts-bar-knob" id="shorts-bar-knob"></div>
+                        </div>
                     </div>
                     <div class="shorts-rail mobile-only" id="shorts-rail-m"></div>
                 </div>
@@ -538,7 +589,8 @@ enum WebClientHTML {
                         </select>
                         <button class="pill" id="manga-toggle">通常モード</button>
                         <button class="pill" id="watch-shorts">ショートで見る</button>
-                        <button class="pill danger" id="delete-btn">削除</button>
+                        <button class="pill" id="trash-btn">ゴミ箱へ</button>
+                        <button class="pill danger" id="purge-btn">完全に削除</button>
                     </div>
                 </div>
             </div>
@@ -591,6 +643,7 @@ enum WebClientHTML {
         chapterTimes: [],   // 10等分サムネの各時刻（秒）
         chapterToken: 0,    // 動画を切り替えたら古い読み込みを打ち切るための番号
         quality: '1080p',
+        progress: {},       // {videoID: {t: 秒, at: 最後に見た時刻}}
         mangaMode: localStorage.getItem('isMangaMode') === 'true',
         shortsPool: [],
         shortsIndex: 0,
@@ -599,6 +652,7 @@ enum WebClientHTML {
         shortsMuted: localStorage.getItem('shortsMuted') !== 'false',
         shortsZoom: parseInt(localStorage.getItem('shortsZoom') || '0', 10),
         shortsReady: false,
+        isScrubbing: false,   // ショートのシークバーをドラッグ中か
         loading: false
     };
 
@@ -643,6 +697,90 @@ enum WebClientHTML {
         if (diff < 2592000) return Math.floor(diff / 86400) + '日前';
         if (diff < 31536000) return Math.floor(diff / 2592000) + 'か月前';
         return Math.floor(diff / 31536000) + '年前';
+    }
+
+    // ======================= 視聴位置の記録 =======================
+    // 旧版は resume_<id> に秒数だけ入れていた。並べ替えに「最後に見た時刻」が要るので
+    // 1つの辞書にまとめ直す。古いキーは読み取りだけ引き継ぐ。
+    var PROGRESS_KEY = 'mms_progress';
+    var PROGRESS_MAX = 300;
+    var progressSaveTimer = null;
+
+    function loadProgress() {
+        try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') || {}; }
+        catch (e) { return {}; }
+    }
+
+    function resumeSecondsFor(video) {
+        var entry = state.progress[video.id];
+        if (entry && entry.t > 0) return entry.t;
+        var legacy = parseFloat(localStorage.getItem('resume_' + video.id) || '0');
+        return isFinite(legacy) ? legacy : 0;
+    }
+
+    function progressFor(video) {
+        if (!(video.duration > 0)) return 0;
+        return Math.max(0, Math.min(1, resumeSecondsFor(video) / video.duration));
+    }
+
+    function setProgress(id, seconds) {
+        state.progress[id] = { t: seconds, at: Date.now() };
+        scheduleProgressSave();
+    }
+
+    function clearProgress(id) {
+        delete state.progress[id];
+        localStorage.removeItem('resume_' + id);
+        scheduleProgressSave();
+    }
+
+    function scheduleProgressSave() {
+        if (progressSaveTimer) return;
+        progressSaveTimer = setTimeout(function () {
+            progressSaveTimer = null;
+            var ids = Object.keys(state.progress);
+            if (ids.length > PROGRESS_MAX) {
+                // 古いものから捨てて localStorage を太らせない
+                ids.sort(function (a, b) { return (state.progress[b].at || 0) - (state.progress[a].at || 0); });
+                var trimmed = {};
+                for (var i = 0; i < PROGRESS_MAX; i++) trimmed[ids[i]] = state.progress[ids[i]];
+                state.progress = trimmed;
+            }
+            try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(state.progress)); } catch (e) {}
+        }, 2000);
+    }
+
+    /// 見終わった／始めていないものにはバーを出さない
+    function isPartiallyWatched(v) {
+        var p = progressFor(v);
+        return p > 0.02 && p < 0.98;
+    }
+
+    function watchedBarHTML(v) {
+        if (!isPartiallyWatched(v)) return '';
+        return '<div class="watched"><div class="watched-fill" style="width:' +
+            (progressFor(v) * 100).toFixed(1) + '%"></div></div>';
+    }
+
+    function findVideoByID(id) {
+        var pools = [state.homeAll, state.albumRaw, state.shortsPool];
+        for (var p = 0; p < pools.length; p++) {
+            for (var i = 0; i < pools[p].length; i++) if (pools[p][i].id === id) return pools[p][i];
+        }
+        return null;
+    }
+
+    /// 再生画面から戻ったときに、描画済みのカードのバーだけ差し替える（一覧は作り直さない）
+    function refreshWatchedBars() {
+        var nodes = document.querySelectorAll('[data-watch-id]');
+        for (var i = 0; i < nodes.length; i++) {
+            var v = findVideoByID(nodes[i].getAttribute('data-watch-id'));
+            if (!v) continue;
+            var bar = nodes[i].querySelector('.watched');
+            if (!isPartiallyWatched(v)) { if (bar) bar.remove(); continue; }
+            if (bar) bar.firstElementChild.style.width = (progressFor(v) * 100).toFixed(1) + '%';
+            else nodes[i].insertAdjacentHTML('beforeend', watchedBarHTML(v));
+        }
     }
 
     function shuffle(arr) {
@@ -781,8 +919,45 @@ enum WebClientHTML {
     function applyLocation(push) {
         var h = (location.hash || '').replace(/^#/, '');
         if (h.indexOf('album/') === 0) { showTab('albums', false, true); openAlbum(h.slice(6), false); return; }
+        if (h.indexOf('watch/') === 0) {
+            // 共有された動画リンク。履歴の起点をホームに直してから重ねるので、
+            // 「戻る」でサイトの外に出ずホームへ帰れる。
+            var wantID = h.slice(6);
+            history.replaceState({ view: 'tab', tab: 'home' }, '', '#home');
+            showTab('home', false);
+            openDeepLink(wantID);
+            return;
+        }
         if (h === 'shorts' || h === 'albums' || h === 'home') { showTab(h, push); return; }
         showTab('home', push);
+    }
+
+    function indexOfID(list, id) {
+        for (var i = 0; i < list.length; i++) if (list[i].id === id) return i;
+        return -1;
+    }
+
+    /// #watch/<id> で開かれたメディアを探して再生する。
+    /// 動画はホームの並びから、写真はホームに含まれないので ALL PHOTOS から探す。
+    function openDeepLink(id) {
+        ensureHome().then(function () {
+            var idx = indexOfID(state.homeFiltered, id);
+            if (idx >= 0) { openMedia('home', idx, true); return; }
+
+            var photoAlbum = null;
+            for (var i = 0; i < state.albums.length; i++) {
+                if (state.albums[i].name === 'ALL PHOTOS') photoAlbum = state.albums[i];
+            }
+            if (!photoAlbum) { toast('このメディアは見つかりませんでした'); return; }
+            showTab('albums', false, true);
+            return openAlbum(photoAlbum.id, false).then(function () {
+                var j = indexOfID(state.albumFiltered, id);
+                if (j >= 0) openMedia('album', j, true);
+                else toast('このメディアは見つかりませんでした');
+            });
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('このメディアは見つかりませんでした');
+        });
     }
 
     window.addEventListener('popstate', function (e) {
@@ -799,16 +974,21 @@ enum WebClientHTML {
     });
 
     // ======================= ホームフィード =======================
+    // 直リンク（#watch/<id>）から待ち合わせるため、読み込み中の Promise を使い回す
+    var homeLoadPromise = null;
     function ensureHome() {
-        if (state.homeAll.length) return;
+        if (state.homeAll.length) return Promise.resolve();
+        if (homeLoadPromise) return homeLoadPromise;
         el('home-state').classList.remove('hidden');
-        loadAllVideos(false).then(function (vids) {
+        homeLoadPromise = loadAllVideos(false).then(function (vids) {
             state.homeAll = shuffle(vids);
             applyHomeFilter();
         }).catch(function (e) {
-            if (e instanceof AuthError) return;
-            el('home-state').innerHTML = '<div>読み込みに失敗しました</div>';
+            if (!(e instanceof AuthError)) el('home-state').innerHTML = '<div>読み込みに失敗しました</div>';
+        }).then(function () {
+            homeLoadPromise = null;
         });
+        return homeLoadPromise;
     }
 
     function applyHomeFilter() {
@@ -819,6 +999,8 @@ enum WebClientHTML {
         state.homeRendered = 0;
         el('home-feed').innerHTML = '';
         if (!state.homeFiltered.length) {
+            el('continue-row').innerHTML = '';
+            el('continue-row').classList.add('hidden');
             el('home-state').classList.remove('hidden');
             el('home-state').innerHTML = '<div>' + (q ? '一致する動画がありません' : '動画がありません') + '</div>';
             return;
@@ -827,7 +1009,39 @@ enum WebClientHTML {
         // ショートの山札は読み込み（と検索・更新）のたびに切り直す。
         // 描画中は固定なので、スクロールで棚が作り直されても中身は動かない。
         state.shortsDeck = shuffle(state.homeFiltered.filter(isShortVideo));
+        renderContinueRow();
         rerenderHomeFeed();
+    }
+
+    /// 途中まで見た動画を、最後に見た順に並べる
+    function renderContinueRow() {
+        var host = el('continue-row');
+        var items = [];
+        for (var i = 0; i < state.homeFiltered.length; i++) {
+            var v = state.homeFiltered[i];
+            if (!isPartiallyWatched(v)) continue;
+            var entry = state.progress[v.id];
+            items.push({ v: v, at: entry ? (entry.at || 0) : 0 });
+        }
+        if (!items.length) { host.innerHTML = ''; host.classList.add('hidden'); return; }
+        items.sort(function (a, b) { return b.at - a.at; });
+        items = items.slice(0, 20);
+
+        var cards = '';
+        for (var j = 0; j < items.length; j++) {
+            var vid = items[j].v;
+            var left = Math.max(0, vid.duration - resumeSecondsFor(vid));
+            cards += '<div class="cw-card" data-action="play-continue" data-id="' + esc(vid.id) + '">' +
+                '<div class="cw-thumb" data-watch-id="' + esc(vid.id) + '">' + imgTag(thumbURL(vid.id, true), '') +
+                    '<div class="badge-dur">残り ' + formatDur(left) + '</div>' + watchedBarHTML(vid) + '</div>' +
+                '<div class="cw-title">' + esc(cleanTitle(vid.filename)) + '</div>' +
+                '<div class="cw-left">' + Math.round(progressFor(vid) * 100) + '% 視聴済み</div></div>';
+        }
+        host.innerHTML =
+            '<div class="crow-head"><span class="ico"><svg class="ico" viewBox="0 0 24 24" fill="currentColor">' +
+            '<path d="M12 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7zm1 4h-2v6l5 3 1-1.7-4-2.3z"/></svg></span>続きを見る</div>' +
+            '<div class="crow-row">' + cards + '</div>';
+        host.classList.remove('hidden');
     }
 
     function rerenderHomeFeed() {
@@ -884,7 +1098,8 @@ enum WebClientHTML {
     function feedCardHTML(v, index) {
         var dur = !isPhoto(v) && v.duration > 0 ? '<div class="badge-dur">' + formatDur(v.duration) + '</div>' : '';
         return '<div class="feed-card" data-action="play-home" data-index="' + index + '">' +
-            '<div class="feed-thumb" data-id="' + esc(v.id) + '">' + imgTag(thumbURL(v.id, true), '') + dur + '</div>' +
+            '<div class="feed-thumb" data-id="' + esc(v.id) + '" data-watch-id="' + esc(v.id) + '">' +
+                imgTag(thumbURL(v.id, true), '') + dur + watchedBarHTML(v) + '</div>' +
             '<div class="feed-meta">' +
                 '<div class="avatar"><svg class="ico-s" viewBox="0 0 24 24"><path d="M10 8.6 15.5 12 10 15.4zM21 6.5c-.2-1.7-.9-2.9-2.7-3.1C16.4 3.1 13.9 3 12 3s-4.4.1-6.3.4C3.9 3.6 3.2 4.8 3 6.5 2.9 7.7 2.8 9.3 2.8 12s.1 4.3.2 5.5c.2 1.7.9 2.9 2.7 3.1 1.9.3 4.4.4 6.3.4s4.4-.1 6.3-.4c1.8-.2 2.5-1.4 2.7-3.1.1-1.2.2-2.8.2-5.5s-.1-4.3-.2-5.5"/></svg></div>' +
                 '<div class="feed-text">' +
@@ -1016,7 +1231,7 @@ enum WebClientHTML {
             return null;
         });
 
-        go.then(function (a) {
+        return go.then(function (a) {
             if (!a) { toast('アルバムが見つかりません'); return; }
             state.currentAlbum = a;
             el('albums-list').classList.add('hidden');
@@ -1076,7 +1291,8 @@ enum WebClientHTML {
             var badge = photo ? '<div class="badge-photo">写真</div>'
                 : (v.duration > 0 ? '<div class="badge-dur">' + formatDur(v.duration) + '</div>' : '');
             html += '<div class="media-card" data-action="play-album" data-index="' + i + '">' +
-                '<div class="media-thumb">' + imgTag(thumbURL(v.id, !photo), '') + badge + '</div>' +
+                '<div class="media-thumb" data-watch-id="' + esc(v.id) + '">' +
+                    imgTag(thumbURL(v.id, !photo), '') + badge + watchedBarHTML(v) + '</div>' +
                 '<div class="media-name" title="' + esc(v.filename) + '">' + esc(cleanTitle(v.filename)) + '</div></div>';
         }
         el('media-grid').innerHTML = html;
@@ -1140,23 +1356,26 @@ enum WebClientHTML {
             video.controls = true;
             video.playsInline = true;
             video.src = mediaURL(media.id, state.quality);
-            var saved = localStorage.getItem('resume_' + media.id);
-            if (saved) {
+            var saved = resumeSecondsFor(media);
+            if (saved > 2) {
                 video.addEventListener('loadedmetadata', function () {
-                    var t = parseFloat(saved);
-                    if (t > 2 && (!video.duration || t < video.duration - 5)) video.currentTime = t;
+                    if (!video.duration || saved < video.duration - 5) video.currentTime = saved;
                 }, { once: true });
             }
             video.addEventListener('timeupdate', function () {
-                if (video.currentTime > 2) localStorage.setItem('resume_' + media.id, String(video.currentTime));
+                if (video.currentTime > 2) setProgress(media.id, video.currentTime);
                 updateActiveChapter(video.currentTime);
             });
-            video.addEventListener('ended', function () { navMedia(1); });
+            video.addEventListener('ended', function () {
+                clearProgress(media.id);   // 見終わったものは「続きを見る」から外す
+                navMedia(1);
+            });
             stage.appendChild(video);
             video.play().catch(function () {});
         }
 
         renderChapters(media);
+        updateRemovalButtons();
         renderUpNext();
         if (push !== false) {
             history.pushState({ view: 'player', origin: origin, index: index, tab: state.tab }, '', '#watch/' + media.id);
@@ -1247,7 +1466,8 @@ enum WebClientHTML {
             var photo = isPhoto(v);
             var badge = photo ? '' : (v.duration > 0 ? '<div class="badge-dur">' + formatDur(v.duration) + '</div>' : '');
             html += '<div class="un-item' + (i === state.playerIndex ? ' current' : '') + '" data-action="play-index" data-index="' + i + '">' +
-                '<div class="un-thumb">' + imgTag(thumbURL(v.id, !photo), '') + badge + '</div>' +
+                '<div class="un-thumb" data-watch-id="' + esc(v.id) + '">' +
+                    imgTag(thumbURL(v.id, !photo), '') + badge + watchedBarHTML(v) + '</div>' +
                 '<div class="un-info"><div class="un-title">' + esc(cleanTitle(v.filename)) + '</div>' +
                 '<div class="un-meta">' + (photo ? '写真' : '動画') + ' • ' + esc(albumNameOf(v)) + '</div></div></div>';
         }
@@ -1278,6 +1498,9 @@ enum WebClientHTML {
         el('chapters').classList.add('hidden');
         el('player-modal').classList.remove('open');
         document.body.style.overflow = '';
+        // 一覧は作り直さず、視聴済みバーと「続きを見る」だけ更新する（スクロール位置を保つため）
+        refreshWatchedBars();
+        if (state.tab === 'home' && state.homeFiltered.length) renderContinueRow();
         if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
         if (useHistory !== false) history.back();
     }
@@ -1301,29 +1524,78 @@ enum WebClientHTML {
         }, { once: true });
     }
 
-    function deleteCurrent() {
+    function libraryAlbumIDFor(media) {
+        var want = isPhoto(media) ? 'ALL PHOTOS' : 'ALL VIDEOS';
+        for (var i = 0; i < state.albums.length; i++) if (state.albums[i].name === want) return state.albums[i].id;
+        return null;
+    }
+
+    /// 通常アルバムを開いているときだけ「そのアルバムから外す」になる。
+    /// それ以外（ホーム／ALL VIDEOS・ALL PHOTOS）は「ゴミ箱へ」。
+    function removalContext(media) {
+        var a = state.currentAlbum;
+        if (state.playerOrigin === 'album' && a && a.name !== 'ALL VIDEOS' && a.name !== 'ALL PHOTOS') {
+            return { albumId: a.id, label: 'アルバムから外す', done: '「' + a.name + '」から外しました', confirm: null };
+        }
+        return {
+            albumId: libraryAlbumIDFor(media),
+            label: 'ゴミ箱へ',
+            done: 'ゴミ箱へ移動しました',
+            confirm: 'このメディアをゴミ箱へ移動します。（Macのアプリから元に戻せます）'
+        };
+    }
+
+    function updateRemovalButtons() {
+        var media = playlistFor(state.playerOrigin)[state.playerIndex];
+        if (!media) return;
+        var ctx = removalContext(media);
+        var btn = el('trash-btn');
+        btn.textContent = ctx.label;
+        // ALL VIDEOS / ALL PHOTOS が見つからないときは押しても意味がないので隠す
+        btn.classList.toggle('hidden', !ctx.albumId);
+    }
+
+    /// complete=true は実ファイルごと消す取り返しのつかない削除。
+    /// false はゴミ箱行き（または通常アルバムからの除外）。
+    function removeCurrent(complete) {
         var list = playlistFor(state.playerOrigin);
         var media = list[state.playerIndex];
         if (!media) return;
-        if (!confirm('このメディアをMacから完全に削除します。元に戻せません。よろしいですか？')) return;
-        api('/deleteVideosCompletely', {
+
+        var path, body, doneMsg;
+        if (complete) {
+            if (!confirm('このメディアをMacから完全に削除します。元に戻せません。よろしいですか？')) return;
+            path = '/deleteVideosCompletely';
+            body = { videoIds: [media.id] };
+            doneMsg = '完全に削除しました';
+        } else {
+            var ctx = removalContext(media);
+            if (!ctx.albumId) { toast('移動先のアルバムが見つかりません'); return; }
+            if (ctx.confirm && !confirm(ctx.confirm)) return;
+            path = '/deleteVideos';
+            body = { videoIds: [media.id], albumId: ctx.albumId };
+            doneMsg = ctx.done;
+        }
+
+        api(path, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ videoIds: [media.id] })
+            body: JSON.stringify(body)
         }).then(function () {
-            toast('削除しました');
+            toast(doneMsg);
             var removeFrom = function (arr) {
                 for (var i = arr.length - 1; i >= 0; i--) if (arr[i].id === media.id) arr.splice(i, 1);
             };
             removeFrom(state.allVideos); removeFrom(state.homeAll); removeFrom(state.homeFiltered);
             removeFrom(state.albumRaw); removeFrom(state.albumFiltered); removeFrom(state.shortsPool);
             state.allVideosAt = 0;
+            clearProgress(media.id);
             if (!list.length) { closePlayer(); return; }
             openMedia(state.playerOrigin, Math.min(state.playerIndex, list.length - 1), false);
-            if (state.tab === 'home') rerenderHomeFeed();
+            if (state.tab === 'home') { renderContinueRow(); rerenderHomeFeed(); }
             if (state.currentAlbum) renderAlbumGrid();
         }).catch(function (e) {
-            if (!(e instanceof AuthError)) toast('削除に失敗しました');
+            if (!(e instanceof AuthError)) toast('操作に失敗しました');
         });
     }
 
@@ -1378,7 +1650,9 @@ enum WebClientHTML {
 
         state.shortsClipStart = (v.duration > SHORTS_CLIP) ? Math.random() * (v.duration - SHORTS_CLIP) : 0;
         state.shortsReady = false;
-        el('shorts-bar-fill').style.width = '0%';
+        state.isScrubbing = false;
+        el('shorts-bar').classList.remove('scrubbing');
+        setShortsProgress(0);
         el('shorts-count').textContent = (state.shortsIndex + 1) + ' / ' + pool.length + ' • ' + state.shortsSource;
         el('shorts-title').textContent = cleanTitle(v.filename);
 
@@ -1424,6 +1698,39 @@ enum WebClientHTML {
             var url = mediaURL(next.id);
             if (preloadEl.getAttribute('src') !== url) { preloadEl.src = url; preloadEl.load(); }
         }, 1500);
+    }
+
+    /// いま再生しているクリップの長さ（秒）。まだ読めていなければ 0。
+    function shortsClipLength() {
+        var video = el('shorts-video');
+        if (!video.duration || !isFinite(video.duration)) return 0;
+        return Math.max(0.1, Math.min(SHORTS_CLIP, video.duration - state.shortsClipStart));
+    }
+
+    function setShortsProgress(pct) {
+        var p = Math.max(0, Math.min(1, pct)) * 100;
+        el('shorts-bar-fill').style.width = p + '%';
+        el('shorts-bar-knob').style.left = p + '%';
+    }
+
+    /// precise=false はドラッグ中。見た目は毎回更新しつつ、実際のシークは間引いて
+    /// 追従を軽くする（連続シークは読み込みが詰まりやすい）。
+    var lastScrubSeek = 0;
+    function scrubShortsTo(pct, precise) {
+        setShortsProgress(pct);
+        var clipLen = shortsClipLength();
+        if (!clipLen) return;
+        var now = Date.now();
+        if (!precise && now - lastScrubSeek < 120) return;
+        lastScrubSeek = now;
+
+        var video = el('shorts-video');
+        // 末尾ちょうどに合わせると自動送りが即発火してしまうので少し手前で止める
+        var target = state.shortsClipStart + clipLen * Math.min(pct, 0.995);
+        if (!precise && typeof video.fastSeek === 'function') {
+            try { video.fastSeek(target); return; } catch (err) {}
+        }
+        try { video.currentTime = target; } catch (err) {}
     }
 
     function nextShort() { playShortAt(state.shortsIndex + 1); }
@@ -1561,11 +1868,14 @@ enum WebClientHTML {
         });
 
         video.addEventListener('timeupdate', function () {
-            if (!video.duration || !isFinite(video.duration)) return;
-            var clipLen = Math.max(0.1, Math.min(SHORTS_CLIP, video.duration - state.shortsClipStart));
+            // ドラッグ中は再生位置にバーを引き戻さない。自動送りもここで止める
+            // （終端付近を掴んだだけで次の動画へ飛んでしまうため）。
+            if (state.isScrubbing) return;
+            var clipLen = shortsClipLength();
+            if (!clipLen) return;
             var elapsed = video.currentTime - state.shortsClipStart;
             if (elapsed >= clipLen) { nextShort(); return; }
-            el('shorts-bar-fill').style.width = Math.max(0, Math.min(100, (elapsed / clipLen) * 100)) + '%';
+            setShortsProgress(elapsed / clipLen);
         });
 
         video.addEventListener('ended', function () { nextShort(); });
@@ -1576,13 +1886,45 @@ enum WebClientHTML {
 
         el('shorts-tap').addEventListener('click', toggleShortsPlay);
 
-        el('shorts-bar').addEventListener('click', function (e) {
+        // シークバーは「押した位置へジャンプ」＋「掴んだままドラッグ」の両方に対応する。
+        // マウスもタッチも同じ扱いにしたいのでポインタイベントを使う。
+        var bar = el('shorts-bar');
+
+        function pctAt(clientX) {
+            var rect = bar.getBoundingClientRect();
+            if (rect.width <= 0) return 0;
+            return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        }
+
+        bar.addEventListener('pointerdown', function (e) {
+            if (!shortsClipLength()) return;
+            e.preventDefault();
             e.stopPropagation();
-            var rect = this.getBoundingClientRect();
-            var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            if (!video.duration || !isFinite(video.duration)) return;
-            var clipLen = Math.max(0.1, Math.min(SHORTS_CLIP, video.duration - state.shortsClipStart));
-            video.currentTime = state.shortsClipStart + clipLen * pct;
+            state.isScrubbing = true;
+            bar.classList.add('scrubbing');
+            // 掴んだ指／カーソルがバーの外へ出ても追従させる
+            try { bar.setPointerCapture(e.pointerId); } catch (err) {}
+            scrubShortsTo(pctAt(e.clientX), false);
+        });
+
+        bar.addEventListener('pointermove', function (e) {
+            if (!state.isScrubbing) return;
+            e.preventDefault();
+            scrubShortsTo(pctAt(e.clientX), false);
+        });
+
+        function endScrub(e) {
+            if (!state.isScrubbing) return;
+            e.stopPropagation();
+            state.isScrubbing = false;
+            bar.classList.remove('scrubbing');
+            try { bar.releasePointerCapture(e.pointerId); } catch (err) {}
+            scrubShortsTo(pctAt(e.clientX), true);   // 離した位置へ正確に合わせる
+        }
+        bar.addEventListener('pointerup', endScrub);
+        bar.addEventListener('pointercancel', function () {
+            state.isScrubbing = false;
+            bar.classList.remove('scrubbing');
         });
 
         // ホイールは連続で飛ばないよう間引く
@@ -1602,6 +1944,7 @@ enum WebClientHTML {
             touchX = e.changedTouches[0].screenX;
         }, { passive: true });
         el('panel-shorts').addEventListener('touchend', function (e) {
+            if (state.isScrubbing) return;   // シークバー操作を送り／戻しと取り違えない
             var dy = e.changedTouches[0].screenY - touchY;
             var dx = e.changedTouches[0].screenX - touchX;
             if (Math.abs(dy) < 60 || Math.abs(dx) > Math.abs(dy)) return;
@@ -1698,6 +2041,10 @@ enum WebClientHTML {
             else if (action === 'play-album') openMedia('album', parseInt(target.dataset.index, 10), true);
             else if (action === 'play-index') { openMedia(state.playerOrigin, parseInt(target.dataset.index, 10), false); }
             else if (action === 'seek') seekTo(parseFloat(target.dataset.time));
+            else if (action === 'play-continue') {
+                var ci = indexOfID(state.homeFiltered, target.dataset.id);
+                if (ci >= 0) openMedia('home', ci, true);
+            }
             else if (action === 'open-album') openAlbum(target.dataset.id, true);
             else if (action === 'play-short') startShortsWith(target.dataset.id, state.homeAll, 'おすすめショート');
         });
@@ -1719,7 +2066,8 @@ enum WebClientHTML {
         el('arrow-prev').addEventListener('click', function () { navMedia(-1); });
         el('arrow-next').addEventListener('click', function () { navMedia(1); });
         el('quality-select').addEventListener('change', function () { changeQuality(this.value); });
-        el('delete-btn').addEventListener('click', deleteCurrent);
+        el('trash-btn').addEventListener('click', function () { removeCurrent(false); });
+        el('purge-btn').addEventListener('click', function () { removeCurrent(true); });
         el('manga-toggle').addEventListener('click', function () {
             state.mangaMode = !state.mangaMode;
             localStorage.setItem('isMangaMode', String(state.mangaMode));
@@ -1784,6 +2132,16 @@ enum WebClientHTML {
                 if (e.key === 'ArrowDown') { e.preventDefault(); nextShort(); return; }
                 if (e.key === ' ') { e.preventDefault(); toggleShortsPlay(); return; }
                 if (e.key === 'm' || e.key === 'M') { e.preventDefault(); onRailAction('mute'); return; }
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    var clipLen = shortsClipLength();
+                    if (!clipLen) return;
+                    var video = el('shorts-video');
+                    var elapsed = video.currentTime - state.shortsClipStart;
+                    var step = e.key === 'ArrowRight' ? 5 : -5;
+                    scrubShortsTo((elapsed + step) / clipLen, true);
+                    return;
+                }
             }
 
             // タブ切り替えショートカット（1/2/3）
@@ -1816,6 +2174,7 @@ enum WebClientHTML {
         });
     }
 
+    state.progress = loadProgress();
     bindGlobal();
     bindShortsMedia();
     bindKeyboard();
