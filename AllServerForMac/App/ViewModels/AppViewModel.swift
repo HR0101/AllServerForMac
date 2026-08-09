@@ -17,6 +17,7 @@ final class AppViewModel: ObservableObject {
   let dataManager: LibraryViewModel
   let webServerManager: ServerViewModel
   let playbackCoordinator: PlaybackCoordinator
+  let remotePlaybackSession: RemotePlaybackSession
   let appSettings: AppSettings
 
   convenience init() {
@@ -33,8 +34,15 @@ final class AppViewModel: ObservableObject {
     appSettings: AppSettings
   ) {
     self.dataManager = dataManager
-    self.webServerManager = ServerViewModel(dataManager: dataManager)
     self.playbackCoordinator = playbackCoordinator
+    let remotePlaybackSession = RemotePlaybackSession(
+      playbackCoordinator: playbackCoordinator
+    )
+    self.remotePlaybackSession = remotePlaybackSession
+    self.webServerManager = ServerViewModel(
+      dataManager: dataManager,
+      remotePlaybackSession: remotePlaybackSession
+    )
     self.appSettings = appSettings
 
     webServerManager.$serverStartTime
