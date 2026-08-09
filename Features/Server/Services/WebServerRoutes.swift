@@ -12,6 +12,29 @@ extension ServerViewModel {
             return .ok(.html(WebClientHTML.page))
         }
 
+        server["/manifest.webmanifest"] = { [weak self] request -> HttpResponse in
+            self?.logAccess(request, authorized: true)
+            let headers = [
+                "Content-Type": "application/manifest+json; charset=utf-8",
+                "Cache-Control": "no-cache"
+            ]
+            return .raw(200, "OK", headers, { writer in
+                try? writer.write(Data(WebClientHTML.manifest.utf8))
+            })
+        }
+
+        server["/pwa-icon.png"] = { [weak self] request -> HttpResponse in
+            guard let self, !self.pwaIconData.isEmpty else { return .notFound }
+            self.logAccess(request, authorized: true)
+            let headers = [
+                "Content-Type": "image/png",
+                "Cache-Control": "public, max-age=86400"
+            ]
+            return .raw(200, "OK", headers, { writer in
+                try? writer.write(self.pwaIconData)
+            })
+        }
+
         server["/albums"] = protected { [weak self] _ -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager else { return .internalServerError }
             // メインスレッドを経由せずスナップショットから応答する。
@@ -118,8 +141,45 @@ extension ServerViewModel {
         server.delete["/albums/:id"] = protectedDestructive { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let idStr = request.params[":id"], let id = UUID(uuidString: idStr) else { return .badRequest(.text("Invalid ID")) }
+            let snapshot = dataManager.snapshotLibrary.value
+            guard let album = snapshot.albums.first(where: { $0.id == id }) else { return .notFound }
+            guard album.name != LibraryViewModel.allVideosAlbumName,
+                  album.name != LibraryViewModel.allPhotosAlbumName else {
+                return .badRequest(.text("System albums cannot be deleted"))
+            }
             DispatchQueue.main.sync { dataManager.deleteAlbum(albumID: id) }
             return .ok(.text("Deleted"))
+        }
+
+        server.post["/albums/:id/rename"] = protected { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager,
+                  let idString = request.params[":id"],
+                  let albumID = UUID(uuidString: idString) else {
+                return .badRequest(.text("Invalid album ID"))
+            }
+            struct RenameRequest: Codable { let name: String }
+            guard let renameRequest = try? JSONDecoder().decode(RenameRequest.self, from: Data(request.body)) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+            let name = renameRequest.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.count <= 80,
+                  name != LibraryViewModel.allVideosAlbumName,
+                  name != LibraryViewModel.allPhotosAlbumName else {
+                return .badRequest(.text("Invalid album name"))
+            }
+            let snapshot = dataManager.snapshotLibrary.value
+            guard let album = snapshot.albums.first(where: { $0.id == albumID }) else { return .notFound }
+            guard album.name != LibraryViewModel.allVideosAlbumName,
+                  album.name != LibraryViewModel.allPhotosAlbumName else {
+                return .badRequest(.text("System albums cannot be renamed"))
+            }
+            guard !snapshot.albums.contains(where: { $0.id != albumID && $0.name == name }) else {
+                return .raw(409, "Conflict", ["Content-Type": "text/plain"], { writer in
+                    try? writer.write(Data("Album name already exists".utf8))
+                })
+            }
+            DispatchQueue.main.sync { dataManager.renameAlbums([albumID: name]) }
+            return .ok(.text("Renamed"))
         }
 
         server.post["/move"] = protected { [weak self] request -> HttpResponse in
@@ -156,6 +216,55 @@ extension ServerViewModel {
                 DispatchQueue.main.sync { dataManager.deleteVideos(videoIDs: videoUUIDs) }
                 return .ok(.text("Deleted completely successfully"))
             } catch { return .badRequest(.text("Invalid request body")) }
+        }
+
+        server["/trash"] = protected { [weak self] _ -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else { return .internalServerError }
+            let snapshot = dataManager.snapshotLibrary.value
+            let albumByVideoID = snapshot.albums.reduce(into: [UUID: UUID]()) { result, album in
+                guard album.name != LibraryViewModel.allVideosAlbumName,
+                      album.name != LibraryViewModel.allPhotosAlbumName else { return }
+                for videoID in album.videoIDs where result[videoID] == nil {
+                    result[videoID] = album.id
+                }
+            }
+            let infos = snapshot.videos.filter(\.isInTrash).map { video -> RemoteVideoInfo in
+                let metadata = dataManager.fileMetadata(for: video)
+                return RemoteVideoInfo(
+                    id: video.id.uuidString,
+                    filename: video.originalFilename,
+                    duration: video.duration,
+                    importDate: video.importDate,
+                    creationDate: video.creationDate,
+                    mediaType: video.mediaType.rawValue,
+                    parentAlbumID: albumByVideoID[video.id]?.uuidString,
+                    fileSize: metadata.size,
+                    modificationDate: metadata.modificationDate,
+                    accessDate: metadata.accessDate
+                )
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(infos) else { return .internalServerError }
+            return .ok(.data(data, contentType: "application/json"))
+        }
+
+        server.post["/trash/restore"] = protected { [weak self] request -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else { return .internalServerError }
+            struct RestoreRequest: Codable { let videoIds: [String] }
+            guard let restoreRequest = try? JSONDecoder().decode(RestoreRequest.self, from: Data(request.body)) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+            let videoIDs = restoreRequest.videoIds.compactMap(UUID.init(uuidString:))
+            guard !videoIDs.isEmpty else { return .badRequest(.text("No valid video IDs")) }
+            DispatchQueue.main.sync { dataManager.restoreFromTrash(videoIDs: videoIDs) }
+            return .ok(.text("Restored"))
+        }
+
+        server.delete["/trash"] = protectedDestructive { [weak self] _ -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else { return .internalServerError }
+            DispatchQueue.main.sync { dataManager.emptyTrash() }
+            return .ok(.text("Trash emptied"))
         }
 
         server.post["/upload"] = protected { [weak self] request -> HttpResponse in
@@ -252,20 +361,28 @@ extension ServerViewModel {
                   let rawIDStr = request.params[":id"], let parsedID = UUID(uuidString: rawIDStr) else { return .notFound }
             let idStr = parsedID.uuidString
             let quality = request.queryParams.first(where: { $0.0 == "q" })?.1 ?? "1080p"
+            let shouldRetry = request.queryParams.contains(where: { $0.0 == "retry" && $0.1 == "true" })
             var state = "generating"
             var progress = 0.0
+            var message: String?
             DispatchQueue.main.sync {
                 if dataManager.isProxyReady(videoID: idStr, quality: quality) {
                     state = "ready"
                 } else if let p = dataManager.proxyGenerationProgress(videoID: idStr, quality: quality) {
                     state = "generating"; progress = p
+                } else if let failure = dataManager.proxyGenerationFailure(videoID: idStr, quality: quality), !shouldRetry {
+                    state = "failed"; message = failure
                 } else {
-                    dataManager.startOnDemandProxy(videoID: idStr, quality: quality)
+                    if shouldRetry {
+                        dataManager.retryOnDemandProxy(videoID: idStr, quality: quality)
+                    } else {
+                        dataManager.startOnDemandProxy(videoID: idStr, quality: quality)
+                    }
                     state = "generating"; progress = 0
                 }
             }
-            struct PrepareResp: Codable { let state: String; let progress: Double }
-            if let data = try? JSONEncoder().encode(PrepareResp(state: state, progress: progress)) {
+            struct PrepareResp: Codable { let state: String; let progress: Double; let message: String? }
+            if let data = try? JSONEncoder().encode(PrepareResp(state: state, progress: progress, message: message)) {
                 return .ok(.data(data, contentType: "application/json"))
             }
             return .internalServerError
@@ -344,6 +461,8 @@ extension ServerViewModel {
                 })
             }
         }
+
+        setupSyncRoutes()
 
         print("✅ [SETUP] API routes configured.")
     }

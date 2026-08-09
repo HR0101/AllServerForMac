@@ -281,6 +281,10 @@ extension LibraryViewModel {
         proxyProgressMap["\(videoID)_\(quality)"]
     }
 
+    func proxyGenerationFailure(videoID: String, quality: String) -> String? {
+        proxyFailureMap["\(videoID)_\(quality)"]
+    }
+
     /// オンデマンドでプロキシ生成を開始する (既に生成済み/生成中なら何もしない)
     func startOnDemandProxy(videoID: String, quality: String) {
         let key = "\(videoID)_\(quality)"
@@ -297,14 +301,23 @@ extension LibraryViewModel {
         sweepProxies(except: dest)
 
         proxyProgressMap[key] = 0.0
+        proxyFailureMap[key] = nil
         Task { await generateOnDemandProxy(sourceURL: sourceURL, destinationURL: dest, preset: preset, key: key) }
+    }
+
+    func retryOnDemandProxy(videoID: String, quality: String) {
+        proxyFailureMap["\(videoID)_\(quality)"] = nil
+        startOnDemandProxy(videoID: videoID, quality: quality)
     }
 
     func generateOnDemandProxy(sourceURL: URL, destinationURL: URL, preset: String, key: String) async {
         try? FileManager.default.removeItem(at: destinationURL)
         let asset = AVURLAsset(url: sourceURL)
         guard let exportSession = AVAssetExportSession(asset: asset, presetName: preset) else {
-            await MainActor.run { self.proxyProgressMap[key] = nil }
+            await MainActor.run {
+                self.proxyProgressMap[key] = nil
+                self.proxyFailureMap[key] = "このファイルはmacOSの変換機能で読み込めません。"
+            }
             return
         }
         exportSession.outputURL = destinationURL
@@ -321,7 +334,11 @@ extension LibraryViewModel {
         do {
             try await exportSession.export(to: destinationURL, as: .mp4)
         } catch {
-            await MainActor.run { self.proxyProgressMap[key] = nil }
+            progressTimer.cancel()
+            await MainActor.run {
+                self.proxyProgressMap[key] = nil
+                self.proxyFailureMap[key] = error.localizedDescription
+            }
             try? FileManager.default.removeItem(at: destinationURL)
             return
         }
@@ -329,6 +346,7 @@ extension LibraryViewModel {
 
         await MainActor.run {
             self.proxyProgressMap[key] = nil   // 完了/失敗で生成中フラグを解除
+            self.proxyFailureMap[key] = nil
         }
     }
 
