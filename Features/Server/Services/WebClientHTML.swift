@@ -289,9 +289,10 @@ enum WebClientHTML {
         position: absolute; right: 72px; bottom: 96px; z-index: 4; width: 210px; padding: 14px;
         background: rgba(28,28,40,0.95); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(10px);
     }
-    @media (min-width: 901px) { .shorts-zoom { right: 90px; bottom: 120px; } }
+    @media (min-width: 901px) { .shorts-zoom { right: 12px; bottom: 110px; } }
     .shorts-zoom label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 10px; text-align: center; color: var(--text-2); }
     .shorts-zoom input { width: 100%; accent-color: var(--accent); }
+    .shorts-zoom .hint { margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--text-3); text-align: center; }
 
     /* ============ 再生モーダル ============ */
     #player-modal { display: none; position: fixed; inset: 0; background: var(--bg); z-index: 90; }
@@ -1283,21 +1284,59 @@ enum WebClientHTML {
         if (video && !video.paused) video.pause();
     }
     function resumeShorts() {
-        if (state.shortsPool.length && el('shorts-video').getAttribute('src')) tryPlayShorts();
+        if (!state.shortsPool.length || !el('shorts-video').getAttribute('src')) return;
+        // タブを離れている間に幅が変わっていることがあるので、枠を測り直してから再生する
+        applyShortsZoom();
+        updateZoomHint();
+        tryPlayShorts();
     }
+
+    var PHONE_ASPECT = 9 / 16;
 
     function applyShortsZoom() {
         var video = el('shorts-video');
         var frame = el('shorts-frame');
         var val = state.shortsZoom / 100;
+        var videoAspect = (video.videoWidth && video.videoHeight) ? (video.videoWidth / video.videoHeight) : 0;
+
+        if (isDesktop()) {
+            // Mac: 映像を切り取って拡大するのではなく「枠そのもの」を動画の形に近づける。
+            // 高さは常に目一杯なので、横長の動画ほど枠が横に広がって大きく見える。
+            video.style.transform = 'scale(1)';
+            var stage = el('shorts-stage');
+            var railW = el('shorts-rail-d').offsetWidth || 48;
+            var availH = Math.max(200, stage.clientHeight - 32);
+            var availW = Math.max(200, stage.clientWidth - railW - 26);
+            var target = videoAspect
+                ? PHONE_ASPECT + (videoAspect - PHONE_ASPECT) * val
+                : PHONE_ASPECT;
+            target = Math.max(0.3, target);
+            var w = availH * target, h = availH;
+            if (w > availW) { w = availW; h = w / target; }
+            frame.style.width = Math.round(w) + 'px';
+            frame.style.height = Math.round(h) + 'px';
+            return;
+        }
+
+        // スマホ: 枠は画面いっぱいのまま、映像を拡大して余白を埋める（従来どおり）
+        frame.style.width = '';
+        frame.style.height = '';
         if (!val) { video.style.transform = 'scale(1)'; return; }
         var viewAspect = frame.clientWidth / Math.max(1, frame.clientHeight);
-        var videoAspect = (video.videoWidth && video.videoHeight) ? (video.videoWidth / video.videoHeight) : viewAspect;
-        var fill = videoAspect > viewAspect
-            ? frame.clientHeight / (frame.clientWidth / videoAspect)
-            : frame.clientWidth / (frame.clientHeight * videoAspect);
+        var srcAspect = videoAspect || viewAspect;
+        var fill = srcAspect > viewAspect
+            ? frame.clientHeight / (frame.clientWidth / srcAspect)
+            : frame.clientWidth / (frame.clientHeight * srcAspect);
         fill = Math.max(1, fill);
         video.style.transform = 'scale(' + (1 + (fill - 1) * val) + ')';
+    }
+
+    function updateZoomHint() {
+        var hint = el('shorts-zoom-hint');
+        if (!hint) return;
+        hint.textContent = isDesktop()
+            ? (state.shortsZoom === 0 ? '縦型の枠（9:16）' : '枠を広げて大きく表示 ' + state.shortsZoom + '%')
+            : (state.shortsZoom === 0 ? '全体を表示' : '拡大して余白を埋める ' + state.shortsZoom + '%');
     }
 
     function railButton(id, title, svg, on) {
@@ -1333,6 +1372,7 @@ enum WebClientHTML {
             renderShortsRail();
         } else if (action === 'zoom') {
             el('shorts-zoom').classList.toggle('hidden');
+            updateZoomHint();
         } else if (action === 'full') {
             // ショートの並びをそのまま再生リストにしてウォッチ画面を重ねる。
             // ホームの再生リストには触らない（表示中のカードと再生対象がずれるため）。
@@ -1413,16 +1453,25 @@ enum WebClientHTML {
         var zoomBox = document.createElement('div');
         zoomBox.className = 'shorts-zoom hidden';
         zoomBox.id = 'shorts-zoom';
-        zoomBox.innerHTML = '<label>サイズ調整</label><input type="range" id="shorts-zoom-range" min="0" max="100" value="' + state.shortsZoom + '">';
+        zoomBox.innerHTML = '<label id="shorts-zoom-label">表示サイズ</label>' +
+            '<input type="range" id="shorts-zoom-range" min="0" max="100" value="' + state.shortsZoom + '">' +
+            '<div class="hint" id="shorts-zoom-hint"></div>';
         el('shorts-frame').appendChild(zoomBox);
         zoomBox.addEventListener('click', function (e) { e.stopPropagation(); });
         el('shorts-zoom-range').addEventListener('input', function () {
             state.shortsZoom = parseInt(this.value, 10);
             localStorage.setItem('shortsZoom', String(state.shortsZoom));
             applyShortsZoom();
+            updateZoomHint();
         });
+        updateZoomHint();
 
-        window.addEventListener('resize', function () { if (state.tab === 'shorts') applyShortsZoom(); });
+        // 非表示のときに測ると 0 になるので、ショートタブを見ているときだけ測り直す
+        window.addEventListener('resize', function () {
+            if (state.tab !== 'shorts') return;
+            applyShortsZoom();
+            updateZoomHint();
+        });
         document.addEventListener('visibilitychange', function () {
             if (document.hidden) pauseShorts();
         });
