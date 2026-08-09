@@ -156,6 +156,18 @@ final class VideoPlayerViewModel: ObservableObject {
         }
     }
 
+    func play() {
+        guard let player, player.rate == 0 else { return }
+        player.play()
+        isPlaybackPlaying = true
+    }
+
+    func pause() {
+        guard let player, player.rate != 0 else { return }
+        player.pause()
+        isPlaybackPlaying = false
+    }
+
     func playbackSliderEditingChanged(isEditing: Bool) {
         isSliderEditing = isEditing
         guard !isEditing else { return }
@@ -224,7 +236,7 @@ final class VideoPlayerViewModel: ObservableObject {
         }
     }
 
-    private func seek(toSeconds seconds: Double) {
+    func seek(toSeconds seconds: Double) {
         guard let player = player else { return }
         let effectiveDuration = player.currentItem?.duration.seconds ?? duration
         let upperBound = effectiveDuration.isFinite && effectiveDuration > 0 ? effectiveDuration : duration

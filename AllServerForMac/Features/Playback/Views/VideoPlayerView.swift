@@ -365,6 +365,7 @@ struct VideoPlayerView: View {
     @StateObject private var viewModel: VideoPlayerViewModel
     private let dataManager: LibraryViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var remotePlaybackSession: RemotePlaybackSession
 
     @FocusState private var isViewFocused: Bool
     @State private var isSidebarVisible = false
@@ -440,12 +441,16 @@ struct VideoPlayerView: View {
             areCornerControlsVisible = false
             isVideoStripVisible = false
             isUpNextPanelVisible = false
+            remotePlaybackSession.attach(viewModel)
             viewModel.setupPlayer()
         }
         .onChange(of: viewModel.currentVideo.id) { _, _ in
             videoZoom.reset()
         }
-        .onDisappear { viewModel.cleanup() }
+        .onDisappear {
+            remotePlaybackSession.detach(viewModel)
+            viewModel.cleanup()
+        }
     }
 
     /// 通常のフルサイズ再生画面。
