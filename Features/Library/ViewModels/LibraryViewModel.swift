@@ -110,6 +110,8 @@ class LibraryViewModel: ObservableObject {
 
     // key: "<videoID>_<quality>", 値: 0...1 の進捗、nil = 生成していない
     var proxyProgressMap: [String: Double] = [:]
+    /// オンデマンド変換の直近の失敗理由です。明示的に再試行するまで保持します。
+    var proxyFailureMap: [String: String] = [:]
 
     var pendingSaveTask: Task<Void, Never>?
     var libraryLoadTask: Task<Void, Never>?
