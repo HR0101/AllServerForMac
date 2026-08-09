@@ -227,7 +227,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				25959AC02E97F6CD003FA43E /* XCRemoteSwiftPackageReference "swifter" */,
-				25959AD12E98000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */,
+				25959AD12E98000000000010 /* XCLocalSwiftPackageReference "Packages/MediaServerKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 25959A8E2E97F5E5003FA43E /* Products */;
@@ -611,9 +611,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		25959AD12E98000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */ = {
+		25959AD12E98000000000010 /* XCLocalSwiftPackageReference "Packages/MediaServerKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../MediaServerKit;
+			relativePath = Packages/MediaServerKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
