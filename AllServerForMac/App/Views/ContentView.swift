@@ -66,6 +66,7 @@ struct ContentView: View {
         .tint(NeomorphicTheme.accent)
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
         .environmentObject(playbackCoordinator)
+        .environmentObject(viewModel.remotePlaybackSession)
         .environmentObject(appSettings)
         .focusedSceneValue(\.appMenuContext, appMenuContext)
         .sheet(isPresented: $viewModel.isShowingPreferences) {
@@ -106,6 +107,7 @@ struct ContentView: View {
                 currentVideo: current,
                 dataManager: dataManager
             )
+                .id(current.id)
         case .multi(let videos):
             MultiVideoPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
