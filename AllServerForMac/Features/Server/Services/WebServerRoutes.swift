@@ -294,7 +294,7 @@ extension ServerViewModel {
                 if let aid = UUID(uuidString: albumIdStr) {
                     targetAlbumID = aid
                 } else {
-                    guard let allVideos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allVideosAlbumName }) else {
+                    guard let allVideos = dataManager.snapshotLibrary.value.albums.first(where: { $0.name == LibraryViewModel.allVideosAlbumName }) else {
                         return .internalServerError
                     }
                     targetAlbumID = allVideos.id
