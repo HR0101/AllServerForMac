@@ -111,15 +111,17 @@ final class WebSyncStore: @unchecked Sendable {
     private let fileURL: URL
     private let backupURL: URL
     private let rootURL: URL
+    private let persistenceEnabled: Bool
     /// HTTP ワーカースレッドから呼ばれるため DispatchQueue.main は一切使わない。
     private let queue = DispatchQueue(label: "com.allserverformac.websync", qos: .utility)
     private var doc = SyncDoc()
 
-    init(rootURL: URL) {
+    init(rootURL: URL, persistenceEnabled: Bool = true) {
         self.rootURL = rootURL
         self.fileURL = rootURL.appendingPathComponent("websync.json")
         self.backupURL = rootURL.appendingPathComponent("websync.backup.json")
-        try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        self.persistenceEnabled = persistenceEnabled
+        guard persistenceEnabled else { return }
         queue.sync { self.load() }
     }
 
@@ -254,6 +256,7 @@ final class WebSyncStore: @unchecked Sendable {
     }
 
     private func load() {
+        guard persistenceEnabled else { return }
         if let data = try? Data(contentsOf: fileURL), !data.isEmpty {
             if let decoded = try? JSONDecoder().decode(SyncDoc.self, from: data) {
                 doc = decoded
@@ -280,6 +283,7 @@ final class WebSyncStore: @unchecked Sendable {
     }
 
     private func save(_ data: Data) {
+        guard persistenceEnabled else { return }
         // 直前の正本を1世代だけ退避する。ローテーションを増やさないのは、失っても
         // 各クライアントの localStorage から復元できる軽いデータだから。
         if let previous = try? Data(contentsOf: fileURL), !previous.isEmpty {
