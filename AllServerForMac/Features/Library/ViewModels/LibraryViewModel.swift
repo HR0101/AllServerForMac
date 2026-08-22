@@ -9,6 +9,119 @@ import ImageIO
 import UniformTypeIdentifiers
 import Vision
 
+struct LibraryStorageEnvironment {
+  let moviesDirectory: () -> URL?
+  let downloadsDirectory: () -> URL?
+  let createDirectory: (URL) throws -> Void
+
+  static let live = LibraryStorageEnvironment(
+    moviesDirectory: {
+      FileManager.default.urls(
+        for: .moviesDirectory,
+        in: .userDomainMask
+      ).first
+    },
+    downloadsDirectory: {
+      FileManager.default.urls(
+        for: .downloadsDirectory,
+        in: .userDomainMask
+      ).first
+    },
+    createDirectory: { url in
+      try FileManager.default.createDirectory(
+        at: url,
+        withIntermediateDirectories: true
+      )
+    }
+  )
+}
+
+struct LibraryStorageInitializationError: Equatable {
+  enum Stage: Equatable {
+    case moviesDirectoryLookup
+    case downloadsDirectoryLookup
+    case directoryCreation
+  }
+
+  let stage: Stage
+  let locationName: String
+  let targetPath: String
+  let reason: String
+
+  var recoverySuggestion: String {
+    "フォルダの読み書き権限，ディスクの空き容量，保存先ボリュームの接続状態を確認し，アプリを再起動してください．"
+  }
+
+  static func directoryLookup(
+    stage: Stage,
+    locationName: String,
+    fallbackURL: URL
+  ) -> LibraryStorageInitializationError {
+    LibraryStorageInitializationError(
+      stage: stage,
+      locationName: locationName,
+      targetPath: fallbackURL.path,
+      reason: "macOSから保存先URLを取得できませんでした．"
+    )
+  }
+
+  static func directoryCreation(
+    at url: URL,
+    error: Error
+  ) -> LibraryStorageInitializationError {
+    let nsError = error as NSError
+    return LibraryStorageInitializationError(
+      stage: .directoryCreation,
+      locationName: "ライブラリ保存先",
+      targetPath: url.path,
+      reason: "\(nsError.localizedDescription)（\(nsError.domain): \(nsError.code)）"
+    )
+  }
+}
+
+private struct LibraryStoragePaths {
+  let appRootURL: URL
+  let videoStorageURL: URL
+  let downloadStorageURL: URL
+  let thumbnailStorageURL: URL
+  let proxyStorageURL: URL
+  let dataFileURL: URL
+
+  static func make(
+    moviesDirectory: URL,
+    downloadsDirectory: URL
+  ) -> LibraryStoragePaths {
+    let appRootURL = moviesDirectory.appendingPathComponent(
+      "MacVideoServerData"
+    )
+    return LibraryStoragePaths(
+      appRootURL: appRootURL,
+      videoStorageURL: appRootURL.appendingPathComponent("Videos"),
+      downloadStorageURL: downloadsDirectory.appendingPathComponent(
+        "VideoServerForMac_Media"
+      ),
+      thumbnailStorageURL: appRootURL.appendingPathComponent("Thumbnails"),
+      proxyStorageURL: appRootURL.appendingPathComponent("Proxies"),
+      dataFileURL: appRootURL.appendingPathComponent("library.json")
+    )
+  }
+
+  static let unavailable = make(
+    moviesDirectory: URL(fileURLWithPath: "/dev/null"),
+    downloadsDirectory: URL(fileURLWithPath: "/dev/null")
+  )
+
+  var directoriesToPrepare: [URL] {
+    [
+      appRootURL,
+      videoStorageURL,
+      downloadStorageURL,
+      thumbnailStorageURL,
+      proxyStorageURL,
+    ]
+  }
+}
+
 
 
 @MainActor
@@ -85,6 +198,17 @@ class LibraryViewModel: ObservableObject {
     let thumbnailStorageURL: URL
     let proxyStorageURL: URL
     let dataFileURL: URL
+    private let storageEnvironment: LibraryStorageEnvironment
+
+    @Published private(set) var storageInitializationError: LibraryStorageInitializationError?
+
+    var isStorageReady: Bool {
+        storageInitializationError == nil
+    }
+
+    var isReadyForOperations: Bool {
+        isStorageReady && !isSecondaryInstance
+    }
 
     /// library.json の現行スキーマ世代。フィールドを追加したら上げる。
     nonisolated static let librarySchemaVersion = 3
@@ -144,20 +268,12 @@ class LibraryViewModel: ObservableObject {
         return true
     }
 
-    init() {
-        guard let moviesDir = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first else {
-            fatalError("Movies directory not found.")
-        }
-        guard let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            fatalError("Downloads directory not found.")
-        }
+    convenience init() {
+        self.init(storageEnvironment: .live)
+    }
 
-        self.appRootURL = moviesDir.appendingPathComponent("MacVideoServerData")
-        self.videoStorageURL = self.appRootURL.appendingPathComponent("Videos")
-        self.thumbnailStorageURL = self.appRootURL.appendingPathComponent("Thumbnails")
-        self.proxyStorageURL = self.appRootURL.appendingPathComponent("Proxies")
-        self.dataFileURL = self.appRootURL.appendingPathComponent("library.json")
-        self.downloadStorageURL = downloadsDir.appendingPathComponent("VideoServerForMac_Media")
+    init(storageEnvironment: LibraryStorageEnvironment) {
+        self.storageEnvironment = storageEnvironment
         self.isAutoDuplicateCheckEnabled = UserDefaults.standard.object(forKey: "autoDuplicateCheckEnabled") as? Bool ?? true
         self.importCopiesFiles = UserDefaults.standard.object(forKey: "importCopiesFiles") as? Bool ?? false
         self.trashAutoDeleteDays = UserDefaults.standard.object(forKey: "trashAutoDeleteDays") as? Int ?? 0
@@ -166,10 +282,45 @@ class LibraryViewModel: ObservableObject {
         self.importConcurrency = UserDefaults.standard.object(forKey: "importConcurrency") as? Int ?? 4
         self.exportPreservesAlbumStructure = UserDefaults.standard.object(forKey: "exportPreservesAlbumStructure") as? Bool ?? true
 
-        try? FileManager.default.createDirectory(at: self.videoStorageURL, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: self.downloadStorageURL, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: self.thumbnailStorageURL, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: self.proxyStorageURL, withIntermediateDirectories: true)
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        let paths: LibraryStoragePaths
+        let initializationError: LibraryStorageInitializationError?
+        if let moviesDirectory = storageEnvironment.moviesDirectory() {
+            if let downloadsDirectory = storageEnvironment.downloadsDirectory() {
+                paths = LibraryStoragePaths.make(
+                    moviesDirectory: moviesDirectory,
+                    downloadsDirectory: downloadsDirectory
+                )
+                initializationError = nil
+            } else {
+                paths = .unavailable
+                initializationError = .directoryLookup(
+                    stage: .downloadsDirectoryLookup,
+                    locationName: "ダウンロードフォルダ",
+                    fallbackURL: homeDirectory.appendingPathComponent("Downloads")
+                )
+            }
+        } else {
+            paths = .unavailable
+            initializationError = .directoryLookup(
+                stage: .moviesDirectoryLookup,
+                locationName: "ムービーフォルダ",
+                fallbackURL: homeDirectory.appendingPathComponent("Movies")
+            )
+        }
+
+        self.appRootURL = paths.appRootURL
+        self.videoStorageURL = paths.videoStorageURL
+        self.downloadStorageURL = paths.downloadStorageURL
+        self.thumbnailStorageURL = paths.thumbnailStorageURL
+        self.proxyStorageURL = paths.proxyStorageURL
+        self.dataFileURL = paths.dataFileURL
+        self.storageInitializationError = initializationError
+
+        guard initializationError == nil else { return }
+        guard prepareStorageDirectories(paths.directoriesToPrepare) else {
+            return
+        }
 
         // 二重起動の検出。Xcodeからの実行と/Applications版は別アプリとして同時起動でき、
         // 両方が同じ library.json をデバウンス保存すると後勝ちでサイレントにデータが失われる。
@@ -199,6 +350,21 @@ class LibraryViewModel: ObservableObject {
                 self?.flushPendingSave()
             }
         }
+    }
+
+    private func prepareStorageDirectories(_ directories: [URL]) -> Bool {
+        for directory in directories {
+            do {
+                try storageEnvironment.createDirectory(directory)
+            } catch {
+                storageInitializationError = .directoryCreation(
+                    at: directory,
+                    error: error
+                )
+                return false
+            }
+        }
+        return true
     }
 
     nonisolated func getStorageUsage() async -> (videosSize: Int64, proxiesSize: Int64, downloadsSize: Int64, appTotalSize: Int64) {
