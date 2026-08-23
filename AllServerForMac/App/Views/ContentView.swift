@@ -41,15 +41,19 @@ struct ContentView: View {
             NeomorphicTheme.background
                 .ignoresSafeArea()
 
-            // 再生中はライブラリ画面を本当に破棄する。opacity 0 で残すと、
-            // ホームの1秒ごとのシステム監視・アルバム一覧のサムネイル・影付きカードが
-            // 再生中もずっと描画され続け、動画がカクつく。
-            if shouldShowLibraryView {
-                libraryView
-            }
+            if let error = dataManager.storageInitializationError {
+                LibraryStorageInitializationErrorView(error: error)
+            } else {
+                // 再生中はライブラリ画面を本当に破棄する。opacity 0 で残すと、
+                // ホームの1秒ごとのシステム監視・アルバム一覧のサムネイル・影付きカードが
+                // 再生中もずっと描画され続け、動画がカクつく。
+                if shouldShowLibraryView {
+                    libraryView
+                }
 
-            if let mode = playbackCoordinator.mode {
-                playerOverlay(for: mode)
+                if let mode = playbackCoordinator.mode {
+                    playerOverlay(for: mode)
+                }
             }
         }
         // ウィンドウのクロム設定はライブラリ画面の有無に関わらず効かせる必要があるため、
@@ -68,7 +72,10 @@ struct ContentView: View {
         .environmentObject(playbackCoordinator)
         .environmentObject(viewModel.remotePlaybackSession)
         .environmentObject(appSettings)
-        .focusedSceneValue(\.appMenuContext, appMenuContext)
+        .focusedSceneValue(
+            \.appMenuContext,
+            dataManager.isStorageReady ? appMenuContext : nil
+        )
         .sheet(isPresented: $viewModel.isShowingPreferences) {
             PreferencesView(
                 dataManager: dataManager,
@@ -272,5 +279,64 @@ struct ContentView: View {
     private func toggleMiniPlayer() {
         guard isSingleVideoPlayback else { return }
         playbackCoordinator.isMiniPlayerActive.toggle()
+    }
+}
+
+private struct LibraryStorageInitializationErrorView: View {
+    let error: LibraryStorageInitializationError
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .font(.system(size: 52, weight: .semibold))
+                .foregroundStyle(.red)
+
+            VStack(spacing: 8) {
+                Text("ライブラリ保存先を準備できませんでした")
+                    .font(.title2.bold())
+                Text("データを保護するため，ライブラリの読み込みとサーバー起動を停止しています．")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(alignment: .leading, spacing: 14) {
+                errorRow(title: "対象", value: error.locationName)
+                errorRow(title: "パス", value: error.targetPath)
+                errorRow(title: "原因", value: error.reason)
+                errorRow(title: "確認事項", value: error.recoverySuggestion)
+            }
+            .padding(20)
+            .frame(maxWidth: 680, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+
+            HStack(spacing: 12) {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        error.targetPath,
+                        forType: .string
+                    )
+                } label: {
+                    Label("パスをコピー", systemImage: "doc.on.doc")
+                }
+
+                Button("終了") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func errorRow(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .textSelection(.enabled)
+        }
     }
 }

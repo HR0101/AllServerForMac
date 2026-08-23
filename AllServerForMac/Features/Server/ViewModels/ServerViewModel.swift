@@ -120,7 +120,10 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
         self.remotePlaybackSession = remotePlaybackSession
         // init は main で走るので @MainActor な LibraryViewModel の appRootURL をここで読んでおく。
         // 以後 WebSyncStore は LibraryViewModel に一切依存せず、ワーカースレッドから直接叩ける。
-        self.syncStore = WebSyncStore(rootURL: dataManager.appRootURL)
+        self.syncStore = WebSyncStore(
+            rootURL: dataManager.appRootURL,
+            persistenceEnabled: dataManager.isReadyForOperations
+        )
         self.pwaIconData = NSApplication.shared.applicationIconImage.tiffRepresentation
             .flatMap(NSBitmapImageRep.init(data:))?
             .representation(using: .png, properties: [:]) ?? Data()
@@ -313,6 +316,10 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     // MARK: - Server Control
     func startServer() {
         guard !server.operating else { return }
+        guard dataManager?.isReadyForOperations == true else {
+            statusMessage = "❌ ライブラリ保存先を利用できないため，サーバーを開始できません．"
+            return
+        }
 
         let portToUse = in_port_t(targetPort)
 

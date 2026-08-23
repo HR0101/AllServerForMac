@@ -12,7 +12,7 @@ import Vision
 extension LibraryViewModel {
     func saveData() {
         // 二重起動側のインスタンスは一切書き込まない（後勝ちによるサイレント消失防止）
-        guard !isSecondaryInstance, isLibraryLoaded else { return }
+        guard isReadyForOperations, isLibraryLoaded else { return }
         saveGeneration += 1
         let generation = saveGeneration
         let container = DataContainer(videos: videos, albums: albums, duplicateCheckStates: duplicateCheckStates, schemaVersion: Self.librarySchemaVersion)
@@ -38,7 +38,7 @@ extension LibraryViewModel {
 
     /// 保留中の非同期保存があれば取り消し、現在の状態を同期的に書き込む（アプリ終了時用）
     func flushPendingSave() {
-        guard !isSecondaryInstance, isLibraryLoaded else { return }
+        guard isReadyForOperations, isLibraryLoaded else { return }
         pendingSaveTask?.cancel()
         pendingSaveTask = nil
         saveGeneration += 1
@@ -56,7 +56,7 @@ extension LibraryViewModel {
     var backupFileURL: URL { appRootURL.appendingPathComponent("library.backup.json") }
 
     func startLoadingData() {
-        guard libraryLoadTask == nil else { return }
+        guard isReadyForOperations, libraryLoadTask == nil else { return }
         let dataFileURL = self.dataFileURL
         let appRootURL = self.appRootURL
 
