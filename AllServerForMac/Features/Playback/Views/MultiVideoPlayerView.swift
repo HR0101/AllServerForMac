@@ -50,6 +50,11 @@ struct MultiVideoPlayerView: View {
     @FocusState private var isFocused: Bool
     @State private var showShortcutHelp = false
     @State private var isAudioConsoleVisible = false
+    /// 操作系の出し入れ（他のプレイヤーと共通）。
+    @StateObject private var chrome = PlayerChromeController()
+    /// 一時停止中は操作系を出したままにしたいが、`viewModel.isPlaying` は
+    /// 実際に走り出すまで真にならない。押した側の意思をこちらで持っておく。
+    @State private var isPlayIntended = true
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let videoCount: Int
 
@@ -81,12 +86,21 @@ struct MultiVideoPlayerView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                grid
-                controls
-            }
-            PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
-                coordinator.close()
+            // 操作系は映像に重ねる。下に積むと、出入りのたびにタイルが伸び縮みしてしまう。
+            grid
+                .overlay(alignment: .bottom) {
+                    if chrome.isShown {
+                        controls
+                            .playerChromeHoverGuard(chrome)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+            if chrome.isShown {
+                PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                    coordinator.close()
+                }
+                .playerChromeHoverGuard(chrome)
+                .transition(.opacity)
             }
             if isAudioConsoleVisible {
                 audioConsole
@@ -102,20 +116,38 @@ struct MultiVideoPlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .ignoresSafeArea()
+        .playerChromeActivity(chrome)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onKeyPress(phases: .down, action: handleKeyPress)
+        .onKeyPress(phases: .down) { press in
+            // 拾ったキーのときだけ操作系を出す（無関係なキーで出てくると邪魔になる）。
+            let result = handleKeyPress(press: press)
+            if result == .handled { chrome.reveal() }
+            return result
+        }
         .onAppear {
             viewModel.playAll()
             isFocused = true
+            chrome.reveal()
         }
         // コンソールのボタンやスライダーを押すとフォーカスがそちらへ移り、
         // 以降 .onKeyPress が効かなくなる。開閉のたびに本体へ戻しておく。
-        .onChange(of: isAudioConsoleVisible) { _, _ in
+        .onChange(of: isAudioConsoleVisible) { _, visible in
             isFocused = true
+            chrome.setHold(.overlayVisible, visible)
         }
-        .onDisappear(perform: viewModel.cleanup)
+        .onChange(of: showShortcutHelp) { _, shown in
+            chrome.setHold(.overlayVisible, shown || isAudioConsoleVisible)
+        }
+        // 操作系が引っ込んだ時点でポインタは離れているので、そこでキー入力を本体へ戻す。
+        .onChange(of: chrome.isShown) { _, shown in
+            if !shown { isFocused = true }
+        }
+        .onDisappear {
+            chrome.cancel()
+            viewModel.cleanup()
+        }
     }
 
     @ViewBuilder
@@ -265,10 +297,18 @@ struct MultiVideoPlayerView: View {
         }
     }
 
+    /// 再生・一時停止はここを通す。止めている間は操作系を出したままにしたいので、
+    /// 押した意思をここで一元的に反映する（ボタンとキーの両方から呼ぶ）。
+    private func togglePlayPause() {
+        viewModel.togglePlayPauseAll()
+        isPlayIntended.toggle()
+        chrome.setHold(.paused, !isPlayIntended)
+    }
+
     private var controls: some View {
         HStack {
             Button {
-                viewModel.togglePlayPauseAll()
+                togglePlayPause()
             } label: {
                 Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 16))
@@ -286,8 +326,16 @@ struct MultiVideoPlayerView: View {
             Text(formatTime(viewModel.commonDuration))
                 .font(.caption.monospacedDigit())
         }
-        .padding()
-        .background(.regularMaterial)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+        .padding(16)
+        .frame(maxWidth: 1200)
     }
 
     private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
@@ -327,7 +375,7 @@ struct MultiVideoPlayerView: View {
         }
 
         if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
-            viewModel.togglePlayPauseAll()
+            togglePlayPause()
             return .handled
         } else if MediaShortcutSettings.matches(.videoRandomSeek, press: press) {
             viewModel.seekAllToRandomTime()

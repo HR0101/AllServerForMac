@@ -220,6 +220,12 @@ struct FolderDetailView: View {
                 dataManager.moveToTrash(videoIDs: targetIDs(for: video))
                 selectedMediaIDs.removeAll()
             },
+            onMoveToSystemTrash: {
+                dataManager.moveMediaFilesToSystemTrash(
+                    videoIDs: targetIDs(for: video)
+                )
+                selectedMediaIDs.removeAll()
+            },
             currentAlbumID: ownAlbum?.id,
             onMoveToAlbum: { targetID in
                 guard let albumID = ownAlbum?.id else { return }

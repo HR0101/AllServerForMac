@@ -15,6 +15,9 @@ final class AppViewModel: ObservableObject {
   @Published private(set) var currentServerURL: String?
 
   let dataManager: LibraryViewModel
+  /// 差分動画の探索結果。再生でライブラリ画面ごと差し替わっても、
+  /// 見つけたグループと選んだ組み合わせを持ち越せるようここが持つ。
+  let variantFinder = VariantVideoViewModel()
   let webServerManager: ServerViewModel
   let playbackCoordinator: PlaybackCoordinator
   let remotePlaybackSession: RemotePlaybackSession

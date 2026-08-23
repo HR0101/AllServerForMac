@@ -23,7 +23,12 @@ final class SynchronizedPlayerGroup {
 
     /// 一斉スタートを予約するときの猶予。全プレイヤーへ setRate を配り終える前に
     /// その時刻が過ぎてしまうと、結局バラバラに動き出す。
-    private static let syncStartLeadSeconds: Double = 0.15
+    ///
+    /// この猶予はそのまま「再生を押してから絵が動き出すまで」の待ち時間になる。
+    /// 4K60 を6本並べて実測したところ、配り終えるのにかかるのは 2ms 程度で、
+    /// 待ち時間は 0.08 秒以下にすると 82ms 前後で頭打ちになった（0.15 秒だと 153ms）。
+    /// 配布コストの40倍の余裕を残しつつ、頭打ちの手前まで詰めた値。
+    private static let syncStartLeadSeconds: Double = 0.08
     /// 再生可能になるまで待つ上限。壊れたファイルが1つ混じっても止まらないようにする。
     private static let readyTimeoutSeconds: Double = 5
 
@@ -98,13 +103,48 @@ final class SynchronizedPlayerGroup {
                 if Task.isCancelled { return }
             }
 
+            // `pause()` は1本ずつ止まるので、止まった位置が数十ミリ秒ばらつく（実測 0.03 秒）。
+            // ここで `.invalid`（＝各自がいま指している位置から）で走らせると、そのばらつきが
+            // 固定されたうえ一時停止のたびに積み上がる（実測: 一時停止と再生を5往復して 0.34 秒）。
+            // 開始位置を明示して揃えれば、同じ5往復でも 0.07 秒に収まる。
+            //
+            // ただしシークを指示されたときは触らない。行き先を決めたのは呼び出し側で、
+            // 同時再生は動画ごとに尺が違うため、割合シークで別々の位置へ飛ばすのが正しい。
+            let hasSeekTargets = seekTargets.contains { $0.time != nil }
+            let alignment = hasSeekTargets ? CMTime.invalid : Self.commonStartTime(of: players)
+
             let startHostTime = CMClockGetTime(CMClockGetHostTimeClock())
                 + CMTime(seconds: Self.syncStartLeadSeconds, preferredTimescale: 600)
             for player in players {
-                // time に .invalid を渡すと「今指している位置」をその瞬間に合わせる意味になる。
-                player.setRate(1.0, time: .invalid, atHostTime: startHostTime)
+                player.setRate(1.0, time: alignment, atHostTime: startHostTime)
             }
         }
+    }
+
+    /// そろえにいく開きの上限。これを超えていたら位置には触らない。
+    ///
+    /// そろえるのは「一時停止のたびに出る数十ミリ秒のばらつき」を消すため。
+    /// 同時再生は動画ごとに尺が違い、短いものが終われば位置が何十秒も開くが、
+    /// それは直すべきずれではない（そこへ巻き戻すと長いほうが逆再生したように見える）。
+    private static let maxAlignableSpread: Double = 1.0
+
+    /// 一斉スタートの基準にする位置。いちばん遅れているものに合わせる
+    /// （進んでいるほうへ合わせると、遅れている側が前へ飛んで数フレーム抜ける）。
+    /// そろえる根拠がないときは `.invalid`＝各自がいま指している位置のまま走らせる。
+    private static func commonStartTime(of players: [AVPlayer]) -> CMTime {
+        // 最後まで行ったものはそこで止まったままなので、基準から外す。
+        let seconds = players.compactMap { player -> Double? in
+            let value = player.currentTime().seconds
+            guard value.isFinite else { return nil }
+            if let duration = player.currentItem?.duration.seconds, duration.isFinite,
+               value >= duration - 0.05 {
+                return nil
+            }
+            return value
+        }
+        guard let earliest = seconds.min(), let latest = seconds.max() else { return .invalid }
+        guard latest - earliest <= maxAlignableSpread else { return .invalid }
+        return CMTime(seconds: earliest, preferredTimescale: 600)
     }
 
     /// ずれが `threshold` 秒を超えていたら、いちばん進んでいる位置へ全員を揃え直す。

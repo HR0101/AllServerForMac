@@ -35,8 +35,35 @@ final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var libraryReturnState: LibraryReturnState?
     /// 通常再生をIキーで右下に小さくたたみ、アルバム一覧を裏に表示している間 true。
     @Published var isMiniPlayerActive = false
+    /// 「差分動画を探す」を出しているアルバム。出していなければ nil。
+    /// 差分再生中も探索画面そのものを背後に残すため、再生中もここは立てたままにする。
+    @Published private(set) var variantFinderAlbumID: UUID?
+    /// 探索を開いた時点の表示順。実体は ContentView が現在のライブラリから引き直すので、
+    /// 再生中に削除した動画は背後の探索画面にも反映される。
+    @Published private(set) var variantFinderItemIDs: [UUID] = []
+
+    /// 一覧を開いたときのウィンドウの大きさ。探索オーバーレイをそこへ合わせるために控える。
+    var variantFinderHostSize: CGSize?
 
     var isPresenting: Bool { mode != nil }
+
+    var isPlayingOverVariantFinder: Bool {
+        guard variantFinderAlbumID != nil else { return false }
+        if case .variantSwitch = mode { return true }
+        return false
+    }
+
+    func openVariantFinder(albumID: UUID, itemIDs: [UUID], hostSize: CGSize?) {
+        variantFinderHostSize = hostSize ?? variantFinderHostSize
+        variantFinderItemIDs = itemIDs
+        variantFinderAlbumID = albumID
+    }
+
+    func closeVariantFinder() {
+        variantFinderAlbumID = nil
+        variantFinderItemIDs = []
+        variantFinderHostSize = nil
+    }
 
     /// 通常再生（再生リスト＋開始位置を指定）
     func playSingle(playlist: [VideoItem], current: VideoItem) {
@@ -63,6 +90,9 @@ final class PlaybackCoordinator: ObservableObject {
 
     /// 差分切り替え再生（2〜9本）。全部を同期で走らせたまま、見せる1本だけを差し替える。
     /// 本数ぶん同時にデコードし続けるので、同時再生と同じく9本を上限にする。
+    ///
+    /// 一覧から開始した場合も含め、ウィンドウ全体を占有して再生する。
+    /// 探索画面から始めた場合は ContentView がその画面を背後に残し、プレイヤーだけを上へ重ねる。
     func playVariantSwitch(_ videos: [VideoItem]) {
         let items = videos.filter { $0.mediaType == .video }
         guard items.count >= 2 else { return }

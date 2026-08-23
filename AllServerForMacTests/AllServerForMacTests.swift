@@ -100,4 +100,93 @@ struct AllServerForMacTests {
       )
     )
   }
+
+  @Test @MainActor
+  func systemTrashKeepsFailedMediaInLibrary() throws {
+    let fileManager = FileManager.default
+    let temporaryRoot = fileManager.temporaryDirectory.appendingPathComponent(
+      "AllServerForMacTrashTests-\(UUID().uuidString)"
+    )
+    let moviesDirectory = temporaryRoot.appendingPathComponent("Movies")
+    let downloadsDirectory = temporaryRoot.appendingPathComponent("Downloads")
+    try fileManager.createDirectory(
+      at: moviesDirectory,
+      withIntermediateDirectories: true
+    )
+    try fileManager.createDirectory(
+      at: downloadsDirectory,
+      withIntermediateDirectories: true
+    )
+    defer { try? fileManager.removeItem(at: temporaryRoot) }
+
+    let movableURL = temporaryRoot.appendingPathComponent("movable.mp4")
+    let blockedURL = temporaryRoot.appendingPathComponent("blocked.mp4")
+    try Data("movable".utf8).write(to: movableURL)
+    try Data("blocked".utf8).write(to: blockedURL)
+
+    let environment = LibraryStorageEnvironment(
+      moviesDirectory: { moviesDirectory },
+      downloadsDirectory: { downloadsDirectory },
+      createDirectory: { url in
+        try fileManager.createDirectory(
+          at: url,
+          withIntermediateDirectories: true
+        )
+      },
+      moveFileToSystemTrash: { url in
+        if url == blockedURL {
+          throw CocoaError(.fileWriteNoPermission)
+        }
+        try fileManager.removeItem(at: url)
+      }
+    )
+    let viewModel = LibraryViewModel(storageEnvironment: environment)
+    viewModel.libraryLoadTask?.cancel()
+
+    let movableID = UUID()
+    let blockedID = UUID()
+    viewModel.videos = [
+      VideoItem(
+        id: movableID,
+        originalFilename: movableURL.lastPathComponent,
+        internalFilename: "",
+        duration: 1,
+        importDate: Date(),
+        creationDate: nil,
+        fileHash: "",
+        externalFilePath: movableURL.path
+      ),
+      VideoItem(
+        id: blockedID,
+        originalFilename: blockedURL.lastPathComponent,
+        internalFilename: "",
+        duration: 1,
+        importDate: Date(),
+        creationDate: nil,
+        fileHash: "",
+        externalFilePath: blockedURL.path
+      ),
+    ]
+    let albumID = UUID()
+    viewModel.albums = [
+      Album(
+        id: albumID,
+        name: "テスト",
+        videoIDs: [movableID, blockedID],
+        type: .video
+      )
+    ]
+
+    let result = viewModel.moveMediaFilesToSystemTrash(
+      videoIDs: [movableID, blockedID]
+    )
+
+    #expect(result.movedVideoIDs == [movableID])
+    #expect(result.failures.map(\.videoID) == [blockedID])
+    #expect(viewModel.videos.map(\.id) == [blockedID])
+    #expect(viewModel.albums.first?.videoIDs == [blockedID])
+    #expect(!fileManager.fileExists(atPath: movableURL.path))
+    #expect(fileManager.fileExists(atPath: blockedURL.path))
+    #expect(viewModel.mediaDeletionNotice != nil)
+  }
 }

@@ -697,6 +697,7 @@ enum WebClientHTML {
                     <button class="pill" id="rename-album-btn">名前を変更</button>
                     <button class="pill danger" id="delete-album-btn">アルバムを削除</button>
                     <button class="pill danger hidden" id="empty-trash-btn">ゴミ箱を空にする</button>
+                    <button class="pill danger hidden" id="empty-trash-system-btn">実ファイルをMacのゴミ箱へ</button>
                     <button class="pill" id="select-btn">選択</button>
                     <button class="pill" id="upload-btn">アップロード</button>
                     <input type="file" id="file-input" multiple class="hidden"
@@ -716,6 +717,7 @@ enum WebClientHTML {
                     <button class="pill" id="bulk-trash">ゴミ箱へ</button>
                     <button class="pill accent hidden" id="bulk-restore">復元</button>
                     <button class="pill danger" id="bulk-purge">完全に削除</button>
+                    <button class="pill danger" id="bulk-system-trash">実ファイルをMacのゴミ箱へ</button>
                     <button class="pill" id="bulk-cancel">やめる</button>
                 </div>
                 <div class="media-grid ratio-video" id="media-grid"></div>
@@ -782,6 +784,7 @@ enum WebClientHTML {
                         <button class="pill" id="trash-btn">ゴミ箱へ</button>
                         <button class="pill accent hidden" id="restore-btn">ゴミ箱から復元</button>
                         <button class="pill danger" id="purge-btn">完全に削除</button>
+                        <button class="pill danger" id="system-trash-btn">実ファイルをMacのゴミ箱へ</button>
                     </div>
                 </div>
             </div>
@@ -2031,8 +2034,30 @@ enum WebClientHTML {
     function deleteCurrentAlbum() {
         var album = state.currentAlbum;
         if (!album || isVirtualAlbumID(album.id) || isSystemAlbum(album)) return;
-        if (!confirm('「' + album.name + '」を削除します。中のメディアはライブラリに残ります。よろしいですか？')) return;
-        api('/albums/' + encodeURIComponent(album.id), { method: 'DELETE' }).then(function () {
+        var choice = prompt(
+            '「' + album.name + '」の削除方法を番号で選んでください。\n' +
+            '1: アルバムだけ削除（中身を残す）\n' +
+            '2: 中身をアプリ内のゴミ箱へ\n' +
+            '3: 中身ごと完全に削除\n' +
+            '4: 中身の実ファイルをMacのゴミ箱へ移動',
+            '1'
+        );
+        if (choice === null) return;
+        var disposalByChoice = { '1': 'keep', '2': 'appTrash', '3': 'complete', '4': 'systemTrash' };
+        var disposal = disposalByChoice[choice.trim()];
+        if (!disposal) { toast('1〜4の番号を入力してください'); return; }
+        if (disposal === 'complete' && !confirm('中身を完全に削除します。アプリ管理内のファイルは元に戻せません。よろしいですか？')) return;
+        if (disposal === 'systemTrash' && !confirm('リンク元を含む実ファイルをMacのゴミ箱へ移動します。よろしいですか？')) return;
+        api('/albums/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ albumIds: [album.id], contentDisposal: disposal })
+        }).then(function (response) { return response.json(); }).then(function (result) {
+            if (!result.deletedAlbumIDs || result.deletedAlbumIDs.indexOf(album.id) < 0) {
+                var failures = result.systemTrashResult && result.systemTrashResult.failures;
+                toast(failures && failures.length ? failures.length + ' 件を移動できなかったためアルバムを残しました' : 'アルバムを削除できませんでした');
+                return;
+            }
             closeAlbum();
             history.replaceState({ view: 'tab', tab: 'albums' }, '', '#albums');
             toast('アルバムを削除しました');
@@ -2082,6 +2107,7 @@ enum WebClientHTML {
             el('rename-album-btn').classList.toggle('hidden', virtualAlbum || isSystemAlbum(a));
             el('delete-album-btn').classList.toggle('hidden', virtualAlbum || isSystemAlbum(a));
             el('empty-trash-btn').classList.toggle('hidden', !trashAlbum);
+            el('empty-trash-system-btn').classList.toggle('hidden', !trashAlbum);
             el('album-shorts-btn').classList.toggle('hidden', trashAlbum);
             el('bulk-restore').classList.toggle('hidden', !trashAlbum);
             el('bulk-trash').classList.toggle('hidden', trashAlbum);
@@ -2204,15 +2230,19 @@ enum WebClientHTML {
         updateBulkBar();
     }
 
-    /// 選択したものをまとめて処理する。complete=true は完全削除。
-    function bulkRemove(complete) {
+    /// 選択したものをまとめて処理する。mode は standard / complete / systemTrash。
+    function bulkRemove(mode) {
         if (!state.selected.length) return;
         var ids = state.selected.slice();
         var path, body;
-        var affectsLibrary = complete;
-        if (complete) {
+        var affectsLibrary = mode !== 'standard';
+        if (mode === 'complete') {
             if (!confirm(ids.length + ' 件をMacから完全に削除します。元に戻せません。よろしいですか？')) return;
             path = '/deleteVideosCompletely';
+            body = { videoIds: ids };
+        } else if (mode === 'systemTrash') {
+            if (!confirm(ids.length + ' 件の実ファイルをMacのゴミ箱へ移動します。リンク元のファイルも対象です。よろしいですか？')) return;
+            path = '/moveVideosToSystemTrash';
             body = { videoIds: ids };
         } else {
             // 一括操作はアルバム詳細でしか出せないので、外す先は常に「いま開いているアルバム」。
@@ -2230,10 +2260,18 @@ enum WebClientHTML {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        }).then(function () {
-            toast(ids.length + ' 件を処理しました');
+        }).then(function (response) {
+            if (mode === 'systemTrash') return response.json();
+            return { movedVideoIDs: ids, failures: [] };
+        }).then(function (result) {
+            var removedIDs = mode === 'systemTrash' ? result.movedVideoIDs : ids;
+            if (result.failures && result.failures.length) {
+                toast(removedIDs.length + ' 件を移動，' + result.failures.length + ' 件は失敗しました');
+            } else {
+                toast(removedIDs.length + ' 件を処理しました');
+            }
             var drop = function (arr) {
-                for (var i = arr.length - 1; i >= 0; i--) if (ids.indexOf(arr[i].id) >= 0) arr.splice(i, 1);
+                for (var i = arr.length - 1; i >= 0; i--) if (removedIDs.indexOf(arr[i].id) >= 0) arr.splice(i, 1);
             };
             drop(state.albumRaw);
             if (affectsLibrary) {
@@ -2284,6 +2322,31 @@ enum WebClientHTML {
             toast('ゴミ箱を空にしました');
         }).catch(function (e) {
             if (!(e instanceof AuthError)) toast('ゴミ箱を空にできませんでした');
+        });
+    }
+
+    function emptyTrashToSystemTrash() {
+        if (!state.trash.length) return;
+        var ids = state.trash.map(function (item) { return item.id; });
+        if (!confirm('ゴミ箱の ' + ids.length + ' 件の実ファイルをMacのゴミ箱へ移動します。リンク元のファイルも対象です。よろしいですか？')) return;
+        api('/moveVideosToSystemTrash', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoIds: ids })
+        }).then(function (response) { return response.json(); }).then(function (result) {
+            var movedIDs = result.movedVideoIDs || [];
+            state.trash = state.trash.filter(function (item) { return movedIDs.indexOf(item.id) < 0; });
+            state.albumRaw = state.trash.slice();
+            state.trashAt = Date.now();
+            renderAlbumGrid();
+            refreshVirtualCounts();
+            if (result.failures && result.failures.length) {
+                toast(movedIDs.length + ' 件を移動，' + result.failures.length + ' 件は失敗しました');
+            } else {
+                toast(movedIDs.length + ' 件をMacのゴミ箱へ移動しました');
+            }
+        }).catch(function (e) {
+            if (!(e instanceof AuthError)) toast('Macのゴミ箱へ移動できませんでした');
         });
     }
 
@@ -3045,20 +3108,24 @@ enum WebClientHTML {
         });
     }
 
-    /// complete=true は実ファイルごと消す取り返しのつかない削除。
-    /// false はゴミ箱行き（または通常アルバムからの除外）。
-    function removeCurrent(complete) {
+    /// mode は standard / complete / systemTrash。
+    function removeCurrent(mode) {
         var list = playlistFor(state.playerOrigin);
         var media = list[state.playerIndex];
         if (!media) return;
 
         var path, body, doneMsg;
-        var affectsLibrary = complete;
-        if (complete) {
+        var affectsLibrary = mode !== 'standard';
+        if (mode === 'complete') {
             if (!confirm('このメディアをMacから完全に削除します。元に戻せません。よろしいですか？')) return;
             path = '/deleteVideosCompletely';
             body = { videoIds: [media.id] };
             doneMsg = '完全に削除しました';
+        } else if (mode === 'systemTrash') {
+            if (!confirm('このメディアの実ファイルをMacのゴミ箱へ移動します。リンク元のファイルも対象です。よろしいですか？')) return;
+            path = '/moveVideosToSystemTrash';
+            body = { videoIds: [media.id] };
+            doneMsg = '実ファイルをMacのゴミ箱へ移動しました';
         } else {
             var ctx = removalContext(media);
             if (!ctx.albumId) { toast('移動先のアルバムが見つかりません'); return; }
@@ -3073,7 +3140,15 @@ enum WebClientHTML {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        }).then(function () {
+        }).then(function (response) {
+            if (mode === 'systemTrash') return response.json();
+            return { movedVideoIDs: [media.id], failures: [] };
+        }).then(function (result) {
+            if (mode === 'systemTrash' && result.movedVideoIDs.indexOf(media.id) < 0) {
+                var reason = result.failures && result.failures.length ? result.failures[0].reason : '不明なエラー';
+                toast('Macのゴミ箱へ移動できませんでした: ' + reason);
+                return;
+            }
             toast(doneMsg);
             var removeFrom = function (arr) {
                 for (var i = arr.length - 1; i >= 0; i--) if (arr[i].id === media.id) arr.splice(i, 1);
@@ -3564,6 +3639,7 @@ enum WebClientHTML {
         el('rename-album-btn').addEventListener('click', renameCurrentAlbum);
         el('delete-album-btn').addEventListener('click', deleteCurrentAlbum);
         el('empty-trash-btn').addEventListener('click', emptyTrash);
+        el('empty-trash-system-btn').addEventListener('click', emptyTrashToSystemTrash);
         el('album-shorts-btn').addEventListener('click', function () {
             if (!state.currentAlbum) return;
             var vids = state.albumFiltered.filter(function (v) { return !isPhoto(v); });
@@ -3612,9 +3688,10 @@ enum WebClientHTML {
         el('arrow-prev').addEventListener('click', function () { navMedia(-1); });
         el('arrow-next').addEventListener('click', function () { navMedia(1); });
         el('quality-select').addEventListener('change', function () { changeQuality(this.value); });
-        el('trash-btn').addEventListener('click', function () { removeCurrent(false); });
+        el('trash-btn').addEventListener('click', function () { removeCurrent('standard'); });
         el('restore-btn').addEventListener('click', restoreCurrentFromTrash);
-        el('purge-btn').addEventListener('click', function () { removeCurrent(true); });
+        el('purge-btn').addEventListener('click', function () { removeCurrent('complete'); });
+        el('system-trash-btn').addEventListener('click', function () { removeCurrent('systemTrash'); });
         el('queue-btn').addEventListener('click', addCurrentToQueue);
         el('playlist-btn').addEventListener('click', addCurrentToPlaylist);
         el('share-btn').addEventListener('click', copyCurrentLink);
@@ -3729,8 +3806,9 @@ enum WebClientHTML {
         el('create-cancel').addEventListener('click', function () { el('create-modal').classList.remove('open'); });
         el('create-modal').addEventListener('click', function (e) { if (e.target === this) this.classList.remove('open'); });
         el('create-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') submitCreateAlbum(); });
-        el('bulk-trash').addEventListener('click', function () { bulkRemove(false); });
-        el('bulk-purge').addEventListener('click', function () { bulkRemove(true); });
+        el('bulk-trash').addEventListener('click', function () { bulkRemove('standard'); });
+        el('bulk-purge').addEventListener('click', function () { bulkRemove('complete'); });
+        el('bulk-system-trash').addEventListener('click', function () { bulkRemove('systemTrash'); });
         albumObserver.observe(el('album-sentinel'));
         el('manga-toggle').addEventListener('click', function () {
             state.mangaMode = !state.mangaMode;

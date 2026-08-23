@@ -34,11 +34,14 @@ struct SketchCleanupView: View {
             isPresented: $showDeleteConfirmation,
             titleVisibility: .visible
         ) {
-            Button("ゴミ箱に入れる") { apply { dataManager.moveToTrash(videoIDs: $0) } }
+            Button("アプリ内のゴミ箱へ") { apply { dataManager.moveToTrash(videoIDs: $0) } }
             Button("完全に削除", role: .destructive) { apply { dataManager.deleteVideos(videoIDs: $0) } }
+            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+                apply { dataManager.moveMediaFilesToSystemTrash(videoIDs: $0) }
+            }
             Button("キャンセル", role: .cancel) { }
         } message: {
-            Text("選択した\(model.selectedIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。\n\n\(SelectionSummary.text(for: model.selectedItems))")
+            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．\n\n\(SelectionSummary.text(for: model.selectedItems))")
         }
     }
 

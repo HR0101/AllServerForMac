@@ -20,6 +20,7 @@ struct MediaGridItem: View {
     var isTrashView: Bool = false
     var onToggleFavorite: () -> Void = {}
     var onMoveToTrash: () -> Void = {}
+    var onMoveToSystemTrash: () -> Void = {}
     var onRestore: () -> Void = {}
     var currentAlbumID: UUID? = nil
     var onMoveToAlbum: (UUID) -> Void = { _ in }
@@ -38,12 +39,12 @@ struct MediaGridItem: View {
         let targets = affectedItems.isEmpty ? [video] : affectedItems
         guard targets.count > 1 else {
             return isTrashView
-                ? "「\(video.originalFilename)」を完全に削除します。この操作は取り消せません。"
-                : "「\(video.originalFilename)」をゴミ箱に入れますか？それとも完全に削除しますか？"
+                ? "「\(video.originalFilename)」を完全に削除するか，実ファイルをMacのゴミ箱へ移動します．"
+                : "「\(video.originalFilename)」の削除方法を選んでください．"
         }
         let head = isTrashView
-            ? "選択した\(targets.count)件を完全に削除します。この操作は取り消せません。"
-            : "選択した\(targets.count)件をゴミ箱に入れますか？それとも完全に削除しますか？"
+            ? "選択した\(targets.count)件を完全に削除するか，実ファイルをMacのゴミ箱へ移動します．"
+            : "選択した\(targets.count)件の削除方法を選んでください．"
         return "\(head)\n\n\(SelectionSummary.text(for: targets))"
     }
 
@@ -168,7 +169,7 @@ struct MediaGridItem: View {
                 Button("削除…", role: .destructive) { showDeleteConfirmation = true }
             }
         }
-        // 削除は必ず「ゴミ箱に入れる」か「完全に削除」かを確認してから実行する
+        // 削除は必ず3種類の違いを確認してから実行する
         // （元ファイルの誤削除を繰り返さないための安全策）。
         .confirmationDialog(
             isTrashView ? "完全に削除しますか？" : "削除方法を選んでください",
@@ -176,9 +177,12 @@ struct MediaGridItem: View {
             titleVisibility: .visible
         ) {
             if !isTrashView {
-                Button("ゴミ箱に入れる") { onMoveToTrash() }
+                Button("アプリ内のゴミ箱へ") { onMoveToTrash() }
             }
             Button("完全に削除", role: .destructive) { onDelete() }
+            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+                onMoveToSystemTrash()
+            }
             Button("キャンセル", role: .cancel) { }
         } message: {
             Text(deleteConfirmationMessage)

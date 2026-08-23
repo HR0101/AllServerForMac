@@ -58,6 +58,7 @@ struct PhotoViewerView: View {
     @State private var filmstripVisible = false
     @State private var filmstripPreloadCenterID: UUID?
     @State private var visiblePhotos: [VideoItem]
+    @State private var showDeleteConfirmation = false
 
     // マウスドラッグで範囲選択してその領域へズームする状態。
     @State private var zoom = MarqueeZoomState()
@@ -129,6 +130,35 @@ struct PhotoViewerView: View {
             hideFilmstripTask?.cancel()
         }
         .onKeyPress(phases: .down, action: handleKeyPress)
+        .confirmationDialog(
+            "削除方法を選んでください",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("アプリ内のゴミ箱へ") {
+                deleteCurrentPhoto {
+                    dataManager.moveToTrash(videoIDs: $0)
+                    return true
+                }
+            }
+            Button("完全に削除", role: .destructive) {
+                deleteCurrentPhoto {
+                    dataManager.deleteVideos(videoIDs: $0)
+                    return true
+                }
+            }
+            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+                deleteCurrentPhoto { ids in
+                    let result = dataManager.moveMediaFilesToSystemTrash(
+                        videoIDs: ids
+                    )
+                    return result.movedVideoIDs.contains(current.id)
+                }
+            }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．")
+        }
     }
 
     @ViewBuilder
@@ -233,14 +263,14 @@ struct PhotoViewerView: View {
             }
 
             Button {
-                deleteCurrentPhoto()
+                showDeleteConfirmation = true
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 18))
                     .foregroundStyle(.red)
             }
             .buttonStyle(.plain)
-            .help("完全に削除")
+            .help("削除方法を選ぶ")
 
             Button {
                 if let url = dataManager.fileURL(for: current) {
@@ -431,9 +461,12 @@ struct PhotoViewerView: View {
         .padding(.vertical, 2)
     }
 
-    private func deleteCurrentPhoto() {
+    private func deleteCurrentPhoto(
+        performDeletion: ([UUID]) -> Bool
+    ) {
         let idToDelete = current.id
         guard let currentIdx = currentIndex else { return }
+        guard performDeletion([idToDelete]) else { return }
         let remainingPhotos = visiblePhotos.filter { $0.id != idToDelete }
 
         imageCache[idToDelete] = nil
@@ -449,8 +482,6 @@ struct PhotoViewerView: View {
             current = remainingPhotos[nextIndex]
         }
 
-        // 完全に削除（ゴミ箱へ移動等）
-        dataManager.deleteVideos(videoIDs: [idToDelete])
     }
 
     private func changeItem(offset: Int) {
@@ -519,7 +550,7 @@ struct PhotoViewerView: View {
             isMangaMode.toggle()
             return .handled
         } else if MediaShortcutSettings.matches(.photoDelete, press: press) {
-            deleteCurrentPhoto()
+            showDeleteConfirmation = true
             return .handled
         } else if MediaShortcutSettings.matches(.photoClose, press: press) {
             coordinator.close()

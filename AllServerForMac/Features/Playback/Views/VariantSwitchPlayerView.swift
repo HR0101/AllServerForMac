@@ -11,10 +11,16 @@ import SwiftUI
 
 struct VariantSwitchPlayerView: View {
     @StateObject private var viewModel: VariantSwitchPlayerViewModel
+    @ObservedObject private var dataManager: LibraryViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    /// 閉じ方。ウィンドウ全体を占有しているときは省略してコーディネータに任せ、
+    /// 「差分動画を探す」の上に重ねているときは、その重なりだけを外すために渡してもらう。
+    private let onClose: (() -> Void)?
     @FocusState private var isFocused: Bool
     @State private var showShortcutHelp = false
-    @State private var isPanelVisible = true
+    @State private var showDeleteConfirmation = false
+    /// 操作系の出し入れ（他のプレイヤーと共通）。
+    @StateObject private var chrome = PlayerChromeController()
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
 
     /// キーで間隔を刻むときの幅。
@@ -28,26 +34,49 @@ struct VariantSwitchPlayerView: View {
         directSelectKeys.indices.contains(index) ? directSelectKeys[index].uppercased() : nil
     }
 
-    init(videos: [VideoItem], dataManager: LibraryViewModel) {
+    init(
+        videos: [VideoItem],
+        dataManager: LibraryViewModel,
+        onClose: (() -> Void)? = nil
+    ) {
         _viewModel = StateObject(wrappedValue: VariantSwitchPlayerViewModel(videos: videos, dataManager: dataManager))
+        _dataManager = ObservedObject(wrappedValue: dataManager)
+        self.onClose = onClose
+    }
+
+    private func close() {
+        if let onClose { onClose() } else { coordinator.close() }
     }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                stack
-                if isPanelVisible {
-                    controlPanel
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            // 操作系は映像の上に重ねる。映像の下に積むと、出入りのたびに映像が伸び縮みしてしまう。
+            stack
+                .overlay(alignment: .top) {
+                    if chrome.isShown {
+                        activeBadge.transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
+                .overlay(alignment: .bottom) {
+                    if chrome.isShown {
+                        controlPanel
+                            .playerChromeHoverGuard(chrome)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+
+            if chrome.isShown {
+                PlayerCornerControls(
+                    showShortcutHelp: $showShortcutHelp,
+                    volume: $viewModel.volume,
+                    isMuted: $viewModel.isMuted
+                ) {
+                    close()
+                }
+                .playerChromeHoverGuard(chrome)
+                .transition(.opacity)
             }
-            PlayerCornerControls(
-                showShortcutHelp: $showShortcutHelp,
-                volume: $viewModel.volume,
-                isMuted: $viewModel.isMuted
-            ) {
-                coordinator.close()
-            }
+
             if showShortcutHelp {
                 ShortcutHelpPanel(title: "差分切り替え再生のショートカット", shortcuts: shortcutList) {
                     showShortcutHelp = false
@@ -58,6 +87,7 @@ struct VariantSwitchPlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .ignoresSafeArea()
+        .playerChromeActivity(chrome)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
@@ -65,11 +95,44 @@ struct VariantSwitchPlayerView: View {
         .onAppear {
             viewModel.start()
             isFocused = true
+            chrome.reveal()
         }
-        // パネルのボタンやスライダーを押すとフォーカスがそちらへ移り、
-        // 以降 .onKeyPress が効かなくなる。開閉のたびに本体へ戻しておく。
-        .onChange(of: isPanelVisible) { _, _ in isFocused = true }
-        .onDisappear(perform: viewModel.cleanup)
+        // パネルのボタンやスライダーを押すとフォーカスがそちらへ移り、以降 .onKeyPress が
+        // 効かなくなる。引っ込んだ時点でポインタは離れているので、そこで本体へ戻す。
+        // 出るたびに戻すと、スライダーをドラッグしている最中に奪ってしまう。
+        .onChange(of: chrome.isShown) { _, shown in
+            if !shown { isFocused = true }
+        }
+        .onChange(of: viewModel.isPlaying) { _, playing in
+            chrome.setHold(.paused, !playing)
+        }
+        .onChange(of: showShortcutHelp) { _, shown in
+            chrome.setHold(.overlayVisible, shown || viewModel.isDeleteMode)
+        }
+        // 削除モードの間は、選んだ結果が見えないと話にならないので出したままにする。
+        .onChange(of: viewModel.isDeleteMode) { _, active in
+            chrome.setHold(.overlayVisible, active || showShortcutHelp)
+        }
+        .confirmationDialog(
+            "削除方法を選んでください",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("アプリ内のゴミ箱へ") { applyDeletion { dataManager.moveToTrash(videoIDs: $0) } }
+            Button("完全に削除", role: .destructive) { applyDeletion { dataManager.deleteVideos(videoIDs: $0) } }
+            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+                applyDeletion {
+                    dataManager.moveMediaFilesToSystemTrash(videoIDs: $0)
+                }
+            }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．\n\n\(SelectionSummary.text(for: viewModel.markedItems))")
+        }
+        .onDisappear {
+            chrome.cancel()
+            viewModel.cleanup()
+        }
     }
 
     // MARK: - 映像
@@ -90,12 +153,14 @@ struct VariantSwitchPlayerView: View {
                         allowsPictureInPicturePlayback: false
                     )
                     .opacity(index == viewModel.activeIndex ? 1 : 0)
-                    // 裏に回っているぶんはクリックを拾わせない（重なり順の一番上が全部持っていくため）。
-                    .allowsHitTesting(index == viewModel.activeIndex)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .top) { activeBadge }
+            // AVPlayerView 自体には用がない（コントロールは出しておらず、操作はパネルとキーボード）。
+            // クリックを AVKit 側へ吸わせないためだけに切る。
+            // なお `.onContinuousHover` はこれが無くても届く。AppKit のトラッキング領域は
+            // 重なり順で遮られず、mouseMoved は NSHostingView にも配られるため。
+            .allowsHitTesting(false)
         }
     }
 
@@ -132,6 +197,7 @@ struct VariantSwitchPlayerView: View {
 
     private var controlPanel: some View {
         VStack(spacing: 10) {
+            if viewModel.isDeleteMode { deleteBar }
             variantChips
             HStack(spacing: 12) {
                 transportControls
@@ -141,7 +207,14 @@ struct VariantSwitchPlayerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(.regularMaterial)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+        .padding(16)
+        .frame(maxWidth: 1200)
     }
 
     /// 押せば即その差分へ。丸の中は番号ではなく、その差分に割り当たっているキーを出す
@@ -150,34 +223,98 @@ struct VariantSwitchPlayerView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(Array(viewModel.variants.enumerated()), id: \.element.id) { index, variant in
-                    Button {
-                        viewModel.showVariant(at: index)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(Self.directSelectKey(for: index) ?? "\(index + 1)")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .frame(width: 18, height: 18)
-                                .background(Circle().fill(.white.opacity(0.18)))
-                            Text(variant.title)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(
-                            Capsule().fill(index == viewModel.activeIndex
-                                ? Color.accentColor.opacity(0.85)
-                                : Color.primary.opacity(0.08))
-                        )
-                        .foregroundStyle(index == viewModel.activeIndex ? Color.white : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(Self.directSelectKey(for: index).map { "\(variant.title)（\($0)）" } ?? variant.title)
+                    variantChip(index: index, variant: variant)
                 }
             }
             .padding(.vertical, 1)
         }
+    }
+
+    @ViewBuilder
+    private func variantChip(index: Int, variant: VariantSwitchPlayerViewModel.Variant) -> some View {
+        let isActive = index == viewModel.activeIndex
+        let isMarked = viewModel.markedForDeletionIDs.contains(variant.id)
+        HStack(spacing: 6) {
+            // 削除モードでも、本体を押せば従来どおり切り替わる。
+            // 見比べないと消していいか判断できないので、印付けと切り替えは別の当たり判定にする。
+            if viewModel.isDeleteMode {
+                Button {
+                    viewModel.toggleMark(at: index)
+                } label: {
+                    Image(systemName: isMarked ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 13))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, isMarked ? Color.red : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isMarked ? "削除対象から外す" : "削除対象にする")
+            }
+            Button {
+                viewModel.showVariant(at: index)
+            } label: {
+                HStack(spacing: 6) {
+                    Text(Self.directSelectKey(for: index) ?? "\(index + 1)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(.white.opacity(0.18)))
+                    Text(variant.title)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundStyle(isActive ? Color.white : Color.primary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule().fill(isMarked ? Color.red.opacity(0.75)
+                           : (isActive ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.08)))
+        )
+        .overlay(
+            Capsule().strokeBorder(isActive ? Color.white.opacity(0.8) : Color.clear, lineWidth: 1.5)
+        )
+        .help(Self.directSelectKey(for: index).map { "\(variant.title)（\($0)）" } ?? variant.title)
+    }
+
+    /// 削除モードの帯。何本選んでいるかと、その場での実行・取りやめ。
+    private var deleteBar: some View {
+        HStack(spacing: 10) {
+            Label("削除モード", systemImage: "trash")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.red)
+            Text("消したい差分に印を付けてください（表示中のものは \(keyLabel(.variantMarkForDeletion))）")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(viewModel.markedForDeletionIDs.count)本を選択中")
+                .font(.caption.monospacedDigit())
+            Button("やめる") { viewModel.isDeleteMode = false }
+                .font(.caption)
+            Button(role: .destructive) {
+                showDeleteConfirmation = true
+            } label: {
+                Label("削除", systemImage: "trash")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(viewModel.markedForDeletionIDs.isEmpty)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    /// 削除を実行する。見比べる相手がいなくなったらプレイヤーを閉じて一覧へ戻す。
+    ///
+    /// 先に再生から外してから消す。開いたままのファイルを消しても macOS では問題ないが、
+    /// 消してから外すまでの間だけ「もう無いファイルを再生し続けている」状態になる。
+    private func applyDeletion(_ delete: ([UUID]) -> Void) {
+        let ids = viewModel.markedForDeletionIDs
+        guard !ids.isEmpty else { return }
+        viewModel.removeVariants(ids: ids)
+        delete(Array(ids))
+        viewModel.isDeleteMode = false
+        if viewModel.variantCount < 2 { close() }
     }
 
     private var transportControls: some View {
@@ -217,6 +354,17 @@ struct VariantSwitchPlayerView: View {
             .disabled(viewModel.variantCount < 2)
             .help("次の差分へ（\(keyLabel(.variantNext))）")
             .accessibilityLabel("次の差分へ")
+
+            Button {
+                viewModel.isDeleteMode.toggle()
+            } label: {
+                Image(systemName: viewModel.isDeleteMode ? "trash.fill" : "trash")
+                    .font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(viewModel.isDeleteMode ? Color.red : Color.primary)
+            .help("見比べて要らないと分かったものを選んで消す（\(keyLabel(.variantToggleDeleteMode))）")
+            .accessibilityLabel("削除モード")
 
             Text(formatTime(viewModel.commonCurrentTime))
                 .font(.caption.monospacedDigit())
@@ -297,16 +445,20 @@ struct VariantSwitchPlayerView: View {
                 .variantPrevious,
                 .variantRandom,
                 .variantToggleAuto,
+                .variantToggleDeleteMode,
+                .variantMarkForDeletion,
                 .videoSeekBack10,
                 .videoSeekBack5,
                 .videoSeekForward5,
                 .videoSeekForward10
             ],
             extraItems: [
-                ("Q W E R T Y U I O", "1本目〜9本目の差分へ直接切り替え"),
+                ("Q W E R T Y U I O", "1本目〜9本目の差分へ直接切り替え（操作パネルは出しません）"),
                 ("0〜9", "0%〜90% の位置へジャンプ"),
                 ("− / +", "切り替え間隔を 0.5 秒ずつ縮める／伸ばす"),
-                ("P", "下の操作パネルの表示/非表示"),
+                ("P", "操作パネルを出しっぱなしにする／自動で隠す"),
+                ("マウスを動かす", "隠れている操作パネルを出す（2.5秒後に自動で隠れます）"),
+                ("差分の切り替え", "映像に被らないよう、操作パネルは出しません"),
                 ("?", "ショートカット一覧を表示"),
                 ("Esc", "プレイヤーを閉じる")
             ]
@@ -319,21 +471,27 @@ struct VariantSwitchPlayerView: View {
     }
 
     private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
+        // 差分の切り替えだけは操作系を出さない。見ている最中に何度も押すものなので、
+        // そのたびにパネルが出てくると映像に被って邪魔になる。
+        // シークや再生・一時停止は、いまどこを再生しているのかを見たいので出す。
+        var revealsChrome = true
+        defer { if revealsChrome { chrome.reveal() } }
+
         if MediaShortcutSettings.matches(.videoClose, press: press) {
-            coordinator.close()
+            close()
             return .handled
         }
 
         switch press.key {
         case .escape:
-            if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
+            if showShortcutHelp { showShortcutHelp = false } else { close() }
             return .handled
         case "?":
             showShortcutHelp.toggle()
             return .handled
         case .space:
             if press.modifiers.contains(.option) {
-                coordinator.close()
+                close()
                 return .handled
             }
         default:
@@ -349,13 +507,22 @@ struct VariantSwitchPlayerView: View {
         // 設定で変えられるキーを先に見る。上段キーへ何かを割り当て直した人が、
         // 固定割り当ての差分選択に食われないようにするため。
         if MediaShortcutSettings.matches(.variantNext, press: press) {
+            revealsChrome = false
             viewModel.showNextVariant()
         } else if MediaShortcutSettings.matches(.variantPrevious, press: press) {
+            revealsChrome = false
             viewModel.showPreviousVariant()
         } else if MediaShortcutSettings.matches(.variantRandom, press: press) {
+            revealsChrome = false
             viewModel.showRandomVariant()
         } else if MediaShortcutSettings.matches(.variantToggleAuto, press: press) {
             viewModel.isAutoSwitching.toggle()
+        } else if MediaShortcutSettings.matches(.variantToggleDeleteMode, press: press) {
+            viewModel.isDeleteMode.toggle()
+        } else if MediaShortcutSettings.matches(.variantMarkForDeletion, press: press) {
+            // 印を付けるだけなら削除モードに入っていなくても始められるようにする。
+            if !viewModel.isDeleteMode { viewModel.isDeleteMode = true }
+            viewModel.toggleMarkOnActiveVariant()
         } else if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
             viewModel.togglePlayPause()
         } else if MediaShortcutSettings.matches(.videoSeekBack10, press: press) {
@@ -367,16 +534,19 @@ struct VariantSwitchPlayerView: View {
         } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
             viewModel.seek(by: 10)
         } else if let index = Self.directSelectKeys.firstIndex(of: pressedLetter(press)) {
+            revealsChrome = false
             viewModel.showVariant(at: index)
         } else {
             switch press.key {
             case "p", "P":
-                withAnimation(.easeOut(duration: 0.18)) { isPanelVisible.toggle() }
+                chrome.togglePin()
             case "-", "_":
                 viewModel.shiftIntervals(by: -Self.intervalStep)
             case "+", "=":
                 viewModel.shiftIntervals(by: Self.intervalStep)
             default:
+                // 何にも当たらなかったキーで操作系を出す理由はない。
+                revealsChrome = false
                 return .ignored
             }
         }
