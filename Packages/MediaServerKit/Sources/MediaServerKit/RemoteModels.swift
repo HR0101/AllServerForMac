@@ -74,3 +74,66 @@ public struct RemoteVideoInfo: Codable, Identifiable, Hashable, Sendable {
   /// `mediaType == "photo"` のとき写真．動画と写真で UI を分岐するために使う．
   public var isPhoto: Bool { mediaType == "photo" }
 }
+
+// MARK: - 差分動画
+
+/// 差分動画の1グループ (`GET /albums/:id/variants`)。
+///
+/// 検出はサーバー側で行う。フレームを時刻ぴったりで何枚も起こす処理なので、
+/// 実ファイルを持たないクライアントには渡しようがなく、渡せたとしても割に合わない。
+public struct RemoteVariantGroup: Codable, Identifiable, Hashable, Sendable {
+  public let id: String
+  /// この束の尺（束の中はどれもほぼ同じ）。
+  public let duration: TimeInterval
+  /// 束に入っている動画。並びはサーバー側の判定順。
+  public let videoIDs: [String]
+  /// 何を根拠にまとまったのかを画面に出すための実測値。測れなければ nil。
+  public let minFrameDistance: Double?
+  public let maxFrameDistance: Double?
+  public let minTitleSimilarity: Double?
+  public let maxTitleSimilarity: Double?
+
+  public init(
+    id: String,
+    duration: TimeInterval,
+    videoIDs: [String],
+    minFrameDistance: Double? = nil,
+    maxFrameDistance: Double? = nil,
+    minTitleSimilarity: Double? = nil,
+    maxTitleSimilarity: Double? = nil
+  ) {
+    self.id = id
+    self.duration = duration
+    self.videoIDs = videoIDs
+    self.minFrameDistance = minFrameDistance
+    self.maxFrameDistance = maxFrameDistance
+    self.minTitleSimilarity = minTitleSimilarity
+    self.maxTitleSimilarity = maxTitleSimilarity
+  }
+}
+
+/// 差分動画の探索結果 (`GET /albums/:id/variants`)。
+///
+/// 1本あたり数秒かかるフレームの展開を挟むため、その場では今わかっているぶんだけを返し、
+/// 残りは裏で作る。クライアントは `state` が `ready` になるまで繰り返し尋ねる
+/// （`/video/:id/prepare` と同じ形）。`groups` は途中でも入っているので、
+/// 見つかったものから先に触れる。
+public struct RemoteVariantScanResult: Codable, Hashable, Sendable {
+  public static let scanningState = "scanning"
+  public static let readyState = "ready"
+
+  public let state: String
+  /// 指紋を作り終えた本数と、作る必要がある本数。
+  public let scanned: Int
+  public let total: Int
+  public let groups: [RemoteVariantGroup]
+
+  public var isReady: Bool { state == Self.readyState }
+
+  public init(state: String, scanned: Int, total: Int, groups: [RemoteVariantGroup]) {
+    self.state = state
+    self.scanned = scanned
+    self.total = total
+    self.groups = groups
+  }
+}
