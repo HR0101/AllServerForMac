@@ -15,6 +15,9 @@ import Foundation
 //  2. 束の中だけで、同じ相対位置から取った数フレームの知覚ハッシュを突き合わせる。
 //     衣装や肌の差し替えは dHash の一部ビットしか動かさないので、
 //     まったく別の動画（距離 20〜30 前後）とははっきり差が付く。
+//  そのうえで、ファイル名の近さ（`TitleSimilarity`）でしきい値を少し上下させる。
+//  名前は「無関係かどうか」をよく言い当てる一方で「別キャラかどうか」は言い当てられないので、
+//  主役はあくまでフレームで、名前は効き幅を絞った補助に留めている。
 
 /// 動画1本ぶんの指紋。同じ相対位置から取った複数フレームの知覚ハッシュを、その順番のまま持つ。
 struct VideoFrameSignature: Equatable, Sendable {
@@ -63,6 +66,51 @@ enum VariantFrameSampler {
 }
 
 enum VariantVideoDetector {
+    /// 束の中の1本ぶんの手がかり。フレームの指紋と、そろえ済みのファイル名。
+    struct Fingerprint: Sendable {
+        let signature: VideoFrameSignature
+        let title: [Character]
+
+        init(signature: VideoFrameSignature, filename: String) {
+            self.signature = signature
+            self.title = TitleSimilarity.normalized(filename)
+        }
+    }
+
+    /// 名前がどれだけ遠くても、これ以下のしきい値までは締めない。
+    /// 名前を付け替えただけの差分（フレームはほぼ一致）を取りこぼさないための下限。
+    static let minimumThreshold: Double = 2
+
+    /// 名前の近さでしきい値を上下させたもの。0.5 を中立に、近ければ足し、遠ければ引く。
+    ///
+    /// `influence` で効き幅を抑えているのは、名前だけでは差分（0.57〜0.94）と
+    /// 別キャラ（0.41〜0.67）が重なって見分けられないため。
+    /// 名前の近さだけでフレームの隔たり（差分 2〜9 に対し別キャラ 14〜19）を
+    /// 埋め切れない大きさに留めておく必要がある。
+    static func effectiveThreshold(
+        base: Double,
+        titleSimilarity: Double,
+        influence: Double
+    ) -> Double {
+        max(minimumThreshold, base + influence * (titleSimilarity - 0.5) * 2)
+    }
+
+    /// 2本が同じ映像の別バージョンかどうか。
+    static func isVariantPair(
+        _ lhs: Fingerprint,
+        _ rhs: Fingerprint,
+        maxAverageDistance: Double,
+        titleInfluence: Double
+    ) -> Bool {
+        guard let distance = lhs.signature.averageDistance(to: rhs.signature) else { return false }
+        let threshold = effectiveThreshold(
+            base: maxAverageDistance,
+            titleSimilarity: TitleSimilarity.score(lhs.title, rhs.title),
+            influence: titleInfluence
+        )
+        return distance <= threshold
+    }
+
     /// 尺が `tolerance` 秒以内で揃うものを1つの束にする。
     ///
     /// 尺の昇順に見ていき、束の先頭からの差が `tolerance` を超えたところで束を切る。
@@ -94,21 +142,27 @@ enum VariantVideoDetector {
         return buckets
     }
 
-    /// 指紋のそろった束を、平均距離が `maxAverageDistance` 以内でつながるグループへまとめる。
+    /// 束を、差分どうしとみなせるものでつながるグループへまとめる。
+    /// フレームの指紋が取れなかったものは、名前がどれだけ近くても対象にしない
+    /// （名前だけでは根拠として弱く、別キャラを引き込んでしまう）。
     static func groups(
         in bucket: [VideoItem],
-        signatures: [UUID: VideoFrameSignature],
-        maxAverageDistance: Double
+        fingerprints: [UUID: Fingerprint],
+        maxAverageDistance: Double,
+        titleInfluence: Double
     ) -> [[VideoItem]] {
-        let entries: [(id: UUID, value: VideoFrameSignature)] = bucket.compactMap { item in
-            guard let signature = signatures[item.id] else { return nil }
-            return (id: item.id, value: signature)
+        let entries: [(id: UUID, value: Fingerprint)] = bucket.compactMap { item in
+            guard let fingerprint = fingerprints[item.id] else { return nil }
+            return (id: item.id, value: fingerprint)
         }
         guard entries.count > 1 else { return [] }
 
         let grouped = SimilarityGrouping.groups(of: entries) { lhs, rhs in
-            guard let distance = lhs.averageDistance(to: rhs) else { return false }
-            return distance <= maxAverageDistance
+            isVariantPair(
+                lhs, rhs,
+                maxAverageDistance: maxAverageDistance,
+                titleInfluence: titleInfluence
+            )
         }
 
         let itemsByID = Dictionary(bucket.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
@@ -116,5 +170,33 @@ enum VariantVideoDetector {
             let items = ids.compactMap { itemsByID[$0] }
             return items.count > 1 ? items : nil
         }
+    }
+
+    /// グループがどれくらいの根拠でまとまったのかを画面に出すための実測値。
+    struct GroupStats: Equatable {
+        var frameDistance: ClosedRange<Double>
+        var titleSimilarity: ClosedRange<Double>
+    }
+
+    static func stats(for items: [VideoItem], fingerprints: [UUID: Fingerprint]) -> GroupStats? {
+        let found = items.compactMap { fingerprints[$0.id] }
+        guard found.count > 1 else { return nil }
+
+        var distances: [Double] = []
+        var similarities: [Double] = []
+        for i in 0..<found.count {
+            for j in (i + 1)..<found.count {
+                if let distance = found[i].signature.averageDistance(to: found[j].signature) {
+                    distances.append(distance)
+                }
+                similarities.append(TitleSimilarity.score(found[i].title, found[j].title))
+            }
+        }
+        guard let lowDistance = distances.min(), let highDistance = distances.max(),
+              let lowTitle = similarities.min(), let highTitle = similarities.max() else { return nil }
+        return GroupStats(
+            frameDistance: lowDistance...highDistance,
+            titleSimilarity: lowTitle...highTitle
+        )
     }
 }

@@ -89,6 +89,12 @@ struct VariantVideoView: View {
                 Text("\(group.items.count)本の差分 ・ \(formatDuration(group.duration))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let stats = group.stats {
+                    Text(evidenceText(stats))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .help("絵の差はフレームどうしのハミング距離（小さいほど似ている）、名前の近さは 0〜1。名前の近さはしきい値を上下させる補助に使っています")
+                }
                 Spacer()
                 Button("すべて選ぶ") { model.selectAll(inGroupAt: index) }
                     .font(.caption)
@@ -173,7 +179,18 @@ struct VariantVideoView: View {
                     .font(.caption.monospacedDigit())
                     .frame(width: 34, alignment: .leading)
 
-                Text("大きくすると、同じ動きでも別キャラの動画まで混ざります")
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Text("タイトルの効き")
+                    .font(.caption)
+                Slider(value: $model.titleInfluence, in: 0...8, step: 1)
+                    .frame(width: 150)
+                Text("±\(Int(model.titleInfluence))")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 34, alignment: .leading)
+                Text(titleInfluenceHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -192,6 +209,26 @@ struct VariantVideoView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// 名前が近いほど「似ている度合い」を何点ぶん甘く見るか、を実際の数字で見せる。
+    private var titleInfluenceHint: String {
+        guard model.titleInfluence > 0 else {
+            return "0 ならファイル名を見ず、絵だけで判定します"
+        }
+        let loose = VariantVideoDetector.effectiveThreshold(
+            base: model.maxAverageDistance, titleSimilarity: 1, influence: model.titleInfluence)
+        let tight = VariantVideoDetector.effectiveThreshold(
+            base: model.maxAverageDistance, titleSimilarity: 0, influence: model.titleInfluence)
+        return String(format: "名前がそっくりなら %.0f まで、まるで違えば %.0f までに絞ります", loose, tight)
+    }
+
+    private func evidenceText(_ stats: VariantVideoDetector.GroupStats) -> String {
+        String(
+            format: "絵の差 %.1f〜%.1f ・ 名前の近さ %.2f〜%.2f",
+            stats.frameDistance.lowerBound, stats.frameDistance.upperBound,
+            stats.titleSimilarity.lowerBound, stats.titleSimilarity.upperBound
+        )
     }
 
     private func play(_ videos: [VideoItem]) {

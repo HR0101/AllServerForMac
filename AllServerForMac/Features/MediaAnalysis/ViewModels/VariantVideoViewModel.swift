@@ -10,6 +10,8 @@ final class VariantVideoViewModel: ObservableObject {
         var duration: TimeInterval
         /// 切り替え再生に持っていくもの。既定は全部。
         var selectedIDs: Set<UUID>
+        /// 何を根拠にまとまったのか（画面に出して、しきい値の調整の手がかりにする）。
+        var stats: VariantVideoDetector.GroupStats?
 
         var selectedItems: [VideoItem] { items.filter { selectedIDs.contains($0.id) } }
     }
@@ -35,8 +37,16 @@ final class VariantVideoViewModel: ObservableObject {
         didSet { rebuildGroups() }
     }
 
+    /// ファイル名の近さでフレームのしきい値をどれだけ上下させるか（0 なら名前を見ない）。
+    /// 名前は「無関係かどうか」はよく言い当てるが「別キャラかどうか」は言い当てられないので、
+    /// 実測のフレーム距離の隔たり（差分 2〜9 / 別キャラ 14〜19）を名前だけで埋められない
+    /// 大きさに既定を置いている。詳しくは `TitleSimilarity`。
+    @Published var titleInfluence: Double = 4 {
+        didSet { rebuildGroups() }
+    }
+
     /// 指紋は尺のしきい値を変えても使い回せるので、項目ごとに取っておく。
-    private var signatures: [UUID: VideoFrameSignature] = [:]
+    private var fingerprints: [UUID: VariantVideoDetector.Fingerprint] = [:]
     private var buckets: [[VideoItem]] = []
     private var scanTask: Task<Void, Never>?
     private var lastScanInput: (items: [VideoItem], urls: [UUID: URL])?
@@ -74,7 +84,7 @@ final class VariantVideoViewModel: ObservableObject {
 
         // まず尺で束ねる。ここで大半が落ちるので、重いフレーム展開はごく一部で済む。
         buckets = VariantVideoDetector.durationBuckets(of: input.items, tolerance: durationTolerance)
-        let pending = buckets.flatMap { $0 }.filter { signatures[$0.id] == nil }
+        let pending = buckets.flatMap { $0 }.filter { fingerprints[$0.id] == nil }
 
         groups = []
         unreadableCount = 0
@@ -117,8 +127,14 @@ final class VariantVideoViewModel: ObservableObject {
             }
 
             if Task.isCancelled { return }
+            let filenames = Dictionary(slice.map { ($0.id, $0.originalFilename) },
+                                       uniquingKeysWith: { current, _ in current })
             for (id, signature) in results {
-                if let signature { signatures[id] = signature } else { unreadableCount += 1 }
+                if let signature, let filename = filenames[id] {
+                    fingerprints[id] = VariantVideoDetector.Fingerprint(signature: signature, filename: filename)
+                } else {
+                    unreadableCount += 1
+                }
             }
             scannedCount = min(index, pending.count)
         }
@@ -154,14 +170,16 @@ final class VariantVideoViewModel: ObservableObject {
         groups = buckets.flatMap { bucket in
             VariantVideoDetector.groups(
                 in: bucket,
-                signatures: signatures,
-                maxAverageDistance: maxAverageDistance
+                fingerprints: fingerprints,
+                maxAverageDistance: maxAverageDistance,
+                titleInfluence: titleInfluence
             ).map { items -> Group in
                 let ids = Set(items.map(\.id))
                 return Group(
                     items: items,
                     duration: items.first?.duration ?? 0,
-                    selectedIDs: previousSelections[ids] ?? ids
+                    selectedIDs: previousSelections[ids] ?? ids,
+                    stats: VariantVideoDetector.stats(for: items, fingerprints: fingerprints)
                 )
             }
         }
