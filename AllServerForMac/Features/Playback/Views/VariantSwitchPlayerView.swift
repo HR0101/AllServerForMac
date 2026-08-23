@@ -23,9 +23,6 @@ struct VariantSwitchPlayerView: View {
     @StateObject private var chrome = PlayerChromeController()
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
 
-    private static let fastSwitchCrossfadeMinimumDuration: Double = 0.06
-    private static let fastSwitchCrossfadeMaximumDuration: Double = 0.12
-    private static let fastSwitchCrossfadeDurationRatio: Double = 0.6
     private static let activeTitleWidth: CGFloat = 280
 
     /// 差分を直接選ぶキー。数字はシークバーの割合ジャンプ（他のプレイヤーと同じ）に使うので、
@@ -155,10 +152,6 @@ struct VariantSwitchPlayerView: View {
                     .opacity(index == viewModel.activeIndex ? 1 : 0)
                 }
             }
-            .animation(
-                fastSwitchCrossfadeAnimation,
-                value: viewModel.activeIndex
-            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // AVPlayerView 自体には用がない（コントロールは出しておらず、操作はパネルとキーボード）。
             // クリックを AVKit 側へ吸わせないためだけに切る。
@@ -166,23 +159,6 @@ struct VariantSwitchPlayerView: View {
             // 重なり順で遮られず、mouseMoved は NSHostingView にも配られるため。
             .allowsHitTesting(false)
         }
-    }
-
-    /// 0.5秒以下の自動切り替えだけを短くクロスフェードし，強い瞬間的な明滅を抑える。
-    /// 通常速度と手動切り替えは，差分を見比べやすい従来の即時切り替えを維持する。
-    private var fastSwitchCrossfadeAnimation: Animation? {
-        guard viewModel.isAutoSwitching,
-              viewModel.minInterval <= VariantSwitchSettings.fineIntervalThreshold else {
-            return nil
-        }
-        let duration = min(
-            max(
-                viewModel.minInterval * Self.fastSwitchCrossfadeDurationRatio,
-                Self.fastSwitchCrossfadeMinimumDuration
-            ),
-            Self.fastSwitchCrossfadeMaximumDuration
-        )
-        return .easeInOut(duration: duration)
     }
 
     /// 操作系が隠れていても，いま見ている差分だけは固定位置で判別できるようにする。
