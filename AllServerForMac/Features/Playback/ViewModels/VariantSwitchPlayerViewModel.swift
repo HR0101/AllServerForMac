@@ -228,11 +228,15 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
 
     /// 下限と上限を同じ幅だけ動かして、ばらつきの幅は保ったまま速さだけ変える。
     /// 端に当たったら窓を潰さずそこで止める（上限側で潰すと、戻したときに固定間隔になってしまう）。
-    func shiftIntervals(by delta: Double) {
+    func shiftIntervals(increasing: Bool) {
         let span = maxInterval - minInterval
         let lowest = VariantSwitchSettings.allowedRange.lowerBound
         let highestStart = max(VariantSwitchSettings.allowedRange.upperBound - span, lowest)
-        minInterval = min(max(minInterval + delta, lowest), highestStart)
+        let adjustedMinInterval = VariantSwitchSettings.adjustedInterval(
+            minInterval,
+            increasing: increasing
+        )
+        minInterval = min(max(adjustedMinInterval, lowest), highestStart)
         maxInterval = VariantSwitchSettings.clamp(minInterval + span)
         persistIntervals()
     }

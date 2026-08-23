@@ -13,8 +13,11 @@ enum VariantSwitchSettings {
     static let defaultMinInterval: Double = 3
     static let defaultMaxInterval: Double = 6
 
-    /// 下限は切り替わりが見て分かる程度、上限は「たまにしか変わらない」程度まで。
-    static let allowedRange: ClosedRange<Double> = 0.5...60
+    /// 0.5秒より上は従来の0.5秒刻み，それ以下だけ細かく調整する。
+    static let fineIntervalThreshold: Double = 0.5
+    static let fineIntervalStep: Double = 0.1
+    static let coarseIntervalStep: Double = 0.5
+    static let allowedRange: ClosedRange<Double> = 0.1...60
 
     static var minInterval: Double {
         get { readInterval(minIntervalKey, fallback: defaultMinInterval) }
@@ -40,6 +43,17 @@ enum VariantSwitchSettings {
 
     static func clamp(_ value: Double) -> Double {
         min(max(value, allowedRange.lowerBound), allowedRange.upperBound)
+    }
+
+    /// 増加時は0.5秒未満，減少時は0.5秒以下にいる間だけ0.1秒刻みにする。
+    /// これにより，境界では `1.0 → 0.5 → 0.4` と `0.4 → 0.5 → 1.0` になる。
+    static func adjustedInterval(_ value: Double, increasing: Bool) -> Double {
+        let usesFineStep = increasing
+            ? value < fineIntervalThreshold
+            : value <= fineIntervalThreshold
+        let step = usesFineStep ? fineIntervalStep : coarseIntervalStep
+        let adjustedValue = value + (increasing ? step : -step)
+        return clamp((adjustedValue * 10).rounded() / 10)
     }
 
     private static func readInterval(_ key: String, fallback: Double) -> Double {

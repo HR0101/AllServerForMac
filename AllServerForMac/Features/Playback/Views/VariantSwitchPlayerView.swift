@@ -23,8 +23,10 @@ struct VariantSwitchPlayerView: View {
     @StateObject private var chrome = PlayerChromeController()
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
 
-    /// キーで間隔を刻むときの幅。
-    private static let intervalStep: Double = 0.5
+    private static let fastSwitchCrossfadeMinimumDuration: Double = 0.06
+    private static let fastSwitchCrossfadeMaximumDuration: Double = 0.12
+    private static let fastSwitchCrossfadeDurationRatio: Double = 0.6
+    private static let activeTitleWidth: CGFloat = 280
 
     /// 差分を直接選ぶキー。数字はシークバーの割合ジャンプ（他のプレイヤーと同じ）に使うので、
     /// キーボード上段を左から順に 1本目〜9本目へ割り当てる（本数の上限も 9 本）。
@@ -52,9 +54,9 @@ struct VariantSwitchPlayerView: View {
         ZStack(alignment: .topTrailing) {
             // 操作系は映像の上に重ねる。映像の下に積むと、出入りのたびに映像が伸び縮みしてしまう。
             stack
-                .overlay(alignment: .top) {
-                    if chrome.isShown {
-                        activeBadge.transition(.move(edge: .top).combined(with: .opacity))
+                .overlay(alignment: .topLeading) {
+                    if viewModel.variantCount > 0 {
+                        activeBadge
                     }
                 }
                 .overlay(alignment: .bottom) {
@@ -103,9 +105,6 @@ struct VariantSwitchPlayerView: View {
         .onChange(of: chrome.isShown) { _, shown in
             if !shown { isFocused = true }
         }
-        .onChange(of: viewModel.isPlaying) { _, playing in
-            chrome.setHold(.paused, !playing)
-        }
         .onChange(of: showShortcutHelp) { _, shown in
             chrome.setHold(.overlayVisible, shown || viewModel.isDeleteMode)
         }
@@ -113,21 +112,22 @@ struct VariantSwitchPlayerView: View {
         .onChange(of: viewModel.isDeleteMode) { _, active in
             chrome.setHold(.overlayVisible, active || showShortcutHelp)
         }
-        .confirmationDialog(
-            "削除方法を選んでください",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("アプリ内のゴミ箱へ") { applyDeletion { dataManager.moveToTrash(videoIDs: $0) } }
-            Button("完全に削除", role: .destructive) { applyDeletion { dataManager.deleteVideos(videoIDs: $0) } }
-            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
-                applyDeletion {
-                    dataManager.moveMediaFilesToSystemTrash(videoIDs: $0)
+        .sheet(isPresented: $showDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: viewModel.markedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: {
+                    applyDeletion { dataManager.moveToTrash(videoIDs: $0) }
+                },
+                onDeleteCompletely: {
+                    applyDeletion { dataManager.deleteVideos(videoIDs: $0) }
+                },
+                onMoveToSystemTrash: {
+                    applyDeletion {
+                        dataManager.moveMediaFilesToSystemTrash(videoIDs: $0)
+                    }
                 }
-            }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．\n\n\(SelectionSummary.text(for: viewModel.markedItems))")
+            )
         }
         .onDisappear {
             chrome.cancel()
@@ -155,6 +155,10 @@ struct VariantSwitchPlayerView: View {
                     .opacity(index == viewModel.activeIndex ? 1 : 0)
                 }
             }
+            .animation(
+                fastSwitchCrossfadeAnimation,
+                value: viewModel.activeIndex
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // AVPlayerView 自体には用がない（コントロールは出しておらず、操作はパネルとキーボード）。
             // クリックを AVKit 側へ吸わせないためだけに切る。
@@ -164,16 +168,40 @@ struct VariantSwitchPlayerView: View {
         }
     }
 
-    /// いま何番の差分を見ているかを、映像に軽く重ねて出す。
+    /// 0.5秒以下の自動切り替えだけを短くクロスフェードし，強い瞬間的な明滅を抑える。
+    /// 通常速度と手動切り替えは，差分を見比べやすい従来の即時切り替えを維持する。
+    private var fastSwitchCrossfadeAnimation: Animation? {
+        guard viewModel.isAutoSwitching,
+              viewModel.minInterval <= VariantSwitchSettings.fineIntervalThreshold else {
+            return nil
+        }
+        let duration = min(
+            max(
+                viewModel.minInterval * Self.fastSwitchCrossfadeDurationRatio,
+                Self.fastSwitchCrossfadeMinimumDuration
+            ),
+            Self.fastSwitchCrossfadeMaximumDuration
+        )
+        return .easeInOut(duration: duration)
+    }
+
+    /// 操作系が隠れていても，いま見ている差分だけは固定位置で判別できるようにする。
+    /// 幅を固定し，タイトル長によってバッジ全体が高速で伸び縮みしないようにする。
     private var activeBadge: some View {
         HStack(spacing: 8) {
+            Image(systemName: "eye.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.72))
             Text("\(viewModel.activeIndex + 1) / \(viewModel.variantCount)")
                 .font(.system(size: 13, weight: .bold).monospacedDigit())
             Text(activeTitle)
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if viewModel.isAutoSwitching, viewModel.variantCount > 1 {
+                .frame(width: Self.activeTitleWidth, alignment: .leading)
+            if viewModel.isAutoSwitching,
+               viewModel.variantCount > 1,
+               viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold {
                 Text(String(format: "次まで %.1fs", max(0, viewModel.secondsUntilSwitch)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.7))
@@ -182,8 +210,12 @@ struct VariantSwitchPlayerView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Capsule().fill(.black.opacity(0.55)))
+        .background(Capsule().fill(.black.opacity(0.42)))
+        .overlay(
+            Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        )
         .padding(.top, 14)
+        .padding(.leading, 14)
         .allowsHitTesting(false)
     }
 
@@ -262,7 +294,7 @@ struct VariantSwitchPlayerView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                .foregroundStyle(isActive ? Color.white : Color.primary)
+                .foregroundStyle(isMarked ? Color.white : Color.primary)
             }
             .buttonStyle(.plain)
         }
@@ -270,11 +302,15 @@ struct VariantSwitchPlayerView: View {
         .padding(.vertical, 5)
         .background(
             Capsule().fill(isMarked ? Color.red.opacity(0.75)
-                           : (isActive ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.08)))
+                           : Color.primary.opacity(0.08))
         )
-        .overlay(
-            Capsule().strokeBorder(isActive ? Color.white.opacity(0.8) : Color.clear, lineWidth: 1.5)
-        )
+        .overlay(alignment: .bottom) {
+            Capsule()
+                .fill(isActive ? Color.accentColor.opacity(0.78) : Color.clear)
+                .frame(height: 3)
+                .padding(.horizontal, 10)
+                .offset(y: 3)
+        }
         .help(Self.directSelectKey(for: index).map { "\(variant.title)（\($0)）" } ?? variant.title)
     }
 
@@ -421,9 +457,22 @@ struct VariantSwitchPlayerView: View {
         set: @escaping (Double) -> Void
     ) -> some View {
         Stepper(
-            value: Binding(get: { value }, set: set),
-            in: VariantSwitchSettings.allowedRange,
-            step: Self.intervalStep
+            onIncrement: {
+                set(
+                    VariantSwitchSettings.adjustedInterval(
+                        value,
+                        increasing: true
+                    )
+                )
+            },
+            onDecrement: {
+                set(
+                    VariantSwitchSettings.adjustedInterval(
+                        value,
+                        increasing: false
+                    )
+                )
+            }
         ) {
             Text(String(format: "%.1f", value))
                 .font(.caption.monospacedDigit())
@@ -455,7 +504,7 @@ struct VariantSwitchPlayerView: View {
             extraItems: [
                 ("Q W E R T Y U I O", "1本目〜9本目の差分へ直接切り替え（操作パネルは出しません）"),
                 ("0〜9", "0%〜90% の位置へジャンプ"),
-                ("− / +", "切り替え間隔を 0.5 秒ずつ縮める／伸ばす"),
+                ("− / +", "切り替え間隔を調整（0.5秒以下は0.1秒刻み）"),
                 ("P", "操作パネルを出しっぱなしにする／自動で隠す"),
                 ("マウスを動かす", "隠れている操作パネルを出す（2.5秒後に自動で隠れます）"),
                 ("差分の切り替え", "映像に被らないよう、操作パネルは出しません"),
@@ -471,9 +520,8 @@ struct VariantSwitchPlayerView: View {
     }
 
     private func handleKeyPress(press: KeyPress) -> KeyPress.Result {
-        // 差分の切り替えだけは操作系を出さない。見ている最中に何度も押すものなので、
-        // そのたびにパネルが出てくると映像に被って邪魔になる。
-        // シークや再生・一時停止は、いまどこを再生しているのかを見たいので出す。
+        // 差分の切り替え，キーボードによるスキップ，再生・一時停止では操作系を出さない。
+        // 見比べながら何度も押す操作なので，そのたびに映像へ被らないようにする。
         var revealsChrome = true
         defer { if revealsChrome { chrome.reveal() } }
 
@@ -500,6 +548,7 @@ struct VariantSwitchPlayerView: View {
 
         // 数字は他のプレイヤーと揃えて割合ジャンプ。差分の直接指定は上段キーへ逃がしてある。
         if let digit = press.key.character.wholeNumberValue, (0...9).contains(digit) {
+            revealsChrome = false
             viewModel.seek(toPercentage: Double(digit) / 10.0)
             return .handled
         }
@@ -524,14 +573,19 @@ struct VariantSwitchPlayerView: View {
             if !viewModel.isDeleteMode { viewModel.isDeleteMode = true }
             viewModel.toggleMarkOnActiveVariant()
         } else if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
+            revealsChrome = false
             viewModel.togglePlayPause()
         } else if MediaShortcutSettings.matches(.videoSeekBack10, press: press) {
+            revealsChrome = false
             viewModel.seek(by: -10)
         } else if MediaShortcutSettings.matches(.videoSeekBack5, press: press) {
+            revealsChrome = false
             viewModel.seek(by: -5)
         } else if MediaShortcutSettings.matches(.videoSeekForward5, press: press) {
+            revealsChrome = false
             viewModel.seek(by: 5)
         } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
+            revealsChrome = false
             viewModel.seek(by: 10)
         } else if let index = Self.directSelectKeys.firstIndex(of: pressedLetter(press)) {
             revealsChrome = false
@@ -541,9 +595,9 @@ struct VariantSwitchPlayerView: View {
             case "p", "P":
                 chrome.togglePin()
             case "-", "_":
-                viewModel.shiftIntervals(by: -Self.intervalStep)
+                viewModel.shiftIntervals(increasing: false)
             case "+", "=":
-                viewModel.shiftIntervals(by: Self.intervalStep)
+                viewModel.shiftIntervals(increasing: true)
             default:
                 // 何にも当たらなかったキーで操作系を出す理由はない。
                 revealsChrome = false
