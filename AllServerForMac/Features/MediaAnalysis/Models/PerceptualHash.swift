@@ -93,9 +93,19 @@ enum SimilarityGrouping {
         of hashes: [(id: ID, hash: PerceptualHash)],
         maxDistance: Int
     ) -> [[ID]] {
-        guard hashes.count > 1 else { return [] }
+        groups(of: hashes.map { (id: $0.id, value: $0.hash) }) { $0.distance(to: $1) <= maxDistance }
+    }
 
-        var parent = Array(0..<hashes.count)
+    /// 「似ている」の判定を差し替えられる版。1枚のハッシュではなく、
+    /// 複数フレームの指紋どうしを突き合わせたい差分動画の検出（`VariantVideoDetector`）が使う。
+    /// つなげ方（推移的にまとめる／2件以上だけ返す／元の並び順を保つ）は上と同じ。
+    static func groups<ID: Hashable, Value>(
+        of entries: [(id: ID, value: Value)],
+        isSimilar: (Value, Value) -> Bool
+    ) -> [[ID]] {
+        guard entries.count > 1 else { return [] }
+
+        var parent = Array(0..<entries.count)
         func root(_ index: Int) -> Int {
             var current = index
             while parent[current] != current {
@@ -109,8 +119,8 @@ enum SimilarityGrouping {
             if rootA != rootB { parent[rootB] = rootA }
         }
 
-        for i in 0..<hashes.count {
-            for j in (i + 1)..<hashes.count where hashes[i].hash.distance(to: hashes[j].hash) <= maxDistance {
+        for i in 0..<entries.count {
+            for j in (i + 1)..<entries.count where isSimilar(entries[i].value, entries[j].value) {
                 union(i, j)
             }
         }
@@ -118,10 +128,10 @@ enum SimilarityGrouping {
         // 元の並び順を保ったままグループへ振り分ける。
         var buckets: [Int: [ID]] = [:]
         var order: [Int] = []
-        for index in 0..<hashes.count {
+        for index in 0..<entries.count {
             let key = root(index)
             if buckets[key] == nil { order.append(key) }
-            buckets[key, default: []].append(hashes[index].id)
+            buckets[key, default: []].append(entries[index].id)
         }
         return order.compactMap { key in
             guard let bucket = buckets[key], bucket.count > 1 else { return nil }
