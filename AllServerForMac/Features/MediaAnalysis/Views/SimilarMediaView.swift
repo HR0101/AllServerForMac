@@ -67,7 +67,7 @@ struct SimilarMediaView: View {
                 ProgressView(value: model.progress, total: 1.0)
                     .progressViewStyle(.linear)
                     .frame(width: 260)
-                Text("照合中… \(model.scannedCount) / \(model.totalCount)")
+                Text("\(model.scanStage.title)… \(model.scannedCount) / \(model.totalCount)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Button("中止") { model.cancelScan() }
@@ -94,9 +94,16 @@ struct SimilarMediaView: View {
 
     private func groupRow(_ group: SimilarMediaViewModel.Group, at index: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(group.items.count)件が似ています")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("\(group.items.count)件が似ています")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if group.hasAudioDifferences {
+                    Label("音声が異なる版を含みます", systemImage: "waveform.badge.exclamationmark")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 10) {
@@ -112,7 +119,7 @@ struct SimilarMediaView: View {
     }
 
     private func candidateCell(_ item: VideoItem, group: SimilarMediaViewModel.Group, groupIndex: Int) -> some View {
-        let isKept = group.keepID == item.id
+        let isKept = group.keepIDs.contains(item.id)
         let isSelected = model.selectedIDs.contains(item.id)
         return VStack(spacing: 4) {
             MacVideoThumbnailView(videoItem: item, dataManager: dataManager)
@@ -126,7 +133,7 @@ struct SimilarMediaView: View {
                         )
                 )
                 .overlay(alignment: .bottomLeading) {
-                    Text(isKept ? "残す" : (isSelected ? "削除" : "対象外"))
+                    Text(isKept ? "残す候補" : (isSelected ? "削除" : "対象外"))
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
@@ -135,9 +142,11 @@ struct SimilarMediaView: View {
                         .padding(5)
                 }
                 .opacity(isSelected ? 1 : 0.75)
-                .onTapGesture { model.toggle(item.id) }
+                .onTapGesture { model.toggle(item.id, inGroupAt: groupIndex) }
 
-            Button("これを残す") { model.setKeep(item.id, inGroupAt: groupIndex) }
+            Button(item.mediaType == .photo ? "これを残す" : "この音声版を残す") {
+                model.setKeep(item.id, inGroupAt: groupIndex)
+            }
                 .font(.system(size: 10))
                 .buttonStyle(.plain)
                 .foregroundStyle(isKept ? Color.secondary : Color.accentColor)
@@ -149,8 +158,57 @@ struct SimilarMediaView: View {
                 .truncationMode(.middle)
                 .frame(width: thumbnailSide)
                 .foregroundStyle(.secondary)
+
+            if let details = model.details(for: item) {
+                VStack(spacing: 2) {
+                    HStack(spacing: 5) {
+                        if details.pixelWidth > 0, details.pixelHeight > 0 {
+                            Text("\(details.pixelWidth)×\(details.pixelHeight)")
+                        }
+                        if details.fileSize > 0 {
+                            Text(ByteCountFormatter.string(fromByteCount: details.fileSize, countStyle: .file))
+                        }
+                    }
+                    if details.videoBitrate > 0 {
+                        Text(String(format: "映像 %.1f Mbps", details.videoBitrate / 1_000_000))
+                    }
+                }
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: thumbnailSide)
+            }
+
+            audioBadge(for: item, in: group)
         }
         .help(item.originalFilename)
+    }
+
+    @ViewBuilder
+    private func audioBadge(for item: VideoItem, in group: SimilarMediaViewModel.Group) -> some View {
+        let status = model.audioStatus(for: item, in: group)
+        switch status {
+        case .notApplicable:
+            EmptyView()
+        case .matched:
+            metadataBadge("音声一致", systemImage: "waveform", color: .green)
+        case .different:
+            let number = (group.audioGroupByItemID[item.id] ?? 0) + 1
+            metadataBadge("音声版 \(number)", systemImage: "waveform.badge.exclamationmark", color: .orange)
+        case .noAudio:
+            metadataBadge("音声なし", systemImage: "speaker.slash", color: .secondary)
+        case .unreadable:
+            metadataBadge("音声未確認", systemImage: "questionmark.circle", color: .secondary)
+        }
+    }
+
+    private func metadataBadge(_ title: String, systemImage: String, color: Color) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(color.opacity(0.12)))
+            .frame(width: thumbnailSide)
     }
 
     private var footer: some View {
@@ -163,7 +221,7 @@ struct SimilarMediaView: View {
                 Text("±\(Int(model.maxDistance))")
                     .font(.caption.monospacedDigit())
                     .frame(width: 38, alignment: .leading)
-                Text("小さいほど「ほぼ同じ」だけに絞られます")
+                Text("小さいほど「ほぼ同じ」だけに絞られます．音声・尺・画質が一致する動画は再圧縮差も補完します")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
