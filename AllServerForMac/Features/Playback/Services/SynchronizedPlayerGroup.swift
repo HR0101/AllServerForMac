@@ -36,6 +36,11 @@ final class SynchronizedPlayerGroup {
     private var leadTimeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var syncStartTask: Task<Void, Never>?
+    /// 同期準備中は全プレイヤーの rate が一時的に0になるため，利用者が望む再生状態を別に持つ．
+    private var shouldBePlaying = false
+    /// 相対シークを連打したとき，途中まで移動した各プレイヤーの現在位置を基準にしないための目標値．
+    private var pendingRelativeSeekSeconds: Double?
+    private var relativeSeekRequestID = 0
     private var cancellables = Set<AnyCancellable>()
 
     init(urls: [URL]) {
@@ -55,7 +60,7 @@ final class SynchronizedPlayerGroup {
 
     var isEmpty: Bool { players.isEmpty }
 
-    var isPlaying: Bool { players.contains { $0.rate > 0 } }
+    var isPlaying: Bool { shouldBePlaying }
 
     /// いちばん進んでいるプレイヤーと遅れているプレイヤーの開き（秒）。
     /// 長く流していると、デコードの取りこぼしぶんだけ少しずつ開いていく。
@@ -70,22 +75,33 @@ final class SynchronizedPlayerGroup {
 
     // MARK: - 再生
 
-    func play() { startInSync() }
+    func play() {
+        invalidatePendingRelativeSeek()
+        startInSync()
+    }
 
     func pause() {
+        shouldBePlaying = false
+        invalidatePendingRelativeSeek()
         syncStartTask?.cancel()
         syncStartTask = nil
         players.forEach { $0.pause() }
     }
 
     /// 全プレイヤーを同じ瞬間に走らせる。`seek` を渡すと、まずその位置へ揃えてから開始する。
-    func startInSync(seek target: (@MainActor (AVPlayer) -> CMTime?)? = nil) {
+    func startInSync(
+        seek target: (@MainActor (AVPlayer) -> CMTime?)? = nil,
+        onStarted: (@MainActor () -> Void)? = nil
+    ) {
         syncStartTask?.cancel()
         let players = self.players
         guard !players.isEmpty else { return }
+        shouldBePlaying = true
 
         // 走ったまま準備を進めると、その間に各プレイヤーが進んでしまって揃わない。
         players.forEach { $0.pause() }
+        // キーを連打したとき，キャンセル済みの古いシークが後から完了して位置を戻さないようにする。
+        players.forEach { $0.currentItem?.cancelPendingSeeks() }
         let seekTargets = players.map { player in (player: player, time: target?(player)) }
 
         syncStartTask = Task { @MainActor in
@@ -108,17 +124,40 @@ final class SynchronizedPlayerGroup {
             // 固定されたうえ一時停止のたびに積み上がる（実測: 一時停止と再生を5往復して 0.34 秒）。
             // 開始位置を明示して揃えれば、同じ5往復でも 0.07 秒に収まる。
             //
-            // ただしシークを指示されたときは触らない。行き先を決めたのは呼び出し側で、
-            // 同時再生は動画ごとに尺が違うため、割合シークで別々の位置へ飛ばすのが正しい。
-            let hasSeekTargets = seekTargets.contains { $0.time != nil }
-            let alignment = hasSeekTargets ? CMTime.invalid : Self.commonStartTime(of: players)
+            // 全員が同じ時刻へシークした場合は，再開位置にも同じ時刻を明示する。
+            // 動画ごとに尺が違う割合シークだけは，各自の行き先を維持する。
+            let alignment = Self.alignmentTime(
+                for: seekTargets,
+                players: players
+            )
 
             let startHostTime = CMClockGetTime(CMClockGetHostTimeClock())
                 + CMTime(seconds: Self.syncStartLeadSeconds, preferredTimescale: 600)
             for player in players {
                 player.setRate(1.0, time: alignment, atHostTime: startHostTime)
             }
+            onStarted?()
         }
+    }
+
+    /// 全員へ同じ絶対時刻を指定したシークなら，再開位置にもその時刻を明示する．
+    /// 動画ごとに異なる割合シークでは，それぞれのシーク先を維持するため `.invalid` を使う．
+    private static func alignmentTime(
+        for seekTargets: [(player: AVPlayer, time: CMTime?)],
+        players: [AVPlayer]
+    ) -> CMTime {
+        let requestedSeconds = seekTargets.compactMap { entry -> Double? in
+            guard let time = entry.time, time.seconds.isFinite else { return nil }
+            return time.seconds
+        }
+        guard !requestedSeconds.isEmpty else { return commonStartTime(of: players) }
+        guard requestedSeconds.count == players.count,
+              let earliest = requestedSeconds.min(),
+              let latest = requestedSeconds.max(),
+              latest - earliest <= 1.0 / 600.0 else {
+            return .invalid
+        }
+        return CMTime(seconds: earliest, preferredTimescale: 600)
     }
 
     /// そろえにいく開きの上限。これを超えていたら位置には触らない。
@@ -177,24 +216,76 @@ final class SynchronizedPlayerGroup {
 
     /// 再生中なら一斉スタートし直し、停止中ならシークだけして止まったままにする。
     func applySeek(_ target: @escaping @MainActor (AVPlayer) -> CMTime?) {
-        guard !isPlaying else {
-            startInSync(seek: target)
+        invalidatePendingRelativeSeek()
+        performSeek(target)
+    }
+
+    private func performSeek(
+        _ target: @escaping @MainActor (AVPlayer) -> CMTime?,
+        onCompleted: (@MainActor () -> Void)? = nil
+    ) {
+        guard !shouldBePlaying else {
+            startInSync(seek: target, onStarted: onCompleted)
             return
         }
         syncStartTask?.cancel()
-        syncStartTask = nil
-        for player in players {
-            guard let time = target(player) else { continue }
-            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        players.forEach { $0.currentItem?.cancelPendingSeeks() }
+        let seekTargets = players.map { player in (player: player, time: target(player)) }
+        syncStartTask = Task { @MainActor in
+            for entry in seekTargets {
+                guard let time = entry.time else { continue }
+                await entry.player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                if Task.isCancelled { return }
+            }
+            onCompleted?()
         }
     }
 
     func seekAll(by seconds: Double) {
-        applySeek { player in
-            let current = player.currentTime().seconds
-            guard current.isFinite else { return nil }
-            return CMTime(seconds: max(0, current + seconds), preferredTimescale: 600)
+        let base = pendingRelativeSeekSeconds ?? referenceCurrentTime()
+        guard base.isFinite else { return }
+
+        let unclampedTarget = max(0, base + seconds)
+        let targetSeconds: Double
+        if let shortestDuration = shortestFiniteDuration() {
+            targetSeconds = min(unclampedTarget, shortestDuration)
+        } else {
+            targetSeconds = unclampedTarget
         }
+
+        relativeSeekRequestID &+= 1
+        let requestID = relativeSeekRequestID
+        pendingRelativeSeekSeconds = targetSeconds
+        let target = CMTime(seconds: targetSeconds, preferredTimescale: 600)
+        performSeek({ _ in target }) { [weak self] in
+            guard let self, self.relativeSeekRequestID == requestID else { return }
+            self.pendingRelativeSeekSeconds = nil
+        }
+    }
+
+    /// シークバーの監視対象と同じ代表動画を基準にし，全員の微小なずれを持ち越さない．
+    private func referenceCurrentTime() -> Double {
+        if let seconds = leadPlayer?.currentTime().seconds, seconds.isFinite {
+            return seconds
+        }
+        return players.compactMap { player -> Double? in
+            let seconds = player.currentTime().seconds
+            return seconds.isFinite ? seconds : nil
+        }.min() ?? 0
+    }
+
+    private func shortestFiniteDuration() -> Double? {
+        players.compactMap { player -> Double? in
+            guard let seconds = player.currentItem?.duration.seconds,
+                  seconds.isFinite,
+                  seconds > 0 else { return nil }
+            return seconds
+        }.min()
+    }
+
+    private func invalidatePendingRelativeSeek() {
+        relativeSeekRequestID &+= 1
+        pendingRelativeSeekSeconds = nil
     }
 
     func seekAll(toPercentage percentage: Double) {
@@ -249,6 +340,8 @@ final class SynchronizedPlayerGroup {
     }
 
     func cleanup() {
+        shouldBePlaying = false
+        invalidatePendingRelativeSeek()
         syncStartTask?.cancel()
         syncStartTask = nil
         cancellables.removeAll()
