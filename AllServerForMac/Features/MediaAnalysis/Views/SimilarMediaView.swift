@@ -31,19 +31,20 @@ struct SimilarMediaView: View {
             model.scan(items: items, dataManager: dataManager)
         }
         .onDisappear { model.cancelScan() }
-        .confirmationDialog(
-            "削除方法を選んでください",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("アプリ内のゴミ箱へ") { apply { dataManager.moveToTrash(videoIDs: $0) } }
-            Button("完全に削除", role: .destructive) { apply { dataManager.deleteVideos(videoIDs: $0) } }
-            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
-                apply { dataManager.moveMediaFilesToSystemTrash(videoIDs: $0) }
-            }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．\n\n\(SelectionSummary.text(for: model.selectedItems))")
+        .sheet(isPresented: $showDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: model.selectedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: {
+                    apply { dataManager.moveToTrash(videoIDs: $0) }
+                },
+                onDeleteCompletely: {
+                    apply { dataManager.deleteVideos(videoIDs: $0) }
+                },
+                onMoveToSystemTrash: {
+                    apply { dataManager.moveMediaFilesToSystemTrash(videoIDs: $0) }
+                }
+            )
         }
     }
 

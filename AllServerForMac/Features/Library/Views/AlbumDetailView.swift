@@ -351,16 +351,14 @@ struct AlbumDetailView: View {
                 }
             }
         }
-        // 削除は必ず「ゴミ箱に入れる」か「完全に削除」かを確認してから実行する。
-        .confirmationDialog("削除方法を選んでください", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
-            Button("アプリ内のゴミ箱へ", action: moveSelectedToTrash)
-            Button("完全に削除", role: .destructive, action: deleteSelectedVideos)
-            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
-                moveSelectedToSystemTrash()
-            }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．\n\n\(SelectionSummary.text(for: selectedItems))")
+        .sheet(isPresented: $showBulkDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: self.selectedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: moveSelectedToTrash,
+                onDeleteCompletely: deleteSelectedVideos,
+                onMoveToSystemTrash: moveSelectedToSystemTrash
+            )
         }
         .sheet(isPresented: $showSketchCleanup) {
             SketchCleanupView(items: displayedItems, dataManager: dataManager) {

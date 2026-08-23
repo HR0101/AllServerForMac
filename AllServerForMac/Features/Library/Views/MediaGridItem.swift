@@ -33,19 +33,9 @@ struct MediaGridItem: View {
     @State private var isHovering = false
     @State private var showDeleteConfirmation = false
 
-    /// 削除確認の本文。対象が複数のときは件数と中身を並べて、
-    /// 「1件だけ消えるつもりが選択全体だった」という取り違えを防ぐ。
-    private var deleteConfirmationMessage: String {
-        let targets = affectedItems.isEmpty ? [video] : affectedItems
-        guard targets.count > 1 else {
-            return isTrashView
-                ? "「\(video.originalFilename)」を完全に削除するか，実ファイルをMacのゴミ箱へ移動します．"
-                : "「\(video.originalFilename)」の削除方法を選んでください．"
-        }
-        let head = isTrashView
-            ? "選択した\(targets.count)件を完全に削除するか，実ファイルをMacのゴミ箱へ移動します．"
-            : "選択した\(targets.count)件の削除方法を選んでください．"
-        return "\(head)\n\n\(SelectionSummary.text(for: targets))"
+    /// 右クリックした1件，または現在選択中の全項目を表示順で確認シートへ渡す。
+    private var deletionTargets: [VideoItem] {
+        affectedItems.isEmpty ? [video] : affectedItems
     }
 
     /// 移動先候補（システムアルバム・現在のアルバムを除き、メディアタイプが互換のもの）
@@ -169,23 +159,14 @@ struct MediaGridItem: View {
                 Button("削除…", role: .destructive) { showDeleteConfirmation = true }
             }
         }
-        // 削除は必ず3種類の違いを確認してから実行する
-        // （元ファイルの誤削除を繰り返さないための安全策）。
-        .confirmationDialog(
-            isTrashView ? "完全に削除しますか？" : "削除方法を選んでください",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            if !isTrashView {
-                Button("アプリ内のゴミ箱へ") { onMoveToTrash() }
-            }
-            Button("完全に削除", role: .destructive) { onDelete() }
-            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
-                onMoveToSystemTrash()
-            }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text(deleteConfirmationMessage)
+        .sheet(isPresented: $showDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: deletionTargets,
+                dataManager: dataManager,
+                onMoveToAppTrash: isTrashView ? nil : onMoveToTrash,
+                onDeleteCompletely: onDelete,
+                onMoveToSystemTrash: onMoveToSystemTrash
+            )
         }
     }
 

@@ -211,26 +211,25 @@ struct LibraryCategoryView: View {
         } message: {
             Text(exportResultMessage)
         }
-        .confirmationDialog("削除方法を選んでください", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
-            if !isTrash {
-                Button("アプリ内のゴミ箱へ") {
+        .sheet(isPresented: $showBulkDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: self.selectedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: isTrash ? nil : {
                     dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
                     selectedVideoIDs.removeAll()
+                },
+                onDeleteCompletely: {
+                    dataManager.deleteVideos(videoIDs: Array(selectedVideoIDs))
+                    selectedVideoIDs.removeAll()
+                },
+                onMoveToSystemTrash: {
+                    dataManager.moveMediaFilesToSystemTrash(
+                        videoIDs: Array(selectedVideoIDs)
+                    )
+                    selectedVideoIDs.removeAll()
                 }
-            }
-            Button("完全に削除", role: .destructive) {
-                dataManager.deleteVideos(videoIDs: Array(selectedVideoIDs))
-                selectedVideoIDs.removeAll()
-            }
-            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
-                dataManager.moveMediaFilesToSystemTrash(
-                    videoIDs: Array(selectedVideoIDs)
-                )
-                selectedVideoIDs.removeAll()
-            }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．\n\n\(SelectionSummary.text(for: selectedItems))")
+            )
         }
         .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
             TextField("アルバム名", text: $newAlbumNameForMove)
