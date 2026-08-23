@@ -24,6 +24,15 @@ struct MediaShortcutSettingsSection: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                Text("差分切り替え再生")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                ForEach(MediaShortcutAction.variantActions) { action in
+                    MediaShortcutAssignmentRow(action: action)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("画像")
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
@@ -47,7 +56,8 @@ struct MediaShortcutSettingsSection: View {
     private var hasDuplicateAssignments: Bool {
         _ = settingsVersion
         let libraryDuplicates = hasDuplicateKeys(in: MediaShortcutAction.libraryActions)
-        let videoDuplicates = hasDuplicateKeys(in: MediaShortcutAction.videoActions)
+        // 差分切り替え再生は動画のキーもそのまま使うので、まとめて重複を見る。
+        let videoDuplicates = hasDuplicateKeys(in: MediaShortcutAction.videoActions + MediaShortcutAction.variantActions)
         let photoDuplicates = hasDuplicateKeys(in: MediaShortcutAction.photoActions)
         return libraryDuplicates || videoDuplicates || photoDuplicates
     }

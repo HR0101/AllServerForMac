@@ -116,6 +116,10 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case videoRandomSeek
     case videoToggleUpNextPanel
     case videoToggleMiniPlayer
+    case variantNext
+    case variantPrevious
+    case variantRandom
+    case variantToggleAuto
     case photoPrevious
     case photoNext
     case photoToggleMangaMode
@@ -137,6 +141,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case libraryImport
     case libraryRandomPlay
     case libraryMultiPlay
+    case libraryVariantPlay
     case librarySlideshow
     case librarySplitPlay
     case libraryDuplicateCheck
@@ -164,6 +169,10 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRandomSeek: return "動画: ランダム位置"
         case .videoToggleUpNextPanel: return "動画: 関連動画パネル切替"
         case .videoToggleMiniPlayer: return "動画: ミニプレイヤー"
+        case .variantNext: return "差分: 次のバージョンへ"
+        case .variantPrevious: return "差分: 前のバージョンへ"
+        case .variantRandom: return "差分: ランダムなバージョンへ"
+        case .variantToggleAuto: return "差分: 自動切り替えの入/切"
         case .photoPrevious: return "画像: 前の画像"
         case .photoNext: return "画像: 次の画像"
         case .photoToggleMangaMode: return "画像: 漫画モード切替"
@@ -185,6 +194,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .libraryImport: return "一覧: インポート"
         case .libraryRandomPlay: return "一覧: ランダム再生"
         case .libraryMultiPlay: return "一覧: 同時再生"
+        case .libraryVariantPlay: return "一覧: 差分切り替え再生"
         case .librarySlideshow: return "一覧: スライドショー"
         case .librarySplitPlay: return "一覧: 分割再生"
         case .libraryDuplicateCheck: return "一覧: 重複チェック"
@@ -208,6 +218,10 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRandomSeek: return "ランダムな位置へジャンプ"
         case .videoToggleUpNextPanel: return "同じアルバムの動画パネルを表示/非表示"
         case .videoToggleMiniPlayer: return "小さい画面で再生しながらアルバム一覧を表示"
+        case .variantNext: return "次の差分バージョンへ切り替え"
+        case .variantPrevious: return "前の差分バージョンへ切り替え"
+        case .variantRandom: return "ランダムな差分バージョンへ切り替え"
+        case .variantToggleAuto: return "一定間隔での自動切り替えを止める/再開する"
         case .photoPrevious: return "前の画像へ"
         case .photoNext: return "次の画像へ"
         case .photoToggleMangaMode: return "漫画モードを切り替え"
@@ -229,6 +243,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .libraryImport: return "ファイルをインポート"
         case .libraryRandomPlay: return "ランダム再生"
         case .libraryMultiPlay: return "選択動画を同時再生"
+        case .libraryVariantPlay: return "選択動画を差分切り替え再生"
         case .librarySlideshow: return "選択動画でスライドショー"
         case .librarySplitPlay: return "選択動画を分割再生"
         case .libraryDuplicateCheck: return "重複チェックを実行"
@@ -256,6 +271,10 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRandomSeek: return [.r]
         case .videoToggleUpNextPanel: return [MediaShortcutKey(rawValue: "t")]
         case .videoToggleMiniPlayer: return [MediaShortcutKey(rawValue: "i")]
+        case .variantNext: return [MediaShortcutKey(rawValue: "n")]
+        case .variantPrevious: return [MediaShortcutKey(rawValue: "b")]
+        case .variantRandom: return [MediaShortcutKey(rawValue: "v")]
+        case .variantToggleAuto: return [MediaShortcutKey(rawValue: "a")]
         case .photoPrevious: return [.leftArrow]
         case .photoNext: return [.rightArrow]
         case .photoToggleMangaMode: return [.m]
@@ -277,6 +296,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .libraryImport: return [MediaShortcutKey(rawValue: "i")]
         case .libraryRandomPlay: return [.r]
         case .libraryMultiPlay: return [MediaShortcutKey(rawValue: "m")]
+        case .libraryVariantPlay: return [MediaShortcutKey(rawValue: "y")]
         case .librarySlideshow: return [MediaShortcutKey(rawValue: "s")]
         case .librarySplitPlay: return [MediaShortcutKey(rawValue: "p")]
         case .libraryDuplicateCheck: return [MediaShortcutKey(rawValue: "d")]
@@ -299,6 +319,14 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         .videoRandomSeek,
         .videoToggleUpNextPanel,
         .videoToggleMiniPlayer
+    ]
+
+    /// 差分切り替え再生だけで使うもの。再生・シーク・閉じるは `videoActions` と共通なので重ねない。
+    static let variantActions: [MediaShortcutAction] = [
+        .variantNext,
+        .variantPrevious,
+        .variantRandom,
+        .variantToggleAuto
     ]
 
     static let photoActions: [MediaShortcutAction] = [
@@ -326,6 +354,7 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         .libraryImport,
         .libraryRandomPlay,
         .libraryMultiPlay,
+        .libraryVariantPlay,
         .librarySlideshow,
         .librarySplitPlay,
         .libraryDuplicateCheck,

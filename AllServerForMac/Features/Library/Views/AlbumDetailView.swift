@@ -29,6 +29,7 @@ struct AlbumDetailView: View {
     @State private var showSketchCleanup = false
     // 似ているメディアの整理
     @State private var showSimilarMedia = false
+    @State private var showVariantVideos = false
 
     // 分割再生用
     @State private var showSplitSheet = false
@@ -241,6 +242,18 @@ struct AlbumDetailView: View {
                 }
             }
 
+            // 差分動画（同じ尺・同じ動きで絵だけ違う書き出し）を探して切り替え再生へ渡す
+            ToolbarItem(placement: .primaryAction) {
+                if videoItems.count >= 2 {
+                    Button {
+                        showVariantVideos = true
+                    } label: {
+                        Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
+                    }
+                    .help("尺が揃っていて絵だけが違う動画を束にして、選んだぶんを切り替えながら再生します")
+                }
+            }
+
             // ランダム同時再生（本数を選ぶと、このアルバムからその数だけ無作為に選んで並べる）
             ToolbarItem(placement: .primaryAction) {
                 if videoItems.count >= 2 {
@@ -283,6 +296,16 @@ struct AlbumDetailView: View {
                             Label("同時再生", systemImage: "square.grid.2x2.fill")
                         }
                         .help("選択した動画を同期再生（最大9本）")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedItems.count >= 2 {
+                        Button {
+                            startVariantSwitchPlayback(selectedItems)
+                        } label: {
+                            Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
+                        }
+                        .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -346,6 +369,11 @@ struct AlbumDetailView: View {
             SimilarMediaView(items: displayedItems, dataManager: dataManager) {
                 selectedVideoIDs.removeAll()
                 lastSelectedVideoID = nil
+            }
+        }
+        .sheet(isPresented: $showVariantVideos) {
+            VariantVideoView(items: displayedItems, dataManager: dataManager) { videos in
+                startVariantSwitchPlayback(videos)
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
@@ -599,6 +627,10 @@ struct AlbumDetailView: View {
         } else if MediaShortcutSettings.matches(.libraryMultiPlay, press: press) {
             let selected = selectedVideoItems
             if selected.count >= 2 { startMultiPlayback(selected) }
+            return .handled
+        } else if MediaShortcutSettings.matches(.libraryVariantPlay, press: press) {
+            let selected = selectedVideoItems
+            if selected.count >= 2 { startVariantSwitchPlayback(selected) } else { showVariantVideos = true }
             return .handled
         } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
             let selected = selectedVideoItems
@@ -1103,6 +1135,12 @@ struct AlbumDetailView: View {
         guard videos.count >= 2 else { return }
         rememberGridState()
         coordinator.playMulti(videos)
+    }
+
+    private func startVariantSwitchPlayback(_ videos: [VideoItem]) {
+        guard videos.count >= 2 else { return }
+        rememberGridState()
+        coordinator.playVariantSwitch(videos)
     }
 
     private func startSlideshowPlayback(_ videos: [VideoItem]) {

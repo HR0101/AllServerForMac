@@ -152,6 +152,12 @@ struct LibraryCategoryView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
+                        Button { startVariantSwitchPlayback(selectedItems) } label: {
+                            Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
+                        }
+                        .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
+                    }
+                    ToolbarItem(placement: .primaryAction) {
                         Button { startSlideshowPlayback(selectedItems) } label: {
                             Label("スライドショー", systemImage: "play.square.stack")
                         }
@@ -462,6 +468,11 @@ struct LibraryCategoryView: View {
             let selected = selectedVideoItems
             if selected.count >= 2 { startMultiPlayback(selected) }
             return .handled
+        } else if MediaShortcutSettings.matches(.libraryVariantPlay, press: press) {
+            guard !isTrash else { return .handled }
+            let selected = selectedVideoItems
+            if selected.count >= 2 { startVariantSwitchPlayback(selected) }
+            return .handled
         } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
             guard !isTrash else { return .handled }
             let selected = selectedVideoItems
@@ -604,6 +615,12 @@ struct LibraryCategoryView: View {
         guard videos.count >= 2 else { return }
         rememberGridState()
         coordinator.playMulti(videos)
+    }
+
+    private func startVariantSwitchPlayback(_ videos: [VideoItem]) {
+        guard videos.count >= 2 else { return }
+        rememberGridState()
+        coordinator.playVariantSwitch(videos)
     }
 
     private func startSlideshowPlayback(_ videos: [VideoItem]) {
