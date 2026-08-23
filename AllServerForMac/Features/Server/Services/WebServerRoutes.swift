@@ -101,6 +101,56 @@ extension ServerViewModel {
             } catch { return .internalServerError }
         }
 
+        // 差分動画の探索。実ファイルを持っているのは Mac だけなので検出はここで行い、
+        // クライアントには結果（どの動画が同じ束か）だけを渡す。
+        // 指紋づくりに時間がかかるぶんは `/video/:id/prepare` と同じく、
+        // 「いまわかっていること＋進み具合」を返して繰り返し尋ねてもらう。
+        server["/albums/:id/variants"] = protected { [weak self] request -> HttpResponse in
+            guard let self = self, let dataManager = self.dataManager,
+                  let albumIDString = request.params[":id"], let albumID = UUID(uuidString: albumIDString) else {
+                return .badRequest(.text("Invalid album ID"))
+            }
+            func number(_ name: String, _ fallback: Double) -> Double {
+                guard let raw = request.queryParams.first(where: { $0.0 == name })?.1,
+                      let value = Double(raw) else { return fallback }
+                return value
+            }
+
+            // スナップショットから組み立てる（メインスレッド非経由）。
+            let snapshot = dataManager.snapshotLibrary.value
+            guard let album = snapshot.albums.first(where: { $0.id == albumID }) else { return .notFound }
+            let memberIDs = Set(album.videoIDs)
+            let videos = snapshot.videos.filter {
+                memberIDs.contains($0.id) && !$0.isInTrash && $0.mediaType == .video
+            }
+
+            let targets: [VariantScanService.Target] = videos.compactMap { item in
+                guard let url = LibraryViewModel.resolveFileURL(
+                    for: item,
+                    videoStorageURL: dataManager.videoStorageURL,
+                    downloadStorageURL: dataManager.downloadStorageURL
+                ) else { return nil }
+                let meta = dataManager.fileMetadata(for: item)
+                return VariantScanService.Target(
+                    item: item,
+                    url: url,
+                    stamp: VariantSignatureStore.Stamp(size: meta.size, modified: meta.modificationDate)
+                )
+            }
+
+            let result = self.variantScanner.result(
+                albumID: albumID,
+                targets: targets,
+                tolerance: number("tolerance", 0.2),
+                maxAverageDistance: number("distance", 10),
+                titleInfluence: number("title", 4)
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(result) else { return .internalServerError }
+            return .ok(.data(data, contentType: "application/json"))
+        }
+
         server["/server/status"] = protected { [weak self] _ -> HttpResponse in
             var uptime = 0
             if let start = self?.snapshotServerStartTime.value {

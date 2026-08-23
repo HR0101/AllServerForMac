@@ -12,6 +12,8 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     private var netService: NetService?
 
     weak var dataManager: LibraryViewModel?
+    /// 差分動画の探索。HTTP のワーカースレッドから触るので isolation の外に置く。
+    let variantScanner: VariantScanService
     let remotePlaybackSession: RemotePlaybackSession
 
     @Published var statusMessage: String = "停止中"
@@ -117,6 +119,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
         remotePlaybackSession: RemotePlaybackSession
     ) {
         self.dataManager = dataManager
+        self.variantScanner = VariantScanService(directory: dataManager.appRootURL)
         self.remotePlaybackSession = remotePlaybackSession
         // init は main で走るので @MainActor な LibraryViewModel の appRootURL をここで読んでおく。
         // 以後 WebSyncStore は LibraryViewModel に一切依存せず、ワーカースレッドから直接叩ける。

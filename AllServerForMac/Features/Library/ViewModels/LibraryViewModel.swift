@@ -212,8 +212,8 @@ class LibraryViewModel: ObservableObject {
         didSet { UserDefaults.standard.set(exportPreservesAlbumStructure, forKey: "exportPreservesAlbumStructure") }
     }
 
-    let appRootURL: URL
     // HTTPルート（ワーカースレッド）から実ファイル属性を読むため、isolation に依らず参照できるようにする。
+    nonisolated let appRootURL: URL
     nonisolated let videoStorageURL: URL
     nonisolated let downloadStorageURL: URL
     let thumbnailStorageURL: URL
