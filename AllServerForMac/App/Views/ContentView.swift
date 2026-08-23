@@ -118,6 +118,9 @@ struct ContentView: View {
         case .multi(let videos):
             MultiVideoPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
+        case .variantSwitch(let videos):
+            VariantSwitchPlayerView(videos: videos, dataManager: dataManager)
+                .ignoresSafeArea()
         case .slideshow(let videos):
             SlideshowPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()

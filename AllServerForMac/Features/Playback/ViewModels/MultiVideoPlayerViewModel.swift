@@ -8,17 +8,9 @@ final class MultiVideoPlayerViewModel: ObservableObject {
     @Published var commonCurrentTime: Double = 0
     @Published var commonDuration: Double = 1.0
 
-    private var leadPlayerTimeObserver: Any?
-    private var leadPlayer: AVPlayer?
-    private var cancellables = Set<AnyCancellable>()
+    /// 再生位置合わせ・一斉スタートの面倒はここが見る（差分切り替え再生と共通）。
+    private let group: SynchronizedPlayerGroup
     private var isSliderEditing = false
-    private var syncStartTask: Task<Void, Never>?
-
-    /// 一斉スタートを予約するときの猶予。全プレイヤーへ setRate を配り終える前に
-    /// その時刻が過ぎてしまうと、結局バラバラに動き出す。
-    private static let syncStartLeadSeconds: Double = 0.15
-    /// 再生可能になるまで待つ上限。壊れたファイルが1つ混じっても止まらないようにする。
-    private static let readyTimeoutSeconds: Double = 5
 
     /// タイル1枚ぶんの音声設定。並びは `players` と同じ＝画面の配置と同じ。
     struct TileAudio: Identifiable {
@@ -40,15 +32,8 @@ final class MultiVideoPlayerViewModel: ObservableObject {
             return (item, url)
         }
 
-        self.players = playable.map { _, url in
-            let player = AVPlayer(url: url)
-            // 一斉スタート（setRate(_:time:atHostTime:)）を使うための前提。
-            // 既定のままだとプレイヤーが自分の判断で再生開始を遅らせるので同期が崩れる。
-            player.automaticallyWaitsToMinimizeStalling = false
-            // 各プレイヤーの時間軸を共通のホストクロックに合わせる。
-            player.sourceClock = CMClockGetHostTimeClock()
-            return player
-        }
+        self.group = SynchronizedPlayerGroup(urls: playable.map(\.1))
+        self.players = group.players
 
         let defaultPans = MultiPlayerLayout.defaultPans(for: players.count)
         self.tileAudio = playable.enumerated().map { index, entry in
@@ -66,7 +51,13 @@ final class MultiVideoPlayerViewModel: ObservableObject {
             return settings
         }
 
-        setupLeadPlayerObserver()
+        group.onDurationUpdate = { [weak self] duration in
+            self?.commonDuration = duration
+        }
+        group.onTimeUpdate = { [weak self] time in
+            guard let self, !self.isSliderEditing else { return }
+            self.commonCurrentTime = time
+        }
         attachAudioProcessing()
     }
 
@@ -114,27 +105,6 @@ final class MultiVideoPlayerViewModel: ObservableObject {
         }
     }
 
-    private func setupLeadPlayerObserver() {
-        guard let leadPlayer = players.max(by: {
-            ($0.currentItem?.duration.seconds ?? 0) < ($1.currentItem?.duration.seconds ?? 0)
-        }) else { return }
-        self.leadPlayer = leadPlayer
-
-        leadPlayer.publisher(for: \.currentItem?.duration)
-            .compactMap { $0?.seconds }
-            .filter { !$0.isNaN && $0 > 0 }
-            .assign(to: &$commonDuration)
-
-        leadPlayerTimeObserver = leadPlayer.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
-        ) { [weak self] time in
-            Task { @MainActor [weak self] in
-                guard let self, !self.isSliderEditing else { return }
-                self.commonCurrentTime = time.seconds
-            }
-        }
-    }
-
     func commonSliderEditingChanged(isEditing: Bool) {
         self.isSliderEditing = isEditing
         if !isEditing {
@@ -143,119 +113,25 @@ final class MultiVideoPlayerViewModel: ObservableObject {
         }
     }
 
-    var isPlaying: Bool { players.contains { $0.rate > 0 } }
+    var isPlaying: Bool { group.isPlaying }
 
-    func playAll() { startInSync() }
+    func playAll() { group.play() }
 
-    func pauseAll() {
-        syncStartTask?.cancel()
-        syncStartTask = nil
-        players.forEach { $0.pause() }
-    }
+    func pauseAll() { group.pause() }
 
     func togglePlayPauseAll() {
-        if isPlaying {
-            pauseAll()
-        } else {
-            startInSync()
-        }
+        if isPlaying { group.pause() } else { group.play() }
     }
 
-    /// 全プレイヤーを同じ瞬間に走らせる。`seek` を渡すと、まずその位置へ揃えてから開始する。
-    ///
-    /// 個別に `play()` を呼ぶと、デコードの準備ができた順にバラバラと動き出すので、
-    /// 同じ動画を並べても開始が数フレームずれる。ずれを無くすために
-    /// 「目的位置へシーク → 全員が再生可能になるまで待つ → preroll でバッファを用意 →
-    /// 共通のホストタイムを指定して一斉に setRate」という順で揃える。
-    func startInSync(seek target: ((AVPlayer) -> CMTime?)? = nil) {
-        syncStartTask?.cancel()
-        let players = self.players
-        guard !players.isEmpty else { return }
+    func seekAll(by seconds: Double) { group.seekAll(by: seconds) }
 
-        // 走ったまま準備を進めると、その間に各プレイヤーが進んでしまって揃わない。
-        players.forEach { $0.pause() }
-        let seekTargets = players.map { player in (player: player, time: target?(player)) }
-
-        syncStartTask = Task { @MainActor in
-            for entry in seekTargets {
-                guard let time = entry.time else { continue }
-                await entry.player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-                if Task.isCancelled { return }
-            }
-
-            await Self.waitUntilAllReady(players)
-            if Task.isCancelled { return }
-
-            for player in players {
-                _ = await player.preroll(atRate: 1.0)
-                if Task.isCancelled { return }
-            }
-
-            let startHostTime = CMClockGetTime(CMClockGetHostTimeClock())
-                + CMTime(seconds: Self.syncStartLeadSeconds, preferredTimescale: 600)
-            for player in players {
-                // time に .invalid を渡すと「今指している位置」をその瞬間に合わせる意味になる。
-                player.setRate(1.0, time: .invalid, atHostTime: startHostTime)
-            }
-        }
-    }
-
-    /// 全プレイヤーの `currentItem` が再生可能になるまで待つ（上限つき）。
-    private static func waitUntilAllReady(_ players: [AVPlayer]) async {
-        let deadline = Date().addingTimeInterval(readyTimeoutSeconds)
-        while Date() < deadline {
-            if players.allSatisfy({ $0.currentItem?.status == .readyToPlay }) { return }
-            try? await Task.sleep(nanoseconds: 25_000_000)
-            if Task.isCancelled { return }
-        }
-    }
-
-    /// 再生中なら一斉スタートし直し、停止中ならシークだけして止まったままにする。
-    private func applySeek(_ target: @escaping (AVPlayer) -> CMTime?) {
-        guard !isPlaying else {
-            startInSync(seek: target)
-            return
-        }
-        syncStartTask?.cancel()
-        syncStartTask = nil
-        for player in players {
-            guard let time = target(player) else { continue }
-            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-        }
-    }
-
-    func seekAll(by seconds: Double) {
-        applySeek { player in
-            let current = player.currentTime().seconds
-            guard current.isFinite else { return nil }
-            return CMTime(seconds: max(0, current + seconds), preferredTimescale: 600)
-        }
-    }
-
-    func seekAll(toPercentage percentage: Double) {
-        applySeek { player in
-            guard let duration = player.currentItem?.duration, duration.seconds > 0 else { return nil }
-            return CMTime(seconds: duration.seconds * percentage, preferredTimescale: 600)
-        }
-    }
+    func seekAll(toPercentage percentage: Double) { group.seekAll(toPercentage: percentage) }
 
     /// 全動画を同じ秒数（最短動画の範囲内）へランダムシークする
-    func seekAllToRandomTime() {
-        let shortestDuration = players.compactMap { $0.currentItem?.duration.seconds }.min() ?? 0
-        guard shortestDuration > 0 else { return }
-        let seekCMTime = CMTime(seconds: Double.random(in: 0..<shortestDuration), preferredTimescale: 600)
-        applySeek { _ in seekCMTime }
-    }
+    func seekAllToRandomTime() { group.seekAllToRandomTime() }
 
     func cleanup() {
-        syncStartTask?.cancel()
-        syncStartTask = nil
-        if let observer = leadPlayerTimeObserver {
-            leadPlayer?.removeTimeObserver(observer)
-            leadPlayerTimeObserver = nil
-        }
-        leadPlayer = nil
-        players.forEach { $0.pause() }
+        group.cleanup()
         players.removeAll()
     }
 }

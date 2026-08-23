@@ -25,6 +25,7 @@ final class PlaybackCoordinator: ObservableObject {
     enum Mode: Equatable {
         case single(playlist: [VideoItem], current: VideoItem)
         case multi([VideoItem])
+        case variantSwitch([VideoItem])
         case slideshow([VideoItem])
         case splitPlay(video: VideoItem, splitCount: Int)
         case photos(playlist: [VideoItem], current: VideoItem)
@@ -58,6 +59,15 @@ final class PlaybackCoordinator: ObservableObject {
         let items = videos.filter { $0.mediaType == .video }
         guard items.count >= 2 else { return }
         mode = .multi(Array(items.prefix(9)))
+    }
+
+    /// 差分切り替え再生（2〜9本）。全部を同期で走らせたまま、見せる1本だけを差し替える。
+    /// 本数ぶん同時にデコードし続けるので、同時再生と同じく9本を上限にする。
+    func playVariantSwitch(_ videos: [VideoItem]) {
+        let items = videos.filter { $0.mediaType == .video }
+        guard items.count >= 2 else { return }
+        isMiniPlayerActive = false
+        mode = .variantSwitch(Array(items.prefix(9)))
     }
 
     /// スライドショー（2本以上）

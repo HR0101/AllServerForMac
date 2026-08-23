@@ -636,7 +636,7 @@
 		};
 		25959AD22E98000000000011 /* MediaServerKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 25959AD12E98000000000010 /* XCLocalSwiftPackageReference "../MediaServerKit" */;
+			package = 25959AD12E98000000000010 /* XCLocalSwiftPackageReference "Packages/MediaServerKit" */;
 			productName = MediaServerKit;
 		};
 /* End XCSwiftPackageProductDependency section */
