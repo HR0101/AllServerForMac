@@ -39,23 +39,13 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     }
 
     /// 切り替え間隔の下限・上限。同じ値にすれば固定間隔、開ければその範囲でばらつく。
-    @Published var minInterval: Double {
-        didSet {
-            minInterval = VariantSwitchSettings.clamp(minInterval)
-            if maxInterval < minInterval { maxInterval = minInterval }
-            VariantSwitchSettings.minInterval = minInterval
-            clampCountdownToRange()
-        }
-    }
-
-    @Published var maxInterval: Double {
-        didSet {
-            maxInterval = VariantSwitchSettings.clamp(maxInterval)
-            if minInterval > maxInterval { minInterval = maxInterval }
-            VariantSwitchSettings.maxInterval = maxInterval
-            clampCountdownToRange()
-        }
-    }
+    ///
+    /// 丸め込みや上下の入れ替わりを `didSet` の中でやってはいけない。
+    /// `@Published` は素の stored property と違い、`didSet` の中で自分自身へ代入すると
+    /// `didSet` がもう一度走るため、`self = clamp(self)` の形が無限再帰になってアプリごと落ちる。
+    /// 変更は必ず下の `setMinInterval` / `setMaxInterval` / `shiftIntervals` を通す。
+    @Published private(set) var minInterval: Double
+    @Published private(set) var maxInterval: Double
 
     @Published var avoidsImmediateRepeat: Bool {
         didSet { VariantSwitchSettings.avoidsImmediateRepeat = avoidsImmediateRepeat }
@@ -137,6 +127,12 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         group.seekAll(by: seconds)
     }
 
+    /// 数字キーからの割合ジャンプ（0〜1）。
+    func seek(toPercentage percentage: Double) {
+        hasReachedEnd = false
+        group.seekAll(toPercentage: percentage)
+    }
+
     func sliderEditingChanged(isEditing: Bool) {
         isSliderEditing = isEditing
         guard !isEditing, commonDuration > 0 else { return }
@@ -193,6 +189,39 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
             player.isMuted = !isActive || isMuted
             player.volume = isActive ? volume : 0
         }
+    }
+
+    /// 下限を変える。上限より大きくなったら上限も押し上げる。
+    func setMinInterval(_ value: Double) {
+        let clamped = VariantSwitchSettings.clamp(value)
+        minInterval = clamped
+        if maxInterval < clamped { maxInterval = clamped }
+        persistIntervals()
+    }
+
+    /// 上限を変える。下限より小さくなったら下限も引き下げる。
+    func setMaxInterval(_ value: Double) {
+        let clamped = VariantSwitchSettings.clamp(value)
+        maxInterval = clamped
+        if minInterval > clamped { minInterval = clamped }
+        persistIntervals()
+    }
+
+    /// 下限と上限を同じ幅だけ動かして、ばらつきの幅は保ったまま速さだけ変える。
+    /// 端に当たったら窓を潰さずそこで止める（上限側で潰すと、戻したときに固定間隔になってしまう）。
+    func shiftIntervals(by delta: Double) {
+        let span = maxInterval - minInterval
+        let lowest = VariantSwitchSettings.allowedRange.lowerBound
+        let highestStart = max(VariantSwitchSettings.allowedRange.upperBound - span, lowest)
+        minInterval = min(max(minInterval + delta, lowest), highestStart)
+        maxInterval = VariantSwitchSettings.clamp(minInterval + span)
+        persistIntervals()
+    }
+
+    private func persistIntervals() {
+        VariantSwitchSettings.minInterval = minInterval
+        VariantSwitchSettings.maxInterval = maxInterval
+        clampCountdownToRange()
     }
 
     private func nextInterval() -> Double {

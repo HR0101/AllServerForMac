@@ -20,6 +20,14 @@ struct VariantSwitchPlayerView: View {
     /// キーで間隔を刻むときの幅。
     private static let intervalStep: Double = 0.5
 
+    /// 差分を直接選ぶキー。数字はシークバーの割合ジャンプ（他のプレイヤーと同じ）に使うので、
+    /// キーボード上段を左から順に 1本目〜9本目へ割り当てる（本数の上限も 9 本）。
+    private static let directSelectKeys = ["q", "w", "e", "r", "t", "y", "u", "i", "o"]
+
+    private static func directSelectKey(for index: Int) -> String? {
+        directSelectKeys.indices.contains(index) ? directSelectKeys[index].uppercased() : nil
+    }
+
     init(videos: [VideoItem], dataManager: LibraryViewModel) {
         _viewModel = StateObject(wrappedValue: VariantSwitchPlayerViewModel(videos: videos, dataManager: dataManager))
     }
@@ -136,7 +144,8 @@ struct VariantSwitchPlayerView: View {
         .background(.regularMaterial)
     }
 
-    /// 番号を押せば即その差分へ。数字キー 1〜9 と同じ並び。
+    /// 押せば即その差分へ。丸の中は番号ではなく、その差分に割り当たっているキーを出す
+    /// （番号を出すと数字キーで飛べると読めてしまうが、数字は割合シークに使っている）。
     private var variantChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -145,8 +154,8 @@ struct VariantSwitchPlayerView: View {
                         viewModel.showVariant(at: index)
                     } label: {
                         HStack(spacing: 6) {
-                            Text("\(index + 1)")
-                                .font(.system(size: 11, weight: .bold).monospacedDigit())
+                            Text(Self.directSelectKey(for: index) ?? "\(index + 1)")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .frame(width: 18, height: 18)
                                 .background(Circle().fill(.white.opacity(0.18)))
                             Text(variant.title)
@@ -164,7 +173,7 @@ struct VariantSwitchPlayerView: View {
                         .foregroundStyle(index == viewModel.activeIndex ? Color.white : Color.primary)
                     }
                     .buttonStyle(.plain)
-                    .help(variant.title)
+                    .help(Self.directSelectKey(for: index).map { "\(variant.title)（\($0)）" } ?? variant.title)
                 }
             }
             .padding(.vertical, 1)
@@ -231,9 +240,17 @@ struct VariantSwitchPlayerView: View {
 
             HStack(spacing: 4) {
                 Text("間隔").font(.caption).foregroundStyle(.secondary)
-                intervalField(value: $viewModel.minInterval, label: "下限の秒数")
+                intervalField(
+                    value: viewModel.minInterval,
+                    label: "下限の秒数",
+                    set: viewModel.setMinInterval
+                )
                 Text("〜").font(.caption).foregroundStyle(.secondary)
-                intervalField(value: $viewModel.maxInterval, label: "上限の秒数")
+                intervalField(
+                    value: viewModel.maxInterval,
+                    label: "上限の秒数",
+                    set: viewModel.setMaxInterval
+                )
                 Text("秒").font(.caption).foregroundStyle(.secondary)
             }
             .opacity(viewModel.isAutoSwitching ? 1 : 0.4)
@@ -249,13 +266,18 @@ struct VariantSwitchPlayerView: View {
         }
     }
 
-    private func intervalField(value: Binding<Double>, label: String) -> some View {
+    /// 上下限は互いを押し合うので、`Binding` を直に持たせず必ずビューモデルの設定メソッドを通す。
+    private func intervalField(
+        value: Double,
+        label: String,
+        set: @escaping (Double) -> Void
+    ) -> some View {
         Stepper(
-            value: value,
+            value: Binding(get: { value }, set: set),
             in: VariantSwitchSettings.allowedRange,
             step: Self.intervalStep
         ) {
-            Text(String(format: "%.1f", value.wrappedValue))
+            Text(String(format: "%.1f", value))
                 .font(.caption.monospacedDigit())
                 .frame(width: 30, alignment: .trailing)
         }
@@ -281,9 +303,10 @@ struct VariantSwitchPlayerView: View {
                 .videoSeekForward10
             ],
             extraItems: [
-                ("1〜9", "その番号の差分へ直接切り替え"),
+                ("Q W E R T Y U I O", "1本目〜9本目の差分へ直接切り替え"),
+                ("0〜9", "0%〜90% の位置へジャンプ"),
                 ("− / +", "切り替え間隔を 0.5 秒ずつ縮める／伸ばす"),
-                ("T", "下の操作パネルの表示/非表示"),
+                ("P", "下の操作パネルの表示/非表示"),
                 ("?", "ショートカット一覧を表示"),
                 ("Esc", "プレイヤーを閉じる")
             ]
@@ -301,27 +324,12 @@ struct VariantSwitchPlayerView: View {
             return .handled
         }
 
-        // 数字は差分の直接指定に使う（同時再生と違い、割合シークよりこちらのほうが要る）。
-        if let digit = press.key.character.wholeNumberValue, (1...9).contains(digit) {
-            viewModel.showVariant(at: digit - 1)
-            return .handled
-        }
-
         switch press.key {
         case .escape:
             if showShortcutHelp { showShortcutHelp = false } else { coordinator.close() }
             return .handled
         case "?":
             showShortcutHelp.toggle()
-            return .handled
-        case "t", "T":
-            withAnimation(.easeOut(duration: 0.18)) { isPanelVisible.toggle() }
-            return .handled
-        case "-", "_":
-            shiftInterval(by: -Self.intervalStep)
-            return .handled
-        case "+", "=":
-            shiftInterval(by: Self.intervalStep)
             return .handled
         case .space:
             if press.modifiers.contains(.option) {
@@ -332,6 +340,14 @@ struct VariantSwitchPlayerView: View {
             break
         }
 
+        // 数字は他のプレイヤーと揃えて割合ジャンプ。差分の直接指定は上段キーへ逃がしてある。
+        if let digit = press.key.character.wholeNumberValue, (0...9).contains(digit) {
+            viewModel.seek(toPercentage: Double(digit) / 10.0)
+            return .handled
+        }
+
+        // 設定で変えられるキーを先に見る。上段キーへ何かを割り当て直した人が、
+        // 固定割り当ての差分選択に食われないようにするため。
         if MediaShortcutSettings.matches(.variantNext, press: press) {
             viewModel.showNextVariant()
         } else if MediaShortcutSettings.matches(.variantPrevious, press: press) {
@@ -350,18 +366,29 @@ struct VariantSwitchPlayerView: View {
             viewModel.seek(by: 5)
         } else if MediaShortcutSettings.matches(.videoSeekForward10, press: press) {
             viewModel.seek(by: 10)
+        } else if let index = Self.directSelectKeys.firstIndex(of: pressedLetter(press)) {
+            viewModel.showVariant(at: index)
         } else {
-            return .ignored
+            switch press.key {
+            case "p", "P":
+                withAnimation(.easeOut(duration: 0.18)) { isPanelVisible.toggle() }
+            case "-", "_":
+                viewModel.shiftIntervals(by: -Self.intervalStep)
+            case "+", "=":
+                viewModel.shiftIntervals(by: Self.intervalStep)
+            default:
+                return .ignored
+            }
         }
         return .handled
     }
 
-    /// 下限と上限を同じ幅だけ動かして、ばらつきの幅は保ったまま速さだけ変える。
-    private func shiftInterval(by delta: Double) {
-        let span = viewModel.maxInterval - viewModel.minInterval
-        let newMin = VariantSwitchSettings.clamp(viewModel.minInterval + delta)
-        viewModel.minInterval = newMin
-        viewModel.maxInterval = VariantSwitchSettings.clamp(newMin + span)
+    /// 固定割り当てのキーと突き合わせるための小文字1文字。修飾キー付きは対象外。
+    private func pressedLetter(_ press: KeyPress) -> String {
+        guard !press.modifiers.contains(.command),
+              !press.modifiers.contains(.control),
+              !press.modifiers.contains(.option) else { return "" }
+        return String(press.key.character).lowercased()
     }
 
     private func formatTime(_ time: Double) -> String {
