@@ -21,6 +21,8 @@ struct NeomorphicTile<Content: View>: View {
 
     var body: some View {
         content
+            // カードと同じく、与えられた高さいっぱいに広がる（横並びの列の下端がそろう）。
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(padding)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

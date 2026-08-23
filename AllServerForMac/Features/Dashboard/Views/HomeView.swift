@@ -14,6 +14,8 @@ struct HomeView: View {
     @State private var isShowingAccessLog = false
     @State private var isShowingStorageManager = false
     @State private var logFilter: Int = 0 // 0: 全て, 1: 動画本体, 2: サムネ, 3: その他
+    /// ScrollView の実寸サイズ。段数の決定と「画面いっぱいまでカードを伸ばす」高さに使う。
+    @State private var scrollSize: CGSize = CGSize(width: 1040, height: 800)
 
     init(dataManager: LibraryViewModel, webServerManager: ServerViewModel) {
         self.dataManager = dataManager
@@ -26,36 +28,28 @@ struct HomeView: View {
         ZStack {
             NeomorphicHomeBackground()
             ScrollView {
+                let layout = DashboardLayout(scrollSize: scrollSize)
                 VStack(spacing: DS.cardSpacing) {
-                    ServerHeroCard(webServerManager: webServerManager)
-
-                    // カードごとの高さが異なるため，行の高さを強制するLazyVGridは使わない。
-                    // 左右のカラムを独立して積むことで，縦長カードの横に空白が残らない。
-                    HStack(alignment: .top, spacing: DS.cardSpacing) {
-                        VStack(spacing: DS.cardSpacing) {
-                            connectionCard
-                            scheduleCard
-                            duplicateCheckCard
-                            storageCard
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
-
-                        VStack(spacing: DS.cardSpacing) {
-                            securityCard
-                            resourcesCard
-                            linkedFolderCard
-                            if !dataManager.linkedFolderConflicts.isEmpty {
-                                linkedFolderConflictCard
-                            }
-                            logsCard
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                    }
+                    ServerHeroCard(webServerManager: webServerManager, columnCount: layout.columnCount)
+                        // ヒーローは自然な高さのまま。余った高さは下のカード側で吸わせる。
+                        .fixedSize(horizontal: false, vertical: true)
+                    cardColumns(layout)
                 }
-                .frame(maxWidth: 1040)
-                .padding(.horizontal, 30)
-                .padding(.vertical, 30)
+                .frame(
+                    maxWidth: layout.contentWidth,
+                    minHeight: layout.minContentHeight,
+                    alignment: .top
+                )
+                .padding(.horizontal, DashboardLayout.horizontalPadding)
+                .padding(.vertical, DashboardLayout.verticalPadding)
                 .frame(maxWidth: .infinity)
+                .animation(.spring(response: 0.42, dampingFraction: 0.86), value: layout.columnCount)
+            }
+            // GeometryReader はサイドバー側で表示が崩れる事例があるため、実寸は onGeometryChange で受け取る。
+            .onGeometryChange(for: CGSize.self) { proxy in
+                proxy.size
+            } action: { newSize in
+                scrollSize = newSize
             }
         }
         .tint(NeomorphicTheme.accent)
@@ -69,6 +63,81 @@ struct HomeView: View {
         }
     }
 
+    // MARK: カードの段組み
+
+    /// カードごとに高さが大きく違うので、行の高さをそろえる LazyVGrid ではなく、
+    /// 「今いちばん短い段に次のカードを積む」メーソンリー配置にする。
+    /// 段数はウインドウ幅から決まるので、広げれば横に増え、狭めれば 1 列に畳まれる。
+    ///
+    /// 段の中身はすべて高さが可変（`dashboardCard()` が maxHeight: .infinity を持つ）なので、
+    /// いちばん高い段に合わせて他の段が引き伸ばされ、余りは段内のカードで山分けされる。
+    /// つまり段の下端がそろい、カード同士のあいだにも下にも空白が残らない。
+    private func cardColumns(_ layout: DashboardLayout) -> some View {
+        let columns = layout.distribute(visibleCards, height: estimatedHeight(of:))
+        return HStack(alignment: .top, spacing: DS.cardSpacing) {
+            ForEach(columns.indices, id: \.self) { index in
+                VStack(spacing: DS.cardSpacing) {
+                    ForEach(columns[index]) { card in
+                        cardView(card)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    /// 表示するカードを重要度順に並べたもの。この順に短い段へ詰めていく。
+    private var visibleCards: [DashboardCardID] {
+        var cards: [DashboardCardID] = [.connection, .security, .schedule, .resources]
+        if !dataManager.linkedFolderConflicts.isEmpty {
+            cards.append(.linkedFolderConflict)
+        }
+        cards.append(contentsOf: [.linkedFolder, .storage, .duplicateCheck, .logs])
+        return cards
+    }
+
+    @ViewBuilder
+    private func cardView(_ card: DashboardCardID) -> some View {
+        switch card {
+        case .connection: connectionCard
+        case .security: securityCard
+        case .schedule: scheduleCard
+        case .resources: resourcesCard
+        case .linkedFolderConflict: linkedFolderConflictCard
+        case .linkedFolder: linkedFolderCard
+        case .storage: storageCard
+        case .duplicateCheck: duplicateCheckCard
+        case .logs: logsCard
+        }
+    }
+
+    /// 段のバランス取りに使う概算の高さ。実測ではなく、開いている行数から見積もる。
+    /// 多少ずれても見た目の左右差が少し出るだけなので、正確さより安定して同じ値が出ることを優先する。
+    private func estimatedHeight(of card: DashboardCardID) -> CGFloat {
+        switch card {
+        case .connection:
+            return 150 + (webServerManager.autoStopEnabled ? 38 : 0)
+        case .security:
+            return webServerManager.authEnabled ? 200 : 215
+        case .schedule:
+            return 100 + (webServerManager.scheduleEnabled ? 250 : 0)
+        case .resources:
+            return 257
+        case .linkedFolderConflict:
+            let candidates = dataManager.linkedFolderConflicts.reduce(0) { $0 + $1.candidates.count }
+            return 60 + CGFloat(dataManager.linkedFolderConflicts.count) * 40 + CGFloat(candidates) * 56
+        case .linkedFolder:
+            return dataManager.linkedFolderCount > 0 ? 168 : 200
+        case .storage:
+            return 170
+        case .duplicateCheck:
+            let rows = min(duplicateCheckStatus.uncheckedAlbums.count, 6) + min(duplicateCheckStatus.checkedAlbums.count, 6)
+            return 330 + CGFloat(rows) * 22
+        case .logs:
+            return filteredLogs.isEmpty ? 200 : 130 + CGFloat(min(filteredLogs.count, 12)) * 28
+        }
+    }
+
     // MARK: 重複チェックカード
     private var duplicateCheckCard: some View {
         let checkedAlbums = duplicateCheckStatus.checkedAlbums
@@ -76,7 +145,7 @@ struct HomeView: View {
         let totalCount = checkedAlbums.count + uncheckedAlbums.count
 
         return VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "checkmark.seal.fill", tint: .mint, title: "素材検品", subtitle: "DUPLICATE INSPECTION")
+            CardHeader(icon: "checkmark.seal.fill", tint: .mint, title: "重複チェック", subtitle: "同じ動画をまとめて検出")
 
             Toggle(isOn: $dataManager.isAutoDuplicateCheckEnabled) {
                 Text("バックグラウンドで自動チェック")
@@ -128,16 +197,20 @@ struct HomeView: View {
 
             duplicateAlbumList(title: "未チェック", albums: uncheckedAlbums, emptyMessage: "未チェックのアルバムはありません。")
             duplicateAlbumList(title: "チェック済み", albums: checkedAlbums, emptyMessage: "チェック済みのアルバムはありません。")
+
+            Spacer(minLength: 0)
         }
         .dashboardCard()
     }
 
-    // MARK: リンクフォルダ更新カード
+    // MARK: フォルダ連携カード
     private var linkedFolderCard: some View {
         let count = dataManager.linkedFolderCount
         let status = linkedFolderScanStatus
         return VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "folder.badge.gearshape", tint: .cyan, title: "素材搬入", subtitle: "INGEST FOLDERS")
+            CardHeader(icon: "folder.badge.gearshape", tint: .cyan, title: "フォルダ連携", subtitle: "Mac のフォルダから取り込み")
+
+            Spacer(minLength: 0)
 
             SettingRow(label: "リンク中のフォルダ") {
                 Text("\(count)")
@@ -165,6 +238,8 @@ struct HomeView: View {
                     }
                 }
             }
+
+            Spacer(minLength: 0)
 
             Divider()
 
@@ -243,7 +318,7 @@ struct HomeView: View {
                 icon: "folder.badge.questionmark",
                 tint: .yellow,
                 title: "フォルダ紐づけ候補",
-                subtitle: "同名フォルダの選択"
+                subtitle: "同じ名前のフォルダが複数あります"
             )
 
             ForEach(dataManager.linkedFolderConflicts) { conflict in
@@ -298,6 +373,8 @@ struct HomeView: View {
                     Divider()
                 }
             }
+
+            Spacer(minLength: 0)
         }
         .dashboardCard()
     }
@@ -335,10 +412,12 @@ struct HomeView: View {
         }
     }
 
-    // MARK: 接続設定カード
+    // MARK: サーバー設定カード
     private var connectionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "network", tint: .blue, title: "送出設定", subtitle: "PORT / AUTO STOP")
+            CardHeader(icon: "network", tint: .blue, title: "サーバー設定", subtitle: "ポート番号 / 自動停止")
+
+            Spacer(minLength: 0)
 
             SettingRow(label: "ポート番号") {
                 HStack(spacing: 6) {
@@ -357,6 +436,8 @@ struct HomeView: View {
                 }
             }
 
+            Spacer(minLength: 0)
+
             Divider()
 
             Toggle(isOn: $webServerManager.autoStopEnabled) {
@@ -366,6 +447,8 @@ struct HomeView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .disabled(webServerManager.isRunning)
+
+            Spacer(minLength: 0)
 
             if webServerManager.autoStopEnabled {
                 SettingRow(label: "停止までの時間") {
@@ -381,15 +464,19 @@ struct HomeView: View {
                     }
                 }
             }
+
+            Spacer(minLength: 0)
         }
         .animation(.easeInOut(duration: 0.18), value: webServerManager.autoStopEnabled)
         .dashboardCard()
     }
 
-    // MARK: スケジュールカード
+    // MARK: 自動起動スケジュールカード
     private var scheduleCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "calendar.badge.clock", tint: .purple, title: "放送予定", subtitle: "DAILY SCHEDULE")
+            CardHeader(icon: "calendar.badge.clock", tint: .purple, title: "自動起動スケジュール", subtitle: "毎日決まった時間に起動・停止")
+
+            Spacer(minLength: 0)
 
             Toggle(isOn: $webServerManager.scheduleEnabled) {
                 Text("毎日決まった時間に起動/停止")
@@ -425,6 +512,15 @@ struct HomeView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            Spacer(minLength: 0)
+
+            if !webServerManager.scheduleEnabled {
+                Text("オンにすると、毎日決まった時刻にサーバーを起動し、指定した時刻にアプリごと終了します。Mac は電源につないだままにしてください。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .animation(.easeInOut(duration: 0.18), value: webServerManager.scheduleEnabled)
         .dashboardCard()
@@ -433,7 +529,9 @@ struct HomeView: View {
     // MARK: セキュリティカード
     private var securityCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "lock.shield.fill", tint: .green, title: "アクセス制御", subtitle: "PIN / ACCESS LOG")
+            CardHeader(icon: "lock.shield.fill", tint: .green, title: "アクセス制御", subtitle: "PIN 認証 / アクセスログ")
+
+            Spacer(minLength: 0)
 
             Toggle(isOn: $webServerManager.authEnabled) {
                 Text("PIN認証を必須にする")
@@ -442,6 +540,8 @@ struct HomeView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .help("オンにすると、Web・iOSアプリからのアクセスにPINが必要になります。")
+
+            Spacer(minLength: 0)
 
             if webServerManager.authEnabled {
                 SettingRow(label: "接続PIN") {
@@ -478,6 +578,8 @@ struct HomeView: View {
                 )
             }
 
+            Spacer(minLength: 0)
+
             Divider()
 
             Button(action: { isShowingAccessLog = true }) {
@@ -500,10 +602,10 @@ struct HomeView: View {
         .dashboardCard()
     }
 
-    // MARK: システムリソースカード
+    // MARK: Mac の負荷カード
     private var resourcesCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "gauge.with.dots.needle.50percent", tint: .orange, title: "送出機器", subtitle: "CPU / MEMORY LEVEL")
+            CardHeader(icon: "gauge.with.dots.needle.50percent", tint: .orange, title: "この Mac の負荷", subtitle: "CPU / メモリ使用率")
 
             HStack(spacing: 24) {
                 ResourceGauge(label: "CPU", value: systemMonitor.cpuUsage, tint: .orange)
@@ -544,26 +646,33 @@ struct HomeView: View {
                         .font(.system(size: 8))
                 }
             }
-            .frame(height: 90)
+            .frame(minHeight: 90, maxHeight: .infinity)
         }
         .dashboardCard()
     }
 
-    // MARK: ストレージカード
+    // MARK: ライブラリ容量カード
     private var storageCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "internaldrive.fill", tint: .indigo, title: "素材庫", subtitle: "MEDIA INVENTORY")
+            CardHeader(icon: "internaldrive.fill", tint: .indigo, title: "ライブラリ容量", subtitle: "保存件数と使用容量")
+
+            Spacer(minLength: 0)
 
             SettingRow(label: "総アイテム数") {
                 Text("\(dataManager.videos.count)")
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
+
+            Spacer(minLength: 0)
+
             SettingRow(label: "使用容量") {
                 Text(dataManager.totalStorageSizeText)
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
+
+            Spacer(minLength: 0)
 
             Divider()
 
@@ -576,11 +685,23 @@ struct HomeView: View {
         .dashboardCard()
     }
 
-    // MARK: リアルタイム通信ログカード
+    /// 通信ログのフィルタ結果。カードの表示と段組みの高さ見積もりで共有する。
+    private var filteredLogs: [AccessLogEntry] {
+        webServerManager.accessLogs.filter { entry in
+            switch logFilter {
+            case 1: return entry.path.hasPrefix("/video/")
+            case 2: return entry.path.hasPrefix("/thumbnail/")
+            case 3: return !entry.path.hasPrefix("/video/") && !entry.path.hasPrefix("/thumbnail/")
+            default: return true
+            }
+        }
+    }
+
+    // MARK: 通信ログカード
     private var logsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                CardHeader(icon: "network.badge.shield.half.filled", tint: .teal, title: "回線ログ", subtitle: "LIVE ACCESS LOG")
+                CardHeader(icon: "network.badge.shield.half.filled", tint: .teal, title: "通信ログ", subtitle: "最近のアクセス")
                 Spacer()
                 Button("すべて見る") { isShowingAccessLog = true }
                     .font(.system(size: 11, weight: .semibold))
@@ -598,24 +719,15 @@ struct HomeView: View {
             .labelsHidden()
             .padding(.bottom, 4)
 
-            let filteredLogs = webServerManager.accessLogs.filter { entry in
-                switch logFilter {
-                case 1: return entry.path.hasPrefix("/video/")
-                case 2: return entry.path.hasPrefix("/thumbnail/")
-                case 3: return !entry.path.hasPrefix("/video/") && !entry.path.hasPrefix("/thumbnail/")
-                default: return true
-                }
-            }
-
             if filteredLogs.isEmpty {
                 Text("まだアクセスがありません")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .padding(.vertical, 20)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(filteredLogs.prefix(15)) { entry in
+                    ForEach(filteredLogs.prefix(40)) { entry in
                         HStack(spacing: 8) {
                             Text(entry.date.formatted(.dateTime.hour().minute().second()))
                                 .font(.system(size: 10, design: .monospaced))
@@ -653,10 +765,126 @@ struct HomeView: View {
                         )
                     }
                 }
-                .frame(maxHeight: 240, alignment: .top)
+                // カードに与えられた高さぶんだけ行が見える。はみ出したぶんは切り落とす。
+                .frame(minHeight: 120, maxHeight: .infinity, alignment: .top)
                 .clipped()
             }
         }
         .dashboardCard()
+    }
+}
+
+// MARK: - 段組みレイアウト
+
+/// ダッシュボードに並ぶカードの識別子。段組みの計算とビューの生成でこの並びを共有する。
+private enum DashboardCardID: Identifiable, CaseIterable {
+    case connection
+    case security
+    case schedule
+    case resources
+    case linkedFolderConflict
+    case linkedFolder
+    case storage
+    case duplicateCheck
+    case logs
+
+    var id: Self { self }
+}
+
+/// ウインドウの実寸から段数・本文幅・「最低これだけは埋める高さ」を決める。
+private struct DashboardLayout {
+    static let horizontalPadding: CGFloat = 30
+    static let verticalPadding: CGFloat = 30
+
+    /// ScrollView の実寸（パディングを含む）。
+    let scrollSize: CGSize
+
+    /// 左右パディングを除いた、カードを並べられる幅。
+    private var usableWidth: CGFloat {
+        max(320, scrollSize.width - Self.horizontalPadding * 2)
+    }
+
+    /// 表示領域の高さぶんは埋めにいく。カードが少なくて下に空白が残るときは、
+    /// この最低高さぶんだけ段が引き伸ばされ、カード自身が大きくなって空白を飲み込む。
+    /// 中身のほうが高いときは効かないので、通常のスクロールを邪魔しない。
+    var minContentHeight: CGFloat {
+        max(0, scrollSize.height - Self.verticalPadding * 2)
+    }
+
+    /// 横に並べる段数。カード 1 枚あたり 350pt 前後を確保できるところで切り替える。
+    var columnCount: Int {
+        switch usableWidth {
+        case ..<720: return 1
+        case ..<1100: return 2
+        case ..<1560: return 3
+        default: return 4
+        }
+    }
+
+    /// 段数ごとの上限幅。ウインドウを最大化してもカード 1 枚が間延びしないように抑える。
+    var contentWidth: CGFloat {
+        let cap: CGFloat
+        switch columnCount {
+        case 1: cap = 620
+        case 2: cap = 1040
+        case 3: cap = 1500
+        default: cap = 1960
+        }
+        return min(usableWidth, cap)
+    }
+
+    /// 見積もり高さがいちばん小さい段へ順に詰め、そのあと段の高さがそろうまで詰め直す。
+    ///
+    /// 詰めるだけだと「カード 2 枚しかない段」が生まれ、そこが一番高い段に合わせて
+    /// 引き伸ばされるとカードが間延びする。そこで、いちばん高い段からカードを 1 枚ずつ
+    /// 別の段へ移し、最大の段が低くなる移動だけを採用する改善パスを回す。
+    /// 見積もりだけで完結する決定的な計算なので、同じ状態なら毎回同じ並びになる。
+    func distribute<Card>(_ cards: [Card], height: (Card) -> CGFloat) -> [[Card]] {
+        guard columnCount > 1 else { return [cards] }
+
+        var columns = [[Int]](repeating: [], count: columnCount)
+        var filled = [CGFloat](repeating: 0, count: columnCount)
+        let heights = cards.map(height)
+
+        func add(_ index: Int, to column: Int) {
+            columns[column].append(index)
+            filled[column] += heights[index] + DS.cardSpacing
+        }
+
+        for index in cards.indices {
+            add(index, to: filled.indices.min { filled[$0] < filled[$1] } ?? 0)
+        }
+
+        // 最大の段が下がらなくなるまで詰め直す。空回りしないよう回数は打ち切る。
+        for _ in 0..<(cards.count * columnCount) {
+            guard let tallest = filled.indices.max(by: { filled[$0] < filled[$1] }),
+                  columns[tallest].count > 1 else { break }
+            let currentMax = filled[tallest]
+
+            var best: (card: Int, destination: Int, resultingMax: CGFloat)?
+            for card in columns[tallest] {
+                for destination in columns.indices where destination != tallest {
+                    let moved = heights[card] + DS.cardSpacing
+                    var next = filled
+                    next[tallest] -= moved
+                    next[destination] += moved
+                    let resultingMax = next.max() ?? currentMax
+                    if resultingMax < currentMax - 0.5,
+                       resultingMax < (best?.resultingMax ?? .greatestFiniteMagnitude) {
+                        best = (card, destination, resultingMax)
+                    }
+                }
+            }
+
+            guard let move = best else { break }
+            columns[move.destination].append(move.card)
+            columns[tallest].removeAll { $0 == move.card }
+            let moved = heights[move.card] + DS.cardSpacing
+            filled[tallest] -= moved
+            filled[move.destination] += moved
+        }
+
+        // 段の中は元の並び順に戻して、読む順とレイアウトを大きくずらさない。
+        return columns.map { $0.sorted().map { cards[$0] } }
     }
 }

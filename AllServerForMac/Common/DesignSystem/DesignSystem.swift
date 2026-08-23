@@ -102,6 +102,9 @@ struct CardBackground: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // 与えられた枠いっぱいに広がる。段の高さがそろうと、カード同士のあいだに
+            // 隙間が残らず、余った高さはカードそのものの大きさとして吸収される。
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(DS.cardPadding)
             .background(
                 RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
@@ -113,6 +116,8 @@ struct CardBackground: ViewModifier {
                 RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
                     .strokeBorder(.white.opacity(isHovering ? 0.76 : 0.58), lineWidth: 1)
             )
+            // ポインタを乗せるとカードがわずかに浮く。影の変化と合わせた軽いフィードバック。
+            .offset(y: isHovering ? -2 : 0)
             .animation(.easeOut(duration: 0.18), value: isHovering)
             .onHover { isHovering = $0 }
     }

@@ -5,50 +5,90 @@ import SwiftUI
 // MARK: - サーバー状態ヒーローカード
 struct ServerHeroCard: View {
     @ObservedObject var webServerManager: ServerViewModel
+    /// ダッシュボード側の段数。ヒーローカードも同じ幅の判断に合わせて 1〜3 段に組み替える。
+    var columnCount: Int = 2
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 22) {
-                leftColumn
-                    .frame(width: 470)
-                rightColumn
+        Group {
+            switch columnCount {
+            case ...1:
+                VStack(spacing: 18) {
+                    serverControlTile
+                    statusTileRow
+                    welcomePill
+                    analyticsTile
+                }
+            case 2:
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(spacing: 18) {
+                        serverControlTile
+                        statusTileRow
+                    }
                     .frame(maxWidth: .infinity)
-            }
 
-            VStack(spacing: 18) {
-                leftColumn
-                rightColumn
+                    VStack(spacing: 18) {
+                        welcomePill
+                        analyticsTile
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            default:
+                // 3 段以上のときは要約タイルを 3 段目に縦積みして、横に伸びた余白を埋める。
+                HStack(alignment: .top, spacing: 18) {
+                    serverControlTile
+                        .frame(maxWidth: .infinity)
+
+                    VStack(spacing: 18) {
+                        welcomePill
+                        analyticsTile
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    VStack(spacing: 18) {
+                        autoStopTile
+                        pinTile
+                        portTile
+                    }
+                    .frame(maxWidth: .infinity)
+                }
             }
         }
         .animation(.easeInOut(duration: 0.25), value: webServerManager.isRunning)
     }
 
-    private var leftColumn: some View {
-        VStack(spacing: 18) {
-            serverControlTile
-
-            HStack(spacing: 18) {
-                NeomorphicSceneTile(
-                    icon: "timer",
-                    title: "Auto Stop",
-                    value: webServerManager.autoStopEnabled ? "\(webServerManager.autoStopIntervalMinutes) min" : "Off",
-                    tint: .orange
-                )
-                NeomorphicSceneTile(
-                    icon: "lock.shield",
-                    title: "PIN Scene",
-                    value: webServerManager.authEnabled ? "Protected" : "Open LAN",
-                    tint: .green
-                )
-            }
+    private var statusTileRow: some View {
+        HStack(spacing: 18) {
+            autoStopTile
+            pinTile
+            portTile
         }
     }
 
-    private var rightColumn: some View {
-        VStack(spacing: 18) {
-            welcomePill
-            analyticsTile
-        }
+    private var autoStopTile: some View {
+        NeomorphicSceneTile(
+            icon: "timer",
+            title: "自動停止",
+            value: webServerManager.autoStopEnabled ? "\(webServerManager.autoStopIntervalMinutes) 分後" : "オフ",
+            tint: .orange
+        )
+    }
+
+    private var pinTile: some View {
+        NeomorphicSceneTile(
+            icon: "lock.shield",
+            title: "PIN 認証",
+            value: webServerManager.authEnabled ? "必須" : "なし",
+            tint: .green
+        )
+    }
+
+    private var portTile: some View {
+        NeomorphicSceneTile(
+            icon: "network",
+            title: "ポート",
+            value: "\(webServerManager.targetPort)",
+            tint: .blue
+        )
     }
 
     private var serverControlTile: some View {
@@ -60,7 +100,7 @@ struct ServerHeroCard: View {
                             Text("Mac Media Server")
                                 .font(.system(size: 22, weight: .bold, design: .rounded))
                                 .foregroundStyle(NeomorphicTheme.ink)
-                            Text(webServerManager.isRunning ? "Local Streaming" : "Standby Cooling")
+                            Text(webServerManager.isRunning ? "LAN に配信中" : "待機中")
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .foregroundStyle(NeomorphicTheme.muted)
                         }
@@ -109,8 +149,12 @@ struct ServerHeroCard: View {
                         .shadow(color: NeomorphicTheme.shadow.opacity(0.22), radius: 5, x: 3, y: 3)
                 )
 
+                Spacer(minLength: 0)
+
                 ServerArcGauge(isRunning: webServerManager.isRunning)
                     .frame(maxWidth: .infinity)
+
+                Spacer(minLength: 0)
 
                 statusDetail
             }
@@ -133,11 +177,13 @@ struct ServerHeroCard: View {
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(NeomorphicTheme.muted)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
     private var welcomePill: some View {
+        // ここは 1 行ぶんの高さで固定し、余った高さは下の「サーバーの状態」に吸わせる。
         NeomorphicTile(padding: 15) {
             HStack(spacing: 14) {
                 Circle()
@@ -152,56 +198,69 @@ struct ServerHeroCard: View {
                     .shadow(color: NeomorphicTheme.shadow.opacity(0.28), radius: 6, x: 4, y: 4)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Hi, Local Server")
+                    Text(webServerManager.isRunning ? "視聴できます" : "停止中")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(NeomorphicTheme.ink)
-                    Text(webServerManager.isRunning ? "1 server active" : "Server ready")
+                    Text(webServerManager.isRunning
+                         ? "同じ Wi-Fi の iPhone・ブラウザから接続できます"
+                         : "「開始」を押すと配信をはじめます")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(NeomorphicTheme.muted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Spacer()
-
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(NeomorphicTheme.muted)
+                Spacer(minLength: 0)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var analyticsTile: some View {
         NeomorphicTile(padding: 22) {
-            VStack(alignment: .leading, spacing: 17) {
+            // 高さが余ったときは Spacer の側で吸って、行間が均等に開くようにする。
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(NeomorphicTheme.ink)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("AI Power Analytics")
+                        Text("サーバーの状態")
                             .font(.system(size: 20, weight: .bold, design: .rounded))
                             .foregroundStyle(NeomorphicTheme.ink)
-                        Text("Daily Usage")
+                        Text("いまの設定と稼働状況")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(NeomorphicTheme.muted)
                     }
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(NeomorphicTheme.muted)
-                        .padding(9)
-                        .background(
-                            Circle()
-                                .fill(NeomorphicTheme.surface)
-                                .shadow(color: .white.opacity(0.95), radius: 3, x: -2, y: -2)
-                                .shadow(color: NeomorphicTheme.shadow.opacity(0.24), radius: 5, x: 3, y: 3)
-                        )
+                    Spacer(minLength: 0)
                 }
 
-                VStack(spacing: 12) {
-                    NeomorphicAnalyticsRow(icon: "antenna.radiowaves.left.and.right", title: "Local Relay", value: webServerManager.isRunning ? "Running | \(webServerManager.targetPort)" : "Idle | \(webServerManager.targetPort)")
-                    NeomorphicAnalyticsRow(icon: "lock.shield", title: "PIN Security", value: webServerManager.authEnabled ? "Protected" : "Open LAN")
-                    NeomorphicAnalyticsRow(icon: "list.bullet.rectangle", title: "Access Log", value: "\(webServerManager.accessLogs.count) entries")
-                    NeomorphicAnalyticsRow(icon: "timer", title: "Auto Stop", value: webServerManager.autoStopEnabled ? "\(webServerManager.autoStopIntervalMinutes) minutes" : "Disabled")
+                Spacer(minLength: 17)
+
+                VStack(spacing: 0) {
+                    NeomorphicAnalyticsRow(
+                        icon: "antenna.radiowaves.left.and.right",
+                        title: "LAN 配信",
+                        value: webServerManager.isRunning ? "稼働中・ポート \(webServerManager.targetPort)" : "停止中・ポート \(webServerManager.targetPort)"
+                    )
+                    Spacer(minLength: 12)
+                    NeomorphicAnalyticsRow(
+                        icon: "lock.shield",
+                        title: "PIN 認証",
+                        value: webServerManager.authEnabled ? "必須（PIN を知っている人だけ）" : "なし（同じ Wi-Fi なら誰でも）"
+                    )
+                    Spacer(minLength: 12)
+                    NeomorphicAnalyticsRow(
+                        icon: "list.bullet.rectangle",
+                        title: "アクセスログ",
+                        value: "\(webServerManager.accessLogs.count) 件を記録中"
+                    )
+                    Spacer(minLength: 12)
+                    NeomorphicAnalyticsRow(
+                        icon: "timer",
+                        title: "自動停止",
+                        value: webServerManager.autoStopEnabled ? "\(webServerManager.autoStopIntervalMinutes) 分後に停止" : "しない"
+                    )
                 }
             }
         }
@@ -267,7 +326,7 @@ private struct NeomorphicSceneTile: View {
 
     var body: some View {
         NeomorphicTile(padding: 16) {
-            VStack(alignment: .leading, spacing: 36) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Image(systemName: icon)
                         .font(.system(size: 15, weight: .semibold))
@@ -279,21 +338,22 @@ private struct NeomorphicSceneTile: View {
                                 .shadow(color: .white.opacity(0.9), radius: 3, x: -2, y: -2)
                                 .shadow(color: NeomorphicTheme.shadow.opacity(0.24), radius: 5, x: 3, y: 3)
                         )
-                    Spacer()
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(NeomorphicTheme.muted)
+                    Spacer(minLength: 0)
                 }
+
+                Spacer(minLength: 20)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(NeomorphicTheme.ink)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Text(value)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(NeomorphicTheme.muted)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
@@ -331,10 +391,6 @@ private struct NeomorphicAnalyticsRow: View {
             }
 
             Spacer(minLength: 8)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(NeomorphicTheme.muted)
         }
         .padding(14)
         .background(
