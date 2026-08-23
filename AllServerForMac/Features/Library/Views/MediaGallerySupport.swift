@@ -38,34 +38,118 @@ enum MediaGridNavigation {
     }
 }
 
-/// 削除の確認などで「どれを選んだのか」を小さく添えるための一覧文。
-///
-/// 件数だけだと、選んだつもりのものと実際の選択がずれていても気づけない。
-/// かといって全部並べるとダイアログが画面を埋めるので、先頭数件だけ出して残りは件数でまとめる。
-enum SelectionSummary {
-    /// 名前を並べる上限。これを超えたぶんは「ほか◯件」に畳む。
-    private static let maxListedNames = 8
-    /// 1行の長さの上限。超えたら真ん中を省略する。
-    private static let maxNameLength = 44
+/// 削除対象をタイトルではなくサムネイルで確認する共通シート。
+/// 大量選択でも画面を埋めないよう，サムネイル領域だけをスクロールさせる。
+struct MediaDeletionConfirmationSheet: View {
+  let items: [VideoItem]
+  let dataManager: LibraryViewModel
+  let onMoveToAppTrash: (() -> Void)?
+  let onDeleteCompletely: () -> Void
+  let onMoveToSystemTrash: () -> Void
 
-    /// `items` は表示順で渡すこと（画面で見えている並びと一致していないと確認の役に立たない）。
-    static func text(for items: [VideoItem]) -> String {
-        guard !items.isEmpty else { return "" }
-        var lines = items.prefix(maxListedNames).map { "・" + shortened($0.originalFilename) }
-        let remainder = items.count - lines.count
-        if remainder > 0 {
-            lines.append("・ほか\(remainder)件")
+  @Environment(\.dismiss) private var dismiss
+
+  private static let sheetWidth: CGFloat = 720
+  private static let thumbnailMinimumSide: CGFloat = 104
+  private static let thumbnailMaximumSide: CGFloat = 132
+  private static let thumbnailSpacing: CGFloat = 10
+  private static let thumbnailAreaMinimumHeight: CGFloat = 120
+  private static let thumbnailAreaMaximumHeight: CGFloat = 390
+
+  private var columns: [GridItem] {
+    [
+      GridItem(
+        .adaptive(
+          minimum: Self.thumbnailMinimumSide,
+          maximum: Self.thumbnailMaximumSide
+        ),
+        spacing: Self.thumbnailSpacing
+      )
+    ]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack(spacing: 10) {
+        Label("削除方法を選んでください", systemImage: "trash")
+          .font(.title3.weight(.semibold))
+        Spacer()
+        Text("\(items.count)件を選択中")
+          .font(.subheadline.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
+
+      Text("下のサムネイルが削除対象です．アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+
+      Divider()
+
+      ScrollView {
+        LazyVGrid(columns: columns, spacing: Self.thumbnailSpacing) {
+          ForEach(items) { item in
+            VStack(alignment: .leading, spacing: 6) {
+              MacVideoThumbnailView(
+                videoItem: item,
+                dataManager: dataManager
+              )
+              .overlay(alignment: .topTrailing) {
+                Image(systemName: "checkmark.circle.fill")
+                  .font(.system(size: 17))
+                  .symbolRenderingMode(.palette)
+                  .foregroundStyle(.white, Color.red)
+                  .padding(7)
+              }
+
+              Text(item.originalFilename)
+                .font(.caption)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityLabel(item.originalFilename)
+          }
         }
-        return lines.joined(separator: "\n")
-    }
+        .padding(4)
+      }
+      .frame(
+        minHeight: Self.thumbnailAreaMinimumHeight,
+        maxHeight: Self.thumbnailAreaMaximumHeight
+      )
 
-    /// 長い名前は真ん中を省略する。末尾には連番や拡張子が来ることが多く、
-    /// 先頭だけ残すより見分けがつきやすい。
-    private static func shortened(_ name: String) -> String {
-        guard name.count > maxNameLength else { return name }
-        let sideLength = maxNameLength / 2 - 1
-        return "\(name.prefix(sideLength))…\(name.suffix(sideLength))"
+      Divider()
+
+      HStack(spacing: 10) {
+        Button("キャンセル", role: .cancel) {
+          dismiss()
+        }
+        .keyboardShortcut(.cancelAction)
+
+        Spacer()
+
+        if let onMoveToAppTrash {
+          Button("アプリ内のゴミ箱へ") {
+            perform(onMoveToAppTrash)
+          }
+        }
+
+        Button("完全に削除", role: .destructive) {
+          perform(onDeleteCompletely)
+        }
+
+        Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+          perform(onMoveToSystemTrash)
+        }
+      }
     }
+    .padding(20)
+    .frame(width: Self.sheetWidth)
+  }
+
+  private func perform(_ action: () -> Void) {
+    action()
+    dismiss()
+  }
 }
 
 /// インポート進捗の @State 更新を間引くカウンタ。

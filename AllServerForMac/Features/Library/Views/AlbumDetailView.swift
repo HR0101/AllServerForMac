@@ -29,7 +29,7 @@ struct AlbumDetailView: View {
     @State private var showSketchCleanup = false
     // 似ているメディアの整理
     @State private var showSimilarMedia = false
-    @State private var showVariantVideos = false
+
 
     // 分割再生用
     @State private var showSplitSheet = false
@@ -246,7 +246,7 @@ struct AlbumDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 if videoItems.count >= 2 {
                     Button {
-                        showVariantVideos = true
+                        openVariantFinder()
                     } label: {
                         Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
                     }
@@ -351,13 +351,14 @@ struct AlbumDetailView: View {
                 }
             }
         }
-        // 削除は必ず「ゴミ箱に入れる」か「完全に削除」かを確認してから実行する。
-        .confirmationDialog("削除方法を選んでください", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
-            Button("ゴミ箱に入れる", action: moveSelectedToTrash)
-            Button("完全に削除", role: .destructive, action: deleteSelectedVideos)
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。\n\n\(SelectionSummary.text(for: selectedItems))")
+        .sheet(isPresented: $showBulkDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: self.selectedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: moveSelectedToTrash,
+                onDeleteCompletely: deleteSelectedVideos,
+                onMoveToSystemTrash: moveSelectedToSystemTrash
+            )
         }
         .sheet(isPresented: $showSketchCleanup) {
             SketchCleanupView(items: displayedItems, dataManager: dataManager) {
@@ -369,11 +370,6 @@ struct AlbumDetailView: View {
             SimilarMediaView(items: displayedItems, dataManager: dataManager) {
                 selectedVideoIDs.removeAll()
                 lastSelectedVideoID = nil
-            }
-        }
-        .sheet(isPresented: $showVariantVideos) {
-            VariantVideoView(items: displayedItems, dataManager: dataManager) { videos in
-                startVariantSwitchPlayback(videos)
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
@@ -497,6 +493,13 @@ struct AlbumDetailView: View {
                             },
                             onMoveToTrash: {
                                 dataManager.moveToTrash(videoIDs: effectiveTargetIDs(for: video))
+                                selectedVideoIDs.removeAll()
+                                lastSelectedVideoID = nil
+                            },
+                            onMoveToSystemTrash: {
+                                dataManager.moveMediaFilesToSystemTrash(
+                                    videoIDs: effectiveTargetIDs(for: video)
+                                )
                                 selectedVideoIDs.removeAll()
                                 lastSelectedVideoID = nil
                             },
@@ -630,7 +633,7 @@ struct AlbumDetailView: View {
             return .handled
         } else if MediaShortcutSettings.matches(.libraryVariantPlay, press: press) {
             let selected = selectedVideoItems
-            if selected.count >= 2 { startVariantSwitchPlayback(selected) } else { showVariantVideos = true }
+            if selected.count >= 2 { startVariantSwitchPlayback(selected) } else { openVariantFinder() }
             return .handled
         } else if MediaShortcutSettings.matches(.librarySlideshow, press: press) {
             let selected = selectedVideoItems
@@ -879,6 +882,14 @@ struct AlbumDetailView: View {
 
     private func moveSelectedToTrash() {
         dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
+        selectedVideoIDs.removeAll()
+        lastSelectedVideoID = nil
+    }
+
+    private func moveSelectedToSystemTrash() {
+        dataManager.moveMediaFilesToSystemTrash(
+            videoIDs: Array(selectedVideoIDs)
+        )
         selectedVideoIDs.removeAll()
         lastSelectedVideoID = nil
     }
@@ -1135,6 +1146,16 @@ struct AlbumDetailView: View {
         guard videos.count >= 2 else { return }
         rememberGridState()
         coordinator.playMulti(videos)
+    }
+
+    /// 差分の一覧を ContentView の最上位へ開く。
+    /// 表示中の検索・並べ替え順も渡し、その順番のまま探索できるようにする。
+    private func openVariantFinder() {
+        coordinator.openVariantFinder(
+            albumID: album.id,
+            itemIDs: displayedItems.map(\.id),
+            hostSize: NSApp.keyWindow?.frame.size
+        )
     }
 
     private func startVariantSwitchPlayback(_ videos: [VideoItem]) {

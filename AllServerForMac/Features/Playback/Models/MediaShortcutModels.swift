@@ -120,6 +120,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case variantPrevious
     case variantRandom
     case variantToggleAuto
+    case variantToggleDeleteMode
+    case variantMarkForDeletion
     case photoPrevious
     case photoNext
     case photoToggleMangaMode
@@ -173,6 +175,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .variantPrevious: return "差分: 前のバージョンへ"
         case .variantRandom: return "差分: ランダムなバージョンへ"
         case .variantToggleAuto: return "差分: 自動切り替えの入/切"
+        case .variantToggleDeleteMode: return "差分: 削除モードの入/切"
+        case .variantMarkForDeletion: return "差分: 表示中を削除対象にする"
         case .photoPrevious: return "画像: 前の画像"
         case .photoNext: return "画像: 次の画像"
         case .photoToggleMangaMode: return "画像: 漫画モード切替"
@@ -222,6 +226,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .variantPrevious: return "前の差分バージョンへ切り替え"
         case .variantRandom: return "ランダムな差分バージョンへ切り替え"
         case .variantToggleAuto: return "一定間隔での自動切り替えを止める/再開する"
+        case .variantToggleDeleteMode: return "見比べて要らないと分かったものを選んで消すモードに入る"
+        case .variantMarkForDeletion: return "いま表示している差分を削除対象に入れる/外す"
         case .photoPrevious: return "前の画像へ"
         case .photoNext: return "次の画像へ"
         case .photoToggleMangaMode: return "漫画モードを切り替え"
@@ -275,6 +281,8 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .variantPrevious: return [MediaShortcutKey(rawValue: "b")]
         case .variantRandom: return [MediaShortcutKey(rawValue: "v")]
         case .variantToggleAuto: return [MediaShortcutKey(rawValue: "a")]
+        case .variantToggleDeleteMode: return [MediaShortcutKey(rawValue: "d")]
+        case .variantMarkForDeletion: return [MediaShortcutKey(rawValue: "x")]
         case .photoPrevious: return [.leftArrow]
         case .photoNext: return [.rightArrow]
         case .photoToggleMangaMode: return [.m]
@@ -326,7 +334,9 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         .variantNext,
         .variantPrevious,
         .variantRandom,
-        .variantToggleAuto
+        .variantToggleAuto,
+        .variantToggleDeleteMode,
+        .variantMarkForDeletion
     ]
 
     static let photoActions: [MediaShortcutAction] = [

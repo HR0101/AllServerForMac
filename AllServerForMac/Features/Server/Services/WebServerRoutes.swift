@@ -220,6 +220,79 @@ extension ServerViewModel {
             return .ok(.text("Deleted"))
         }
 
+        server.post["/albums/delete"] = protectedDestructive { [weak self] request -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else {
+                return .internalServerError
+            }
+            struct DeleteAlbumsRequest: Codable {
+                let albumIds: [String]
+                let contentDisposal: String
+            }
+            struct DeleteAlbumsResponse: Codable {
+                let deletedAlbumIDs: [UUID]
+                let systemTrashResult: SystemTrashResult?
+            }
+            guard let deleteRequest = try? JSONDecoder().decode(
+                DeleteAlbumsRequest.self,
+                from: Data(request.body)
+            ) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+            let albumIDs = deleteRequest.albumIds.compactMap(UUID.init(uuidString:))
+            guard !albumIDs.isEmpty else {
+                return .badRequest(.text("No valid album IDs"))
+            }
+            let contentDisposal: LibraryViewModel.AlbumContentDisposal
+            switch deleteRequest.contentDisposal {
+            case "keep": contentDisposal = .keep
+            case "appTrash": contentDisposal = .trash
+            case "complete": contentDisposal = .delete
+            case "systemTrash": contentDisposal = .systemTrash
+            default:
+                return .badRequest(.text("Invalid content disposal"))
+            }
+            let response: DeleteAlbumsResponse
+            if case .systemTrash = contentDisposal {
+                let snapshot = dataManager.snapshotLibrary.value
+                let targetIDs = Set(albumIDs)
+                let mediaIDs = Array(Set(
+                    snapshot.albums
+                        .filter { targetIDs.contains($0.id) }
+                        .flatMap(\.videoIDs)
+                ))
+                let trashResult = DispatchQueue.main.sync {
+                    dataManager.moveMediaFilesToSystemTrash(videoIDs: mediaIDs)
+                }
+                if trashResult.failures.isEmpty {
+                    DispatchQueue.main.sync {
+                        dataManager.deleteAlbums(
+                            albumIDs: albumIDs,
+                            contentDisposal: .keep
+                        )
+                    }
+                }
+                response = DeleteAlbumsResponse(
+                    deletedAlbumIDs: trashResult.failures.isEmpty ? albumIDs : [],
+                    systemTrashResult: trashResult
+                )
+            } else {
+                DispatchQueue.main.sync {
+                    dataManager.deleteAlbums(
+                        albumIDs: albumIDs,
+                        contentDisposal: contentDisposal
+                    )
+                }
+                response = DeleteAlbumsResponse(
+                    deletedAlbumIDs: albumIDs,
+                    systemTrashResult: nil
+                )
+            }
+            guard let responseData = try? JSONEncoder().encode(response) else {
+                return .internalServerError
+            }
+            return .ok(.data(responseData, contentType: "application/json"))
+        }
+
         server.post["/albums/:id/rename"] = protected { [weak self] request -> HttpResponse in
             guard let self = self, let dataManager = self.dataManager,
                   let idString = request.params[":id"],
@@ -285,6 +358,32 @@ extension ServerViewModel {
                 DispatchQueue.main.sync { dataManager.deleteVideos(videoIDs: videoUUIDs) }
                 return .ok(.text("Deleted completely successfully"))
             } catch { return .badRequest(.text("Invalid request body")) }
+        }
+
+        server.post["/moveVideosToSystemTrash"] = protectedDestructive { [weak self] request -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else {
+                return .internalServerError
+            }
+            struct MoveToSystemTrashRequest: Codable {
+                let videoIds: [String]
+            }
+            guard let trashRequest = try? JSONDecoder().decode(
+                MoveToSystemTrashRequest.self,
+                from: Data(request.body)
+            ) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+            let videoIDs = trashRequest.videoIds.compactMap(UUID.init(uuidString:))
+            guard !videoIDs.isEmpty else {
+                return .badRequest(.text("No valid video IDs"))
+            }
+            let result = DispatchQueue.main.sync {
+                dataManager.moveMediaFilesToSystemTrash(videoIDs: videoIDs)
+            }
+            guard let responseData = try? JSONEncoder().encode(result) else {
+                return .internalServerError
+            }
+            return .ok(.data(responseData, contentType: "application/json"))
         }
 
         server["/trash"] = protected { [weak self] _ -> HttpResponse in

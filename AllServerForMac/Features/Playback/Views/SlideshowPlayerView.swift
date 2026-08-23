@@ -142,6 +142,9 @@ private struct SlideshowContentView: View {
     @State private var selectedChapterID: UUID?
     @State private var isSidebarVisible = false
     @State private var showShortcutHelp = false
+    /// 隅のボタンの出し入れ（他のプレイヤーと共通）。
+    /// シークバーは AVKit 標準のものがそれ自体で隠れるので、ここでは触らない。
+    @StateObject private var chrome = PlayerChromeController()
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let sidebarWidth: CGFloat = 250
     private let triggerWidth: CGFloat = 20
@@ -188,14 +191,18 @@ private struct SlideshowContentView: View {
             .offset(x: isSidebarVisible ? 0 : -sidebarWidth + triggerWidth)
             .onHover { hovering in isSidebarVisible = hovering }
 
-            VStack {
-                HStack {
-                    Spacer()
-                    PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
-                        coordinator.close()
+            if chrome.isShown {
+                VStack {
+                    HStack {
+                        Spacer()
+                        PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                            coordinator.close()
+                        }
+                        .playerChromeHoverGuard(chrome)
                     }
+                    Spacer()
                 }
-                Spacer()
+                .transition(.opacity)
             }
 
             if showShortcutHelp {
@@ -206,11 +213,25 @@ private struct SlideshowContentView: View {
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.2), value: isSidebarVisible)
+        .playerChromeActivity(chrome)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onAppear { isFocused = true }
-        .onDisappear { viewModel.cleanup() }
+        .onAppear {
+            isFocused = true
+            chrome.reveal()
+        }
+        .onChange(of: showShortcutHelp) { _, shown in
+            chrome.setHold(.overlayVisible, shown)
+        }
+        // チャプター一覧を出している間は、隅のボタンも一緒に残しておく。
+        .onChange(of: isSidebarVisible) { _, shown in
+            chrome.setHold(.pointerOverControls, shown)
+        }
+        .onDisappear {
+            chrome.cancel()
+            viewModel.cleanup()
+        }
         .onKeyPress(phases: .down, action: handleKeyPress)
         .onChange(of: selectedChapterID) { _, newID in
             guard let newID = newID, let chapter = viewModel.chapters.first(where: { $0.id == newID }) else { return }

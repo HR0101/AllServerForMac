@@ -46,13 +46,20 @@ struct ContentView: View {
             } else {
                 // 再生中はライブラリ画面を本当に破棄する。opacity 0 で残すと、
                 // ホームの1秒ごとのシステム監視・アルバム一覧のサムネイル・影付きカードが
-                // 再生中もずっと描画され続け、動画がカクつく。
+                // 再生中もずっと描画され続け、動画がカクつく。差分探索画面はライブラリとは
+                // 独立した兄弟Viewなので、こちらを外しても探索位置は保持される。
                 if shouldShowLibraryView {
                     libraryView
                 }
 
+                if let albumID = playbackCoordinator.variantFinderAlbumID {
+                    variantFinderOverlay(albumID: albumID)
+                        .zIndex(1)
+                }
+
                 if let mode = playbackCoordinator.mode {
                     playerOverlay(for: mode)
+                        .zIndex(2)
                 }
             }
         }
@@ -72,6 +79,7 @@ struct ContentView: View {
         .environmentObject(playbackCoordinator)
         .environmentObject(viewModel.remotePlaybackSession)
         .environmentObject(appSettings)
+        .environmentObject(viewModel.variantFinder)
         .focusedSceneValue(
             \.appMenuContext,
             dataManager.isStorageReady ? appMenuContext : nil
@@ -89,6 +97,19 @@ struct ContentView: View {
         .sheet(isPresented: $viewModel.isShowingAccessLog) {
             AccessLogView(webServerManager: viewModel.webServerManager)
         }
+        .alert(
+            "ファイル操作の結果",
+            isPresented: Binding(
+                get: { dataManager.mediaDeletionNotice != nil },
+                set: { if !$0 { dataManager.mediaDeletionNotice = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                dataManager.mediaDeletionNotice = nil
+            }
+        } message: {
+            Text(dataManager.mediaDeletionNotice ?? "")
+        }
     }
 
     /// ミニプレイヤー表示中は通常再生の裏でライブラリも操作できるようにする。
@@ -101,7 +122,45 @@ struct ContentView: View {
     }
 
     private var isToolbarHidden: Bool {
-        playbackCoordinator.mode != nil && !shouldShowLibraryView
+        guard let mode = playbackCoordinator.mode else { return false }
+        if case .single = mode, playbackCoordinator.isMiniPlayerActive { return false }
+        return true
+    }
+
+    /// sheet は別ウィンドウ扱いになり、ContentView のプレイヤーをその上へ重ねられない。
+    /// 同じ ZStack に探索画面を置き、再生時はこの View を残したままプレイヤーを最前面へ出す。
+    private func variantFinderOverlay(albumID: UUID) -> some View {
+        ZStack {
+            Color.black.opacity(0.24)
+                .ignoresSafeArea()
+
+            VariantVideoView(
+                items: variantFinderItems,
+                dataManager: dataManager,
+                hostWindowSize: playbackCoordinator.variantFinderHostSize,
+                onClose: playbackCoordinator.closeVariantFinder
+            )
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.42), radius: 28, y: 12)
+            .id(albumID)
+        }
+    }
+
+    /// 開いた時点の検索・並べ替え順を保ちつつ、削除された項目は現在のライブラリから除く。
+    private var variantFinderItems: [VideoItem] {
+        let itemsByID = Dictionary(
+            dataManager.videos.map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        return playbackCoordinator.variantFinderItemIDs.compactMap { id in
+            guard let item = itemsByID[id], !item.isInTrash else { return nil }
+            return item
+        }
     }
 
     /// 再生中はウィンドウ全体を占有するプレイヤー（通常再生はIキーでミニプレイヤー化できる）

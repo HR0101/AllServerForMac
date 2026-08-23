@@ -195,29 +195,41 @@ struct LibraryCategoryView: View {
                 }
             }
         }
-        .alert("ゴミ箱を空にしますか？", isPresented: $showEmptyTrashAlert) {
-            Button("空にする", role: .destructive) { dataManager.emptyTrash() }
+        .confirmationDialog("ゴミ箱を空にする方法を選んでください", isPresented: $showEmptyTrashAlert, titleVisibility: .visible) {
+            Button("完全に削除", role: .destructive) { dataManager.emptyTrash() }
+            Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+                dataManager.moveMediaFilesToSystemTrash(
+                    videoIDs: dataManager.trashedVideos.map(\.id)
+                )
+            }
             Button("キャンセル", role: .cancel) {}
         } message: {
-            Text("この操作は取り消せません。ファイルが完全に削除されます。")
+            Text("完全に削除するとアプリ管理内のファイルは復元できません．Macのゴミ箱へ移動するとFinderから復元できます．")
         }
         .alert("エクスポート完了", isPresented: $showExportResultAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(exportResultMessage)
         }
-        .confirmationDialog("削除方法を選んでください", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
-            Button("ゴミ箱に入れる") {
-                dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
-                selectedVideoIDs.removeAll()
-            }
-            Button("完全に削除", role: .destructive) {
-                dataManager.deleteVideos(videoIDs: Array(selectedVideoIDs))
-                selectedVideoIDs.removeAll()
-            }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("選択した\(selectedVideoIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。\n\n\(SelectionSummary.text(for: selectedItems))")
+        .sheet(isPresented: $showBulkDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: self.selectedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: isTrash ? nil : {
+                    dataManager.moveToTrash(videoIDs: Array(selectedVideoIDs))
+                    selectedVideoIDs.removeAll()
+                },
+                onDeleteCompletely: {
+                    dataManager.deleteVideos(videoIDs: Array(selectedVideoIDs))
+                    selectedVideoIDs.removeAll()
+                },
+                onMoveToSystemTrash: {
+                    dataManager.moveMediaFilesToSystemTrash(
+                        videoIDs: Array(selectedVideoIDs)
+                    )
+                    selectedVideoIDs.removeAll()
+                }
+            )
         }
         .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
             TextField("アルバム名", text: $newAlbumNameForMove)
@@ -297,6 +309,12 @@ struct LibraryCategoryView: View {
                             isTrashView: isTrash,
                             onToggleFavorite: { dataManager.toggleFavorite(videoIDs: targetIDs(for: video)) },
                             onMoveToTrash: { dataManager.moveToTrash(videoIDs: targetIDs(for: video)); selectedVideoIDs.removeAll() },
+                            onMoveToSystemTrash: {
+                                dataManager.moveMediaFilesToSystemTrash(
+                                    videoIDs: targetIDs(for: video)
+                                )
+                                selectedVideoIDs.removeAll()
+                            },
                             onRestore: { dataManager.restoreFromTrash(videoIDs: targetIDs(for: video)); selectedVideoIDs.removeAll() },
                             currentAlbumID: nil,
                             onMoveToAlbum: { targetID in

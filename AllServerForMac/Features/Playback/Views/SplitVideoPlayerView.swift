@@ -14,6 +14,11 @@ struct SplitVideoPlayerView: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @FocusState private var isFocused: Bool
     @State private var showShortcutHelp = false
+    /// 操作系の出し入れ（他のプレイヤーと共通）。
+    @StateObject private var chrome = PlayerChromeController()
+    /// 一時停止中は操作系を出したままにしたいが、`viewModel.isPlaying` は
+    /// 実際に走り出すまで真にならない。押した側の意思をこちらで持っておく。
+    @State private var isPlayIntended = true
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
     private let filename: String
     private let splitCount: Int
@@ -47,13 +52,26 @@ struct SplitVideoPlayerView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                header
-                grid
-                controls
-            }
-            PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
-                coordinator.close()
+            // 操作系は映像に重ねる。下に積むと、出入りのたびにタイルが伸び縮みしてしまう。
+            grid
+                .overlay(alignment: .top) {
+                    if chrome.isShown {
+                        header.transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if chrome.isShown {
+                        controls
+                            .playerChromeHoverGuard(chrome)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+            if chrome.isShown {
+                PlayerCornerControls(showShortcutHelp: $showShortcutHelp) {
+                    coordinator.close()
+                }
+                .playerChromeHoverGuard(chrome)
+                .transition(.opacity)
             }
             if showShortcutHelp {
                 ShortcutHelpPanel(title: "分割再生のショートカット", shortcuts: shortcutList) {
@@ -65,15 +83,32 @@ struct SplitVideoPlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .ignoresSafeArea()
+        .playerChromeActivity(chrome)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onKeyPress(phases: .down, action: handleKeyPress)
+        .onKeyPress(phases: .down) { press in
+            // 拾ったキーのときだけ操作系を出す（無関係なキーで出てくると邪魔になる）。
+            let result = handleKeyPress(press: press)
+            if result == .handled { chrome.reveal() }
+            return result
+        }
         .onAppear {
             viewModel.playAll()
             isFocused = true
+            chrome.reveal()
         }
-        .onDisappear(perform: viewModel.cleanup)
+        .onChange(of: showShortcutHelp) { _, shown in
+            chrome.setHold(.overlayVisible, shown)
+        }
+        // 操作系が引っ込んだ時点でポインタは離れているので、そこでキー入力を本体へ戻す。
+        .onChange(of: chrome.isShown) { _, shown in
+            if !shown { isFocused = true }
+        }
+        .onDisappear {
+            chrome.cancel()
+            viewModel.cleanup()
+        }
     }
 
     // MARK: - ヘッダー
@@ -225,11 +260,19 @@ struct SplitVideoPlayerView: View {
         )
     }
 
+    /// 再生・一時停止はここを通す。止めている間は操作系を出したままにしたいので、
+    /// 押した意思をここで一元的に反映する（ボタンとキーの両方から呼ぶ）。
+    private func togglePlayPause() {
+        viewModel.togglePlayPauseAll()
+        isPlayIntended.toggle()
+        chrome.setHold(.paused, !isPlayIntended)
+    }
+
     // MARK: - コントロール
     private var controls: some View {
         HStack {
             Button {
-                viewModel.togglePlayPauseAll()
+                togglePlayPause()
             } label: {
                 Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 16))
@@ -283,7 +326,7 @@ struct SplitVideoPlayerView: View {
         }
 
         if MediaShortcutSettings.matches(.videoPlayPause, press: press) {
-            viewModel.togglePlayPauseAll()
+            togglePlayPause()
             return .handled
         } else if MediaShortcutSettings.matches(.videoRandomSeek, press: press) {
             viewModel.seekAllToRandomTime()

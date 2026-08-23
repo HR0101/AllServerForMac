@@ -13,6 +13,25 @@ struct LibraryStorageEnvironment {
   let moviesDirectory: () -> URL?
   let downloadsDirectory: () -> URL?
   let createDirectory: (URL) throws -> Void
+  let moveFileToSystemTrash: (URL) throws -> Void
+
+  init(
+    moviesDirectory: @escaping () -> URL?,
+    downloadsDirectory: @escaping () -> URL?,
+    createDirectory: @escaping (URL) throws -> Void,
+    moveFileToSystemTrash: @escaping (URL) throws -> Void = { url in
+      var resultingURL: NSURL?
+      try FileManager.default.trashItem(
+        at: url,
+        resultingItemURL: &resultingURL
+      )
+    }
+  ) {
+    self.moviesDirectory = moviesDirectory
+    self.downloadsDirectory = downloadsDirectory
+    self.createDirectory = createDirectory
+    self.moveFileToSystemTrash = moveFileToSystemTrash
+  }
 
   static let live = LibraryStorageEnvironment(
     moviesDirectory: {
@@ -148,6 +167,8 @@ class LibraryViewModel: ObservableObject {
     @Published var duplicateCheckStates: [UUID: DuplicateCheckState] = [:]
     @Published var isDuplicateCheckRunning = false
     @Published var linkedFolderConflicts: [LinkedFolderConflict] = []
+    /// 実ファイルの移動など，削除処理の一部が失敗した場合に画面へ通知する内容です．
+    @Published var mediaDeletionNotice: String?
     let duplicateCheckStatus = DuplicateCheckStatus()
 
     /// 自動重複チェック（バックグラウンドで定期的に走るもの）のオン/オフ。手動チェック（アルバム内の「重複チェック」ボタン）には影響しない。
@@ -198,7 +219,7 @@ class LibraryViewModel: ObservableObject {
     let thumbnailStorageURL: URL
     let proxyStorageURL: URL
     let dataFileURL: URL
-    private let storageEnvironment: LibraryStorageEnvironment
+    let storageEnvironment: LibraryStorageEnvironment
 
     @Published private(set) var storageInitializationError: LibraryStorageInitializationError?
 

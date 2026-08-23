@@ -55,8 +55,20 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     @Published var volume: Float = 1 { didSet { applyAudio() } }
     @Published var isMuted: Bool = false { didSet { applyAudio() } }
 
+    /// 見比べた結果「これは要らない」と分かったものを選ぶモード。
+    /// 差分として並べてみて初めて、中身がまったく同じだと気づくことがある。
+    @Published var isDeleteMode = false {
+        didSet { if !isDeleteMode { markedForDeletionIDs.removeAll() } }
+    }
+    @Published private(set) var markedForDeletionIDs: Set<UUID> = []
+
     var players: [AVPlayer] { group.players }
     var variantCount: Int { variants.count }
+
+    /// 削除対象に選ばれているもの。並びは画面と同じ（確認ダイアログの一覧と見た目を合わせる）。
+    var markedItems: [VideoItem] {
+        playable.map(\.item).filter { markedForDeletionIDs.contains($0.id) }
+    }
 
     /// カウントダウンの刻み。表示がなめらかに見える程度に細かく、無駄に起きない程度に粗く。
     private static let tickSeconds: Double = 0.1
@@ -65,24 +77,32 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     /// ずれの点検の間隔。切り替えのたびに調べると、揃え直しが切り替えと重なって二重に引っかかる。
     private static let driftCheckSeconds: Double = 4
 
-    private let group: SynchronizedPlayerGroup
+    /// 読み込んだ差分の実体。削除したあとに組み直すため、URL ごと持っておく。
+    private var playable: [(item: VideoItem, url: URL)]
+    private var group: SynchronizedPlayerGroup
     private var switchTask: Task<Void, Never>?
     private var isSliderEditing = false
     private var secondsSinceDriftCheck: Double = 0
 
     init(videos: [VideoItem], dataManager: LibraryViewModel) {
-        let playable = videos.compactMap { item -> (VideoItem, URL)? in
+        let playable = videos.compactMap { item -> (item: VideoItem, url: URL)? in
             guard let url = dataManager.fileURL(for: item) else { return nil }
-            return (item, url)
+            return (item: item, url: url)
         }
 
-        self.group = SynchronizedPlayerGroup(urls: playable.map(\.1))
-        self.variants = playable.map { Variant(id: $0.0.id, title: $0.0.originalFilename) }
+        self.playable = playable
+        self.group = SynchronizedPlayerGroup(urls: playable.map(\.url))
+        self.variants = playable.map { Variant(id: $0.item.id, title: $0.item.originalFilename) }
         self.isAutoSwitching = VariantSwitchSettings.isAutoSwitchEnabled
         self.minInterval = VariantSwitchSettings.minInterval
         self.maxInterval = VariantSwitchSettings.maxInterval
         self.avoidsImmediateRepeat = VariantSwitchSettings.avoidsImmediateRepeat
 
+        wireGroup()
+        applyAudio()
+    }
+
+    private func wireGroup() {
         group.onDurationUpdate = { [weak self] duration in
             self?.commonDuration = duration
         }
@@ -93,7 +113,6 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         group.onPlayToEnd = { [weak self] in
             self?.handlePlayToEnd()
         }
-        applyAudio()
     }
 
     // MARK: - 再生
@@ -209,11 +228,15 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
 
     /// 下限と上限を同じ幅だけ動かして、ばらつきの幅は保ったまま速さだけ変える。
     /// 端に当たったら窓を潰さずそこで止める（上限側で潰すと、戻したときに固定間隔になってしまう）。
-    func shiftIntervals(by delta: Double) {
+    func shiftIntervals(increasing: Bool) {
         let span = maxInterval - minInterval
         let lowest = VariantSwitchSettings.allowedRange.lowerBound
         let highestStart = max(VariantSwitchSettings.allowedRange.upperBound - span, lowest)
-        minInterval = min(max(minInterval + delta, lowest), highestStart)
+        let adjustedMinInterval = VariantSwitchSettings.adjustedInterval(
+            minInterval,
+            increasing: increasing
+        )
+        minInterval = min(max(adjustedMinInterval, lowest), highestStart)
         maxInterval = VariantSwitchSettings.clamp(minInterval + span)
         persistIntervals()
     }
@@ -232,6 +255,63 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private func clampCountdownToRange() {
         guard isAutoSwitching, secondsUntilSwitch > maxInterval else { return }
         secondsUntilSwitch = maxInterval
+    }
+
+    // MARK: - 削除
+
+    func toggleMark(at index: Int) {
+        guard variants.indices.contains(index) else { return }
+        let id = variants[index].id
+        if markedForDeletionIDs.contains(id) {
+            markedForDeletionIDs.remove(id)
+        } else {
+            markedForDeletionIDs.insert(id)
+        }
+    }
+
+    /// いま表示している差分を削除対象に入れる/外す。
+    /// 見比べて「これは同じだ」と分かった瞬間に、その場で印を付けられるようにする。
+    func toggleMarkOnActiveVariant() {
+        toggleMark(at: activeIndex)
+    }
+
+    /// 消したぶんを外して組み直す。いま見ている位置と再生状態はそのまま引き継ぐ。
+    ///
+    /// 消えたファイルのプレイヤーを走らせたままにはできないし、かといって
+    /// 全部作り直して頭から流し直すと、見比べていた場所を見失う。
+    /// 残ったものだけで組み直し、同じ位置へ揃えてから続きを流す。
+    func removeVariants(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let remaining = playable.filter { !ids.contains($0.item.id) }
+        guard remaining.count != playable.count else { return }
+
+        let resumeAt = commonCurrentTime
+        let wasPlaying = isPlaying
+        let activeID = variants.indices.contains(activeIndex) ? variants[activeIndex].id : nil
+
+        group.cleanup()
+        playable = remaining
+        variants = remaining.map { Variant(id: $0.item.id, title: $0.item.originalFilename) }
+        markedForDeletionIDs.subtract(ids)
+        // 見ていたものが消えたなら先頭へ。残っているならその位置を追いかける。
+        activeIndex = activeID.flatMap { id in variants.firstIndex { $0.id == id } } ?? 0
+
+        group = SynchronizedPlayerGroup(urls: remaining.map(\.url))
+        wireGroup()
+        applyAudio()
+
+        guard !remaining.isEmpty else {
+            isPlaying = false
+            return
+        }
+        let target = CMTime(seconds: max(0, resumeAt), preferredTimescale: 600)
+        if wasPlaying {
+            isPlaying = true
+            group.startInSync { _ in target }
+        } else {
+            isPlaying = false
+            group.applySeek { _ in target }
+        }
     }
 
     // MARK: - 自動切り替えの時計

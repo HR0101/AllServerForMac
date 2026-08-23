@@ -275,6 +275,9 @@ struct MainSidebarView: View {
             Button("中身ごと完全に削除", role: .destructive) {
                 performAlbumDeletion(request, contentDisposal: .delete)
             }
+            Button("中身の実ファイルをMacのゴミ箱へ移動", role: .destructive) {
+                performAlbumDeletion(request, contentDisposal: .systemTrash)
+            }
             Button("キャンセル", role: .cancel) {
                 albumDeletionRequest = nil
             }
@@ -712,7 +715,7 @@ struct MainSidebarView: View {
             targetDescription = "\(albums.count)件のアルバム"
         }
 
-        return "\(targetDescription)を削除します。\nアルバムだけ削除する場合，\(mediaCount)件の中身は ALL PHOTOS / ALL VIDEOS に残ります。\n中身をゴミ箱に入れる場合，後から元に戻せます。\n中身ごと完全に削除する場合，対象メディアはライブラリから完全に削除され元に戻せません。"
+        return "\(targetDescription)を削除します．\nアルバムだけ削除する場合，\(mediaCount)件の中身は ALL PHOTOS / ALL VIDEOS に残ります．\n中身をアプリ内のゴミ箱へ入れる場合，後から元に戻せます．\n中身ごと完全に削除する場合，アプリ管理内のファイルは復元できません．\nMacのゴミ箱へ移動する場合，リンク元を含む実ファイルも移動します．"
     }
 
     private func albums(for request: AlbumDeletionRequest) -> [Album] {

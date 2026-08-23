@@ -29,16 +29,20 @@ struct SketchCleanupView: View {
         .frame(minWidth: 780, idealWidth: 980, minHeight: 520, idealHeight: 680)
         .onAppear { model.scan(items: items, dataManager: dataManager) }
         .onDisappear { model.cancelScan() }
-        .confirmationDialog(
-            "削除方法を選んでください",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("ゴミ箱に入れる") { apply { dataManager.moveToTrash(videoIDs: $0) } }
-            Button("完全に削除", role: .destructive) { apply { dataManager.deleteVideos(videoIDs: $0) } }
-            Button("キャンセル", role: .cancel) { }
-        } message: {
-            Text("選択した\(model.selectedIDs.count)件をゴミ箱に入れますか？それとも完全に削除しますか？この操作は元に戻せません（完全に削除の場合）。\n\n\(SelectionSummary.text(for: model.selectedItems))")
+        .sheet(isPresented: $showDeleteConfirmation) {
+            MediaDeletionConfirmationSheet(
+                items: model.selectedItems,
+                dataManager: dataManager,
+                onMoveToAppTrash: {
+                    apply { dataManager.moveToTrash(videoIDs: $0) }
+                },
+                onDeleteCompletely: {
+                    apply { dataManager.deleteVideos(videoIDs: $0) }
+                },
+                onMoveToSystemTrash: {
+                    apply { dataManager.moveMediaFilesToSystemTrash(videoIDs: $0) }
+                }
+            )
         }
     }
 

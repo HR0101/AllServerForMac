@@ -9,6 +9,30 @@ import ImageIO
 import UniformTypeIdentifiers
 import Vision
 
+struct SystemTrashFailure: Codable, Equatable, Sendable {
+    let videoID: UUID
+    let filename: String
+    let reason: String
+}
+
+struct SystemTrashResult: Codable, Equatable, Sendable {
+    let movedVideoIDs: [UUID]
+    let failures: [SystemTrashFailure]
+
+    var notice: String? {
+        guard !failures.isEmpty else { return nil }
+        let movedCount = movedVideoIDs.count
+        let details = failures.prefix(5).map {
+            "・\($0.filename)：\($0.reason)"
+        }.joined(separator: "\n")
+        let remainingCount = max(0, failures.count - 5)
+        let suffix = remainingCount > 0
+            ? "\nほか\(remainingCount)件"
+            : ""
+        return "\(movedCount)件をMacのゴミ箱へ移動しました．\(failures.count)件は移動できなかったため，ライブラリに残しています．\n\n\(details)\(suffix)"
+    }
+}
+
 extension LibraryViewModel {
     func deleteVideos(videoIDs: [UUID]) {
         for i in 0..<albums.count { albums[i].videoIDs.removeAll { videoIDs.contains($0) } }
@@ -63,6 +87,97 @@ extension LibraryViewModel {
             saveData()
         }
     }
+
+    /// 選択したメディアの実ファイルをmacOSのゴミ箱へ移動します．
+    /// ファイル移動に成功した項目だけをライブラリから外し，失敗した項目は再試行できるよう残します．
+    @discardableResult
+    func moveMediaFilesToSystemTrash(videoIDs: [UUID]) -> SystemTrashResult {
+        var seenIDs = Set<UUID>()
+        let requestedIDs = videoIDs.filter { seenIDs.insert($0).inserted }
+        let itemsByID = Dictionary(
+            videos.map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+
+        var movedIDs: [UUID] = []
+        var failures: [SystemTrashFailure] = []
+
+        for videoID in requestedIDs {
+            guard let item = itemsByID[videoID] else {
+                failures.append(
+                    SystemTrashFailure(
+                        videoID: videoID,
+                        filename: videoID.uuidString,
+                        reason: "ライブラリに見つかりません．"
+                    )
+                )
+                continue
+            }
+            guard let sourceURL = fileURL(for: item) else {
+                failures.append(
+                    SystemTrashFailure(
+                        videoID: videoID,
+                        filename: item.originalFilename,
+                        reason: "実ファイルが見つかりません．"
+                    )
+                )
+                continue
+            }
+
+            do {
+                try storageEnvironment.moveFileToSystemTrash(sourceURL)
+                movedIDs.append(videoID)
+            } catch {
+                failures.append(
+                    SystemTrashFailure(
+                        videoID: videoID,
+                        filename: item.originalFilename,
+                        reason: error.localizedDescription
+                    )
+                )
+            }
+        }
+
+        if !movedIDs.isEmpty {
+            removeLibraryRecords(videoIDs: movedIDs)
+        }
+
+        let result = SystemTrashResult(
+            movedVideoIDs: movedIDs,
+            failures: failures
+        )
+        mediaDeletionNotice = result.notice
+        return result
+    }
+
+    /// 実ファイルには触れず，ライブラリ登録と再生成可能なキャッシュだけを削除します．
+    private func removeLibraryRecords(videoIDs: [UUID]) {
+        let ids = Set(videoIDs)
+        guard !ids.isEmpty else { return }
+        let removedItems = videos.filter { ids.contains($0.id) }
+
+        for index in albums.indices {
+            albums[index].videoIDs.removeAll { ids.contains($0) }
+        }
+        videos.removeAll { ids.contains($0.id) }
+
+        for item in removedItems {
+            let thumbnailURL = thumbnailStorageURL
+                .appendingPathComponent(item.id.uuidString)
+                .appendingPathExtension("jpg")
+            try? FileManager.default.removeItem(at: thumbnailURL)
+
+            let proxy1080URL = proxyStorageURL
+                .appendingPathComponent("\(item.id.uuidString)_1080p.mp4")
+            try? FileManager.default.removeItem(at: proxy1080URL)
+            let proxy540URL = proxyStorageURL
+                .appendingPathComponent("\(item.id.uuidString)_540p.mp4")
+            try? FileManager.default.removeItem(at: proxy540URL)
+        }
+
+        saveData()
+        flushPendingSave()
+    }
     @discardableResult
     func createAlbum(name: String, type: AlbumType) -> UUID? { guard name != LibraryViewModel.allVideosAlbumName && name != LibraryViewModel.allPhotosAlbumName else { return nil }; let id = UUID(); albums.append(Album(id: id, name: name, videoIDs: [], type: type)); saveData(); return id }
 
@@ -97,6 +212,7 @@ extension LibraryViewModel {
         case keep    // アルバムだけ削除し、中身は ALL PHOTOS / ALL VIDEOS に残す
         case trash   // 中身をゴミ箱へ移動する（元に戻せる）
         case delete  // 中身を完全に削除する（元に戻せない）
+        case systemTrash  // 中身の実ファイルをmacOSのゴミ箱へ移動する
     }
 
     func deleteAlbums(albumIDs: [UUID], contentDisposal: AlbumContentDisposal) {
@@ -114,6 +230,13 @@ extension LibraryViewModel {
         case .delete:
             let mediaIDs = Array(Set(albumsToDelete.flatMap { $0.videoIDs }))
             if !mediaIDs.isEmpty { deleteVideos(videoIDs: mediaIDs) }
+        case .systemTrash:
+            let mediaIDs = Array(Set(albumsToDelete.flatMap { $0.videoIDs }))
+            if !mediaIDs.isEmpty {
+                let result = moveMediaFilesToSystemTrash(videoIDs: mediaIDs)
+                // 失敗した項目を同じアルバムから再試行できるよう，部分失敗時はアルバムを残す．
+                guard result.failures.isEmpty else { return }
+            }
         }
 
         let deletableIDs = Set(albumsToDelete.map { $0.id })
