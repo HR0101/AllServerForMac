@@ -13,6 +13,8 @@ struct VariantSwitchPlayerView: View {
     @StateObject private var viewModel: VariantSwitchPlayerViewModel
     @ObservedObject private var dataManager: LibraryViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    /// iPhone のリモコンから差分を差し替えられるようにする。
+    @EnvironmentObject private var remoteVariantSession: RemoteVariantSession
     /// 閉じ方。ウィンドウ全体を占有しているときは省略してコーディネータに任せ、
     /// 「差分動画を探す」の上に重ねているときは、その重なりだけを外すために渡してもらう。
     private let onClose: (() -> Void)?
@@ -95,6 +97,10 @@ struct VariantSwitchPlayerView: View {
             viewModel.start()
             isFocused = true
             chrome.reveal()
+            remoteVariantSession.attach(viewModel)
+        }
+        .onDisappear {
+            remoteVariantSession.detach(viewModel)
         }
         // パネルのボタンやスライダーを押すとフォーカスがそちらへ移り、以降 .onKeyPress が
         // 効かなくなる。引っ込んだ時点でポインタは離れているので、そこで本体へ戻す。

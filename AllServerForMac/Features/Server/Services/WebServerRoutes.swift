@@ -236,6 +236,72 @@ extension ServerViewModel {
             return .ok(.data(data, contentType: "application/json"))
         }
 
+        // MARK: 差分切り替え再生のリモコン
+        //
+        // 何本もの差分を同時にデコードするのは Mac の仕事なので、上限は Mac 側と同じ 9 本。
+        // iPhone は「どれを見せるか」を差し替えるだけで、映像そのものは受け取らない。
+
+        server["/remote/variant"] = protected { [weak self] _ -> HttpResponse in
+            guard let self else { return .internalServerError }
+            guard let data = try? JSONEncoder().encode(self.remoteVariantSession.snapshot.value) else {
+                return .internalServerError
+            }
+            return .ok(.data(data, contentType: "application/json"))
+        }
+
+        server.post["/remote/variant/open"] = protected { [weak self] request -> HttpResponse in
+            guard let self, let dataManager = self.dataManager else { return .internalServerError }
+            guard let openRequest = try? JSONDecoder().decode(
+                RemoteVariantOpenRequest.self,
+                from: Data(request.body)
+            ) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+
+            let snapshot = dataManager.snapshotLibrary.value
+            let videosByID = Dictionary(
+                snapshot.videos.map { ($0.id, $0) },
+                uniquingKeysWith: { current, _ in current }
+            )
+            // 並びは iPhone が送ってきた順のまま。先頭が最初に見える1本になる。
+            let videos = openRequest.videoIDs
+                .compactMap(UUID.init(uuidString:))
+                .compactMap { videosByID[$0] }
+                .filter { !$0.isInTrash && $0.mediaType == .video }
+
+            guard videos.count >= 2 else {
+                return .badRequest(.text("差分切り替え再生には2本以上の動画が必要です"))
+            }
+
+            DispatchQueue.main.sync {
+                self.remoteVariantSession.open(videos: videos)
+            }
+            return .ok(.text("Opened"))
+        }
+
+        server.post["/remote/variant/command"] = protected { [weak self] request -> HttpResponse in
+            guard let self else { return .internalServerError }
+            guard let command = try? JSONDecoder().decode(
+                RemoteVariantCommandRequest.self,
+                from: Data(request.body)
+            ) else {
+                return .badRequest(.text("Invalid request body"))
+            }
+
+            let handled = DispatchQueue.main.sync {
+                self.remoteVariantSession.perform(command)
+            }
+            guard handled else {
+                return .raw(409, "Conflict", ["Content-Type": "text/plain"], { writer in
+                    try? writer.write(Data("差分切り替え再生が動いていないか、操作を受け付けられません".utf8))
+                })
+            }
+            guard let data = try? JSONEncoder().encode(self.remoteVariantSession.snapshot.value) else {
+                return .internalServerError
+            }
+            return .ok(.data(data, contentType: "application/json"))
+        }
+
         server.post["/server/shutdown"] = protectedDestructive { [weak self] _ -> HttpResponse in
             DispatchQueue.main.async {
                 self?.stopServerInternal()

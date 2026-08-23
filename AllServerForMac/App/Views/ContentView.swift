@@ -78,6 +78,7 @@ struct ContentView: View {
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
         .environmentObject(playbackCoordinator)
         .environmentObject(viewModel.remotePlaybackSession)
+        .environmentObject(viewModel.remoteVariantSession)
         .environmentObject(appSettings)
         .environmentObject(viewModel.variantFinder)
         .focusedSceneValue(

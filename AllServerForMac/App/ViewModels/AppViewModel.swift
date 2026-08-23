@@ -21,6 +21,8 @@ final class AppViewModel: ObservableObject {
   let webServerManager: ServerViewModel
   let playbackCoordinator: PlaybackCoordinator
   let remotePlaybackSession: RemotePlaybackSession
+  /// 差分切り替え再生のリモコン。iPhone から「どの差分を見せるか」を差し替える。
+  let remoteVariantSession: RemoteVariantSession
   let appSettings: AppSettings
 
   convenience init() {
@@ -42,9 +44,14 @@ final class AppViewModel: ObservableObject {
       playbackCoordinator: playbackCoordinator
     )
     self.remotePlaybackSession = remotePlaybackSession
+    let remoteVariantSession = RemoteVariantSession(
+      playbackCoordinator: playbackCoordinator
+    )
+    self.remoteVariantSession = remoteVariantSession
     self.webServerManager = ServerViewModel(
       dataManager: dataManager,
-      remotePlaybackSession: remotePlaybackSession
+      remotePlaybackSession: remotePlaybackSession,
+      remoteVariantSession: remoteVariantSession
     )
     self.appSettings = appSettings
 
