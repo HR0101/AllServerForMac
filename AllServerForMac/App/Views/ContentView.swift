@@ -80,6 +80,7 @@ struct ContentView: View {
         .environmentObject(viewModel.remotePlaybackSession)
         .environmentObject(appSettings)
         .environmentObject(viewModel.variantFinder)
+        .environmentObject(viewModel.watchState)
         .focusedSceneValue(
             \.appMenuContext,
             dataManager.isStorageReady ? appMenuContext : nil
@@ -138,6 +139,9 @@ struct ContentView: View {
                 items: variantFinderItems,
                 dataManager: dataManager,
                 hostWindowSize: playbackCoordinator.variantFinderHostSize,
+                initialSearchMode: playbackCoordinator.variantFinderAlignmentMode == .content
+                    ? .partial
+                    : .normal,
                 onClose: playbackCoordinator.closeVariantFinder
             )
             .background(.regularMaterial)
@@ -147,7 +151,7 @@ struct ContentView: View {
                     .strokeBorder(.white.opacity(0.14), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.42), radius: 28, y: 12)
-            .id(albumID)
+            .id("\(albumID.uuidString)-\(String(describing: playbackCoordinator.variantFinderAlignmentMode))")
         }
     }
 
@@ -171,14 +175,20 @@ struct ContentView: View {
             VideoPlayerView(
                 videos: playlist,
                 currentVideo: current,
-                dataManager: dataManager
+                dataManager: dataManager,
+                watchState: viewModel.watchState,
+                settings: viewModel.playbackSettings
             )
                 .id(current.id)
         case .multi(let videos):
             MultiVideoPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
-        case .variantSwitch(let videos):
-            VariantSwitchPlayerView(videos: videos, dataManager: dataManager)
+        case .variantSwitch(let videos, let alignment):
+            VariantSwitchPlayerView(
+                videos: videos,
+                dataManager: dataManager,
+                alignmentMode: alignment
+            )
                 .ignoresSafeArea()
         case .slideshow(let videos):
             SlideshowPlayerView(videos: videos, dataManager: dataManager)
@@ -232,6 +242,12 @@ struct ContentView: View {
                             dataManager: dataManager
                         )
                             .navigationTitle("お気に入り")
+                    case .history:
+                        LibraryCategoryView(
+                            kind: .history,
+                            dataManager: dataManager
+                        )
+                            .navigationTitle("再生履歴")
                     case .trash:
                         LibraryCategoryView(
                             kind: .trash,

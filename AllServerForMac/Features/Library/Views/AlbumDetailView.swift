@@ -57,6 +57,7 @@ struct AlbumDetailView: View {
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
+    @EnvironmentObject private var watchState: WatchStateStore
 
     /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
     /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
@@ -82,7 +83,7 @@ struct AlbumDetailView: View {
         return dataManager.videos
             .filter { memberIDs.contains($0.id) && !$0.isInTrash }
             .filtered(bySearch: searchText)
-            .sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed) { dataManager.fileMetadata(for: $0) }
+            .sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed, lastPlayed: watchState.lastPlayed) { dataManager.fileMetadata(for: $0) }
     }
 
     /// このアルバムの動画のみ（表示順）
@@ -246,11 +247,23 @@ struct AlbumDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 if videoItems.count >= 2 {
                     Button {
-                        openVariantFinder()
+                        openVariantFinder(alignmentMode: .sameTime)
                     } label: {
                         Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
                     }
                     .help("尺が揃っていて絵だけが違う動画を束にして、選んだぶんを切り替えながら再生します")
+                }
+            }
+
+            // 尺が違っても，動画内の一部に同じ場面が続く強制差分候補を探す
+            ToolbarItem(placement: .primaryAction) {
+                if videoItems.count >= 2 {
+                    Button {
+                        openVariantFinder(alignmentMode: .content)
+                    } label: {
+                        Label("強制差分候補を探す", systemImage: "link.badge.plus")
+                    }
+                    .help("尺が大きく違っても，一部に同じ場面が続く動画を探します")
                 }
             }
 
@@ -306,6 +319,16 @@ struct AlbumDetailView: View {
                             Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
                         }
                         .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedItems.count >= 2 {
+                        Button {
+                            startContentAlignedVariantPlayback(selectedItems)
+                        } label: {
+                            Label("類似点で合わせる", systemImage: "link")
+                        }
+                        .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -1150,11 +1173,14 @@ struct AlbumDetailView: View {
 
     /// 差分の一覧を ContentView の最上位へ開く。
     /// 表示中の検索・並べ替え順も渡し、その順番のまま探索できるようにする。
-    private func openVariantFinder() {
+    private func openVariantFinder(
+        alignmentMode: VariantPlaybackAlignmentMode = .sameTime
+    ) {
         coordinator.openVariantFinder(
             albumID: album.id,
             itemIDs: displayedItems.map(\.id),
-            hostSize: NSApp.keyWindow?.frame.size
+            hostSize: NSApp.keyWindow?.frame.size,
+            alignmentMode: alignmentMode
         )
     }
 
@@ -1162,6 +1188,12 @@ struct AlbumDetailView: View {
         guard videos.count >= 2 else { return }
         rememberGridState()
         coordinator.playVariantSwitch(videos)
+    }
+
+    private func startContentAlignedVariantPlayback(_ videos: [VideoItem]) {
+        guard videos.count >= 2 else { return }
+        rememberGridState()
+        coordinator.playContentAlignedVariantSwitch(videos)
     }
 
     private func startSlideshowPlayback(_ videos: [VideoItem]) {

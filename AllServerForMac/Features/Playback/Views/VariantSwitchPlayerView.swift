@@ -36,9 +36,16 @@ struct VariantSwitchPlayerView: View {
     init(
         videos: [VideoItem],
         dataManager: LibraryViewModel,
+        alignmentMode: VariantPlaybackAlignmentMode = .sameTime,
         onClose: (() -> Void)? = nil
     ) {
-        _viewModel = StateObject(wrappedValue: VariantSwitchPlayerViewModel(videos: videos, dataManager: dataManager))
+        _viewModel = StateObject(
+            wrappedValue: VariantSwitchPlayerViewModel(
+                videos: videos,
+                dataManager: dataManager,
+                alignmentMode: alignmentMode
+            )
+        )
         _dataManager = ObservedObject(wrappedValue: dataManager)
         self.onClose = onClose
     }
@@ -82,6 +89,8 @@ struct VariantSwitchPlayerView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
+            alignmentOverlay
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
@@ -136,7 +145,7 @@ struct VariantSwitchPlayerView: View {
 
     @ViewBuilder
     private var stack: some View {
-        if viewModel.players.isEmpty {
+        if viewModel.players.isEmpty && !viewModel.isAligningByContent {
             Text("再生する動画がありません")
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -161,6 +170,47 @@ struct VariantSwitchPlayerView: View {
         }
     }
 
+    @ViewBuilder
+    private var alignmentOverlay: some View {
+        if viewModel.isAligningByContent {
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(.white)
+                Text("映像の共通場面を探しています…")
+                    .font(.headline)
+                Text("動画全体から複数の類似ポイントを探し，時間の対応表を作成します")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .foregroundStyle(.white)
+            .padding(24)
+            .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 14))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let message = viewModel.alignmentErrorMessage {
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.yellow)
+                Text("内容で位置合わせできませんでした")
+                    .font(.headline)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                HStack {
+                    Button("閉じる") { close() }
+                    Button("再試行") { viewModel.retryContentAlignment() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(24)
+            .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 14))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     /// 操作系が隠れていても，いま見ている差分だけは固定位置で判別できるようにする。
     /// 幅を固定し，タイトル長によってバッジ全体が高速で伸び縮みしないようにする。
     private var activeBadge: some View {
@@ -175,6 +225,11 @@ struct VariantSwitchPlayerView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: Self.activeTitleWidth, alignment: .leading)
+            if let alignmentSummary = viewModel.alignmentSummary {
+                Text(alignmentSummary)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
             if viewModel.isAutoSwitching,
                viewModel.variantCount > 1,
                viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold {

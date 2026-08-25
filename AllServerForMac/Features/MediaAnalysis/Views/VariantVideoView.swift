@@ -11,6 +11,8 @@ struct VariantVideoView: View {
     @ObservedObject var dataManager: LibraryViewModel
     /// 開いた時点の親ウィンドウの大きさ。ここへ合わせて開く。
     var hostWindowSize: CGSize?
+    /// ツールバーのどちらの入口から開いたか．画面内でも切り替えられる．
+    var initialSearchMode: VariantVideoViewModel.SearchMode = .normal
     /// sheet ではなく ContentView のオーバーレイとして表示するため、閉じ方は呼び出し側へ任せる。
     var onClose: () -> Void
 
@@ -60,7 +62,13 @@ struct VariantVideoView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { model.scan(items: items, dataManager: dataManager) }
+        .onAppear {
+            model.scan(
+                items: items,
+                dataManager: dataManager,
+                initialSearchMode: initialSearchMode
+            )
+        }
         .onDisappear { model.cancelScan() }
         // 再生中もこの View は背後に残るので onAppear は再度呼ばれない。
         // プレイヤーを閉じた時点で、中断した照合と削除後の顔ぶれ確認を再開する。
@@ -72,12 +80,31 @@ struct VariantVideoView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
+            Label(
+                model.searchMode == .normal ? "差分動画を探す" : "強制差分候補を探す",
+                systemImage: model.searchMode == .normal
+                    ? "rectangle.on.rectangle.angled"
+                    : "link.badge.plus"
+            )
                 .font(.headline)
-            Text("尺が揃っていて、絵だけが違うものを束にします")
+            Text(model.searchMode == .normal
+                 ? "尺が揃っていて，絵だけが違うものを束にします"
+                 : "尺を問わず，一部に同じ場面が続く動画を探します")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
+            Picker(
+                "探索方法",
+                selection: Binding(
+                    get: { model.searchMode },
+                    set: { model.setSearchMode($0) }
+                )
+            ) {
+                Text("通常差分").tag(VariantVideoViewModel.SearchMode.normal)
+                Text("一部一致").tag(VariantVideoViewModel.SearchMode.partial)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 190)
             Button {
                 model.rescan()
             } label: {
@@ -102,30 +129,33 @@ struct VariantVideoView: View {
                 ProgressView(value: model.progress, total: 1.0)
                     .progressViewStyle(.linear)
                     .frame(width: 260)
-                Text("フレームを照合中… \(model.scannedCount) / \(model.totalCount)")
+                Text(progressDescription)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text(model.reusedCount > 0
-                     ? "\(model.reusedCount)件は前回の結果をそのまま使っています"
-                     : "尺が揃った動画だけを対象にしています")
+                Text(progressDetailDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("中止") { model.cancelScan() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.groups.isEmpty {
-            ContentUnavailableView(
-                "差分動画は見つかりませんでした",
-                systemImage: "rectangle.on.rectangle.slash",
-                description: Text("差分は「尺がほぼ同じ」ことが手がかりです。尺の許容差か似ている度合いをゆるめると候補が増えます。")
-            )
+            ContentUnavailableView {
+                Label(
+                    model.searchMode == .normal
+                        ? "差分動画は見つかりませんでした"
+                        : "強制差分候補は見つかりませんでした",
+                    systemImage: "rectangle.on.rectangle.slash"
+                )
+            } description: {
+                Text(emptyDescription)
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 0) {
                 if model.isScanning {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
-                        Text("残り \(max(0, model.totalCount - model.scannedCount))件を照合中… 見つかったぶんは先に選べます")
+                        Text(compactProgressDescription)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -154,7 +184,7 @@ struct VariantVideoView: View {
         let isPlayable = (2...maxPlayableCount).contains(selectedCount)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("\(group.items.count)本の差分 ・ \(formatDuration(group.duration))")
+                Text(groupTitle(group))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
@@ -172,6 +202,10 @@ struct VariantVideoView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .help("絵の差はフレームどうしのハミング距離（小さいほど似ている）、名前の近さは 0〜1。名前の近さはしきい値を上下させる補助に使っています")
+            } else if let score = group.partialMatchScore {
+                Text(String(format: "一部一致の絵の差 %.1f ・ 小さいほど近い", score))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
 
             LazyVGrid(columns: tileColumns, alignment: .leading, spacing: 10) {
@@ -181,16 +215,23 @@ struct VariantVideoView: View {
             }
 
             Button {
-                play(group.selectedItems)
+                play(group.selectedItems, alignmentMode: group.alignmentMode)
             } label: {
-                Label("切り替え再生（\(selectedCount)本）", systemImage: "rectangle.on.rectangle.angled")
+                Label(
+                    group.alignmentMode == .content
+                        ? "強制差分再生（\(selectedCount)本）"
+                        : "切り替え再生（\(selectedCount)本）",
+                    systemImage: "rectangle.on.rectangle.angled"
+                )
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .disabled(!isPlayable)
             .help(isPlayable
-                  ? "選んだ差分を同期再生し、一定間隔／キー操作で切り替えます"
+                  ? (group.alignmentMode == .content
+                     ? "共通場面へ一度だけ合わせ，その後は自由に切り替えます"
+                     : "選んだ差分を同期再生し，一定間隔／キー操作で切り替えます")
                   : "2〜\(maxPlayableCount)本を選んでください")
         }
         .padding(12)
@@ -234,6 +275,56 @@ struct VariantVideoView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
+            if model.searchMode == .normal {
+                normalSearchControls
+            } else {
+                HStack(spacing: 10) {
+                    Text("最小尺差")
+                        .font(.caption)
+                    Stepper(
+                        value: $model.minimumPartialDurationDifference,
+                        in: 1...120,
+                        step: 1
+                    ) {
+                        Text("\(Int(model.minimumPartialDurationDifference))秒以上")
+                            .font(.caption.monospacedDigit())
+                            .frame(width: 66, alignment: .leading)
+                    }
+                    .disabled(model.isScanning)
+                    Text("通常差分と重ならず，この尺差以上ある動画ペアだけを表示します")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
+            HStack(spacing: 10) {
+                Text("サムネイル")
+                    .font(.caption)
+                Slider(value: $thumbnailSide, in: 110...320, step: 2)
+                    .frame(width: 150)
+                Text("\(Int(thumbnailSide))px")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 46, alignment: .leading)
+
+                Text(model.searchMode == .normal
+                     ? "\(model.groups.count)グループ / \(model.totalGroupedCount)本"
+                     : "\(model.groups.count)組の強制差分候補")
+                    .font(.subheadline)
+                if model.unreadableCount > 0 {
+                    Text("フレームを読めなかった項目: \(model.unreadableCount)件")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private var normalSearchControls: some View {
+        VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Text("尺の許容差")
                     .font(.caption)
@@ -250,7 +341,6 @@ struct VariantVideoView: View {
                 Text("±\(Int(model.maxAverageDistance))")
                     .font(.caption.monospacedDigit())
                     .frame(width: 34, alignment: .leading)
-
                 Spacer()
             }
 
@@ -267,28 +357,7 @@ struct VariantVideoView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-
-            HStack(spacing: 10) {
-                Text("サムネイル")
-                    .font(.caption)
-                Slider(value: $thumbnailSide, in: 110...320, step: 2)
-                    .frame(width: 150)
-                Text("\(Int(thumbnailSide))px")
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 46, alignment: .leading)
-
-                Text("\(model.groups.count)グループ / \(model.totalGroupedCount)本")
-                    .font(.subheadline)
-                if model.unreadableCount > 0 {
-                    Text("フレームを読めなかった項目: \(model.unreadableCount)件")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     /// 名前が近いほど「似ている度合い」を何点ぶん甘く見るか、を実際の数字で見せる。
@@ -311,12 +380,75 @@ struct VariantVideoView: View {
         )
     }
 
-    private func play(_ videos: [VideoItem]) {
+    private var scanScopeDescription: String {
+        model.searchMode == .normal
+            ? "尺が揃った動画だけを対象にしています"
+            : "尺で候補を落とさず，動画全体を2秒間隔で調べています"
+    }
+
+    private var progressDescription: String {
+        switch model.scanPhase {
+        case .idle:
+            return "探索を準備中…"
+        case .extractingFrames:
+            return "フレーム取得中… \(model.scannedCount) / \(model.totalCount)本"
+        case .comparingCandidates:
+            return "候補比較中… \(model.comparedPairCount) / \(model.totalPairCount)組"
+        }
+    }
+
+    private var progressDetailDescription: String {
+        switch model.scanPhase {
+        case .idle:
+            return scanScopeDescription
+        case .extractingFrames:
+            return model.reusedCount > 0
+                ? "\(model.reusedCount)件は取得済みの指紋をそのまま使っています"
+                : scanScopeDescription
+        case .comparingCandidates:
+            return "取得した時間列指紋を動画ペアごとに照合しています"
+        }
+    }
+
+    private var compactProgressDescription: String {
+        switch model.scanPhase {
+        case .idle:
+            return "探索を準備中…"
+        case .extractingFrames:
+            return "残り \(max(0, model.totalCount - model.scannedCount))本のフレームを取得中… 見つかったぶんは先に選べます"
+        case .comparingCandidates:
+            return "候補比較中… \(model.comparedPairCount) / \(model.totalPairCount)組"
+        }
+    }
+
+    private var emptyDescription: String {
+        model.searchMode == .normal
+            ? "尺の許容差か似ている度合いをゆるめると候補が増えます．"
+            : "十分長く続く共通場面があり，かつ指定した尺差以上ある動画だけを表示します．最小尺差を下げると候補が増えます．"
+    }
+
+    private func groupTitle(_ group: VariantVideoViewModel.Group) -> String {
+        guard group.alignmentMode == .content else {
+            return "\(group.items.count)本の差分 ・ \(formatDuration(group.duration))"
+        }
+        let shared = formatDuration(group.sharedDuration ?? 0)
+        let durations = group.items.map { formatDuration($0.duration) }.joined(separator: " / ")
+        return "共通 \(shared) ・ 尺 \(durations)"
+    }
+
+    private func play(
+        _ videos: [VideoItem],
+        alignmentMode: VariantPlaybackAlignmentMode
+    ) {
         guard videos.count >= 2 else { return }
         // フレームの展開は重いので、再生している間は止める。
         // 途中まで作った指紋は残るため、閉じたときに続きから進む。
         model.cancelScan()
-        coordinator.playVariantSwitch(videos)
+        if alignmentMode == .content {
+            coordinator.playContentAlignedVariantSwitch(videos)
+        } else {
+            coordinator.playVariantSwitch(videos)
+        }
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

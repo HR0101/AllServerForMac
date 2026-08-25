@@ -8,6 +8,9 @@ struct MediaGridControlBar: View {
     /// 「サイズ」「最後に開いた日」等を選んだときにファイル属性キャッシュを最新化するためだけに参照する。
     /// 表示更新は監視しないので @ObservedObject ではなく素の参照にしている。
     let dataManager: LibraryViewModel
+    /// 並べ替えの操作を出すか。「再生履歴」は再生した順そのものが中身なので、
+    /// 効かない操作を出しておかないよう false で呼ぶ。
+    var showsSortControls: Bool = true
 
     private static let secondsFormatter: NumberFormatter = {
         let f = NumberFormatter()
@@ -19,26 +22,28 @@ struct MediaGridControlBar: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Menu {
-                ForEach(SortOrder.allCases) { order in
-                    Button(order.rawValue) {
-                        // ファイル属性で並べる順を選び直したときは実ファイルを読み直して最新化する。
-                        if order.needsFileMetadata { dataManager.refreshFileMetadataCache() }
-                        appSettings.sortOrder = order
+            if showsSortControls {
+                Menu {
+                    ForEach(SortOrder.allCases) { order in
+                        Button(order.rawValue) {
+                            // ファイル属性で並べる順を選び直したときは実ファイルを読み直して最新化する。
+                            if order.needsFileMetadata { dataManager.refreshFileMetadataCache() }
+                            appSettings.sortOrder = order
+                        }
                     }
+                } label: {
+                    Label(appSettings.sortOrder.rawValue, systemImage: "arrow.up.arrow.down")
                 }
-            } label: {
-                Label(appSettings.sortOrder.rawValue, systemImage: "arrow.up.arrow.down")
-            }
-            .fixedSize()
+                .fixedSize()
 
-            // 並び順の上下をワンクリックで反転する（既に並んだ結果を反転するだけなので再読み込み不要）。
-            Button {
-                appSettings.sortReversed.toggle()
-            } label: {
-                Image(systemName: appSettings.sortReversed ? "arrow.up" : "arrow.down")
+                // 並び順の上下をワンクリックで反転する（既に並んだ結果を反転するだけなので再読み込み不要）。
+                Button {
+                    appSettings.sortReversed.toggle()
+                } label: {
+                    Image(systemName: appSettings.sortReversed ? "arrow.up" : "arrow.down")
+                }
+                .help(appSettings.sortReversed ? "並び順を元に戻す（逆順中）" : "並び順を上下逆にする")
             }
-            .help(appSettings.sortReversed ? "並び順を元に戻す（逆順中）" : "並び順を上下逆にする")
 
             Menu {
                 ForEach(ThumbnailOption.allCases) { option in

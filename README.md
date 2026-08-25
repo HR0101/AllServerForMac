@@ -19,7 +19,8 @@
 - **自動停止タイマー**：指定時間で無操作なら完全終了して省電力
 - **スケジュール起動/停止**：毎日決まった時刻に起動・終了（`launchd` の LaunchAgent + スリープ起床は `pmset`）
 - **ストレージ管理画面**（容量集計、孤立プロキシの掃除、Finder で開く）
-- **差分切り替え再生**：同じ尺・同じ動きで絵だけが違う「差分動画」を自動で束にし、選んだ数本を完全同期で走らせたまま、一定間隔やキー操作で見せる 1 本だけを差し替える（[詳細](#差分切り替え再生)）
+- **差分切り替え再生**：同じ尺の通常差分に加え，尺が大きく違っても一部に同じ場面が続く動画を自動検出し，内容を位置合わせして切り替え再生する（[詳細](#差分切り替え再生)）
+- **視聴位置・履歴・お気に入りの共有**：Mac アプリ本体の再生も、ブラウザ UI・iPhone・Android と同じ「続きから」「再生履歴」「お気に入り」の記録を使う。サイドバーに「再生履歴」アルバムを用意。自動再生 / リピート / シャッフル / 再生速度 / 字幕・音声トラック / ピクチャインピクチャ / メディアキー / 再生中のスリープ抑止に対応（[詳細](#mac-アプリ本体の再生視聴位置お気に入り自動再生速度)）
 
 ---
 
@@ -52,6 +53,7 @@
 | サムネイル | `~/Movies/MacVideoServerData/Thumbnails/` |
 | プロキシ（一時） | `~/Movies/MacVideoServerData/Proxies/` |
 | 差分検出のフレーム指紋 | `~/Movies/MacVideoServerData/VariantSignatures.json`（作り直せるので消しても可） |
+| 視聴位置・履歴・お気に入り（クライアント共有） | `~/Movies/MacVideoServerData/websync.json`（1世代前は `websync.backup.json`） |
 | ダウンロード取込先 | `~/Downloads/VideoServerForMac_Media/` |
 
 起動時に上記の保存先を準備できない場合は，空のライブラリで処理を続けず，ライブラリ読み込みとHTTPサーバーを停止します．画面に表示される対象パスとエラー理由を確認し，フォルダの読み書き権限，ディスクの空き容量，保存先ボリュームの接続状態を解決してからアプリを再起動してください．
@@ -270,7 +272,7 @@ AllServerForMac/
 | `Services/` | HTTP，ファイルI/O，メディア変換などの副作用 |
 | `Components/` | Feature内だけで共有する小さなViewや再生部品 |
 
-主要な依存関係は，`AppViewModel`が`LibraryViewModel`，`ServerViewModel`，`PlaybackCoordinator`，`AppSettings`を生成し，`ContentView`から各Featureへ渡す形です．Viewは表示とイベント通知を担当し，ライブラリ操作，サーバー制御，ストレージ集計などの状態変更はViewModelまたはServiceへ集約します．Feature固有の型を`Common`へ置かず，`Common`から`Features`へは依存させない方針です．
+主要な依存関係は，`AppViewModel`が`LibraryViewModel`，`ServerViewModel`，`PlaybackCoordinator`，`AppSettings`，`WatchStateStore`，`PlaybackSettings`を生成し，`ContentView`から各Featureへ渡す形です．Viewは表示とイベント通知を担当し，ライブラリ操作，サーバー制御，ストレージ集計などの状態変更はViewModelまたはServiceへ集約します．Feature固有の型を`Common`へ置かず，`Common`から`Features`へは依存させない方針です．
 
 | 主な実装 | 役割 |
 |---|---|
@@ -282,6 +284,13 @@ AllServerForMac/
 | `Features/Playback/ViewModels/` | 動画，写真，分割再生，スライドショー，差分切り替えの再生状態 |
 | `Features/Playback/Services/SynchronizedPlayerGroup.swift` | 複数`AVPlayer`の完全同期（同時再生と差分切り替え再生が共有） |
 | `Features/Playback/Components/PlayerChromeController.swift` | シークバー等の自動的な出し入れ（各プレイヤーが共有） |
+| `Features/Playback/ViewModels/WatchStateStore.swift` | 視聴位置と再生履歴（実体は `WebSyncStore`＝ブラウザ / iOS / Android と共有） |
+| `Features/Playback/Models/PlaybackSettings.swift` | 自動再生・リピート・シャッフル・再生速度（UserDefaults） |
+| `Common/Utilities/ScreenSleepBlocker.swift` | 再生中のスリープ抑止（`PlaybackCoordinator` が持つ） |
+| `Features/Playback/Components/PlayerLayerView.swift` | 通常再生の映像面（`AVPlayerLayer` 直載せ。PiP を繋ぐため） |
+| `Features/Playback/Services/PictureInPictureCoordinator.swift` | ピクチャインピクチャの開始・終了 |
+| `Features/Playback/Services/NowPlayingCenter.swift` | コントロールセンター表示とメディアキー |
+| `Features/Playback/Services/ScrubPreviewGenerator.swift` | シークバーのホバープレビュー |
 | `Features/MediaAnalysis/Models/VariantVideoDetector.swift` | 尺＋複数フレームの知覚ハッシュ＋ファイル名による差分動画の検出 |
 | `Features/MediaAnalysis/Models/TitleSimilarity.swift` | ファイル名の近さ（最長共通部分文字列の Dice 正規化） |
 | `Features/MediaAnalysis/Services/VariantSignatureStore.swift` | フレーム指紋のディスクキャッシュ（作り直しを避ける） |
@@ -322,6 +331,15 @@ AllServerForMac/
 ファイル名の指標には**最長共通部分文字列を Dice で正規化したもの**を使っています。文字バイグラム・レーベンシュタイン・前後一致とも実測で比べたうえで、いちばんよく分かれたものです。連続の長さを見るので、`水着`／`全裸` のように差し替えが端にあると芯がまるごと残って高くなり、`ミカ`／`ヒフミ` のように真ん中で変わると芯が割れて低くなります。
 
 なお、フレームを起こせなかった動画は名前がどれだけ近くても対象にしません（名前だけでは根拠として弱く、別キャラを引き込むため）。各グループの見出しには実測の「絵の差」と「名前の近さ」が出るので、スライダーを動かす手がかりにできます。
+
+### 尺が違う動画から一部一致を探す
+
+アルバム画面の「強制差分候補を探す」は，通常差分と別の探索モードです．同じ尺の束に限定せず，アルバム内の動画全体を2秒間隔で読み，知覚ハッシュの時間列を局所的に照合します．そのため，先頭位置が違う場合や，途中に別カットが挿入された場合でも，順序を保って続く共通場面を候補として検出できます．
+
+- 通常差分と重複しないよう，既定で尺差5秒以上の組み合わせだけを対象にします．画面下部のステッパーで1〜120秒に調整できます．
+- 候補には共通区間の長さと照合スコアを表示し，共通区間が長いものを上に並べます．総当たりの照合はバックグラウンドで実行します．
+- 再生開始時には1秒間隔で改めて照合し，対応フレームを30fps相当で細かく詰めてから，各動画を共通場面の開始位置へ一度だけ合わせます．
+- 再生中の差分切り替えは透明度と音声だけを変え，切り替えごとにシークしません．4秒ごとにずれを確認し，0.25秒を超えた場合だけ静かに再同期します．
 
 ### 指紋は残しておく（`VariantSignatureStore`）
 
@@ -418,6 +436,136 @@ iOS 版（[VideoPlayer](../VideoPlayer)）の同時再生は **4 本まで**で�
 この出し入れは `Features/Playback/Components/PlayerChromeController.swift` に集約してあり、**同時再生・分割再生・差分切り替え再生・スライドショー**が共有します。通常再生（`VideoPlayerView`）だけは、同じ表示条件で関連動画パネルやサムネイル帯まで出し分けていて素直にこの形へ収まらないため、先に入っていた自前の実装をそのまま残しています（振る舞いと 2.5 秒という間隔は揃えてあります）。スライドショーのシークバーは AVKit 標準のもので、それ自体が同じように隠れるため触っていません。
 
 操作系は映像に **重ねて** います（以前は映像の下に積んでいたため、出入りのたびに映像が伸び縮みしていました）。
+
+---
+
+## Mac アプリ本体の再生（視聴位置・お気に入り・自動再生・速度）
+
+これまで **視聴位置と再生履歴はブラウザ UI と iOS / Android クライアントだけの機能**で、
+ホストである Mac アプリ自身は毎回先頭から再生していました。いまは Mac も同じ記録を共有します。
+
+### 視聴位置と履歴の共有先
+
+実体は `websync.json`（`WebSyncStore`）で、クライアントが `GET/PUT /sync` で読み書きしているものと**同じ保管庫**です。
+Mac 側の窓口は `Features/Playback/ViewModels/WatchStateStore.swift`。
+
+| | 視聴位置 | 履歴 |
+|---|---|---|
+| Mac アプリ | `WatchStateStore` → `WebSyncStore.updateLocally` | 同左 |
+| ブラウザ / iOS / Android | `PUT /sync` → `WebSyncStore.merge` | 同左 |
+
+そのため **iPhone で途中まで観た動画を Mac で続きから再生できます**（逆も同じ）。
+外部クライアントが `/sync` を書くと `WebSyncStore.didChangeExternallyNotification` が飛び、Mac の一覧もその場で追従します。
+
+- 再開するのは **5 秒以上進んでいて、末尾 10 秒より手前**のときだけです。数秒だけ触った動画や観終わった動画は先頭から始まります。
+- 途中から始まったことが不具合に見えないよう、再生画面の左上に「◯:◯◯ から再開しました」を数秒だけ出します。
+- 最後まで観たら位置は `0` を書いて捨てます（キーごと消すと、他端末の古い記録とマージしたときに位置が復活するため）。
+- 保管庫への書き込みは **10 秒間隔＋2 秒以上動いたとき**に間引き、一時停止・動画の切り替え・プレイヤーを閉じた時は必ず書きます。
+- 一覧の `@Published` への反映も同じ区切りでだけ行います。再生のたびに流すと、ミニプレイヤーの裏に出しているアルバム一覧が数秒おきに全再描画されるためです。
+
+### 「再生履歴」アルバム
+
+サイドバーの「ライブラリ」に **再生履歴** を追加しました（ブラウザ UI・iOS の「再生履歴」と同じ中身）。
+Mac・ブラウザ・iPhone のどこで再生しても同じ1本の履歴に積まれます（最大 200 件、`WebSyncStore.maxHistory`）。
+
+- 並びは **再生した順（新しい順）で固定**です。名前順に並べ替えた履歴には意味がないので、
+  この画面だけ設定バーの並べ替えを出しません（`MediaGridControlBar(showsSortControls:)`）。
+- 履歴には削除済み・ゴミ箱行きの ID も残るので、**いまライブラリにある項目だけ**を引き当てて出します。
+  サイドバーの件数バッジも同じ数え方です。
+- ここから再生すると、再生リストも履歴の並びになります（「次の動画」は履歴の次）。
+- 右クリックの **「履歴から削除」**、ツールバーの **「履歴を消去」** で消せます。
+  どちらも「消した時刻」（`historyRemoved`）を残すので、他の端末に残っている古い履歴とマージしても復活しません。
+  **視聴位置（続きから）と動画そのものは消えません。**
+
+### 一覧のサムネイル
+
+観た分だけ **サムネイル下端に視聴済みバー**（ブラウザ UI と同じ形）が出ます。
+並べ替えに **「最後に再生した日」** を追加しました。既存の「最後に開いた日」は実ファイルの `accessDate` で、
+アプリで再生したかどうかとは別物です（履歴そのものを見たいときは「再生履歴」アルバムの方が素直です）。
+
+### 再生し終わったときの動き
+
+以前は **終端に到達しても何も起きず、その場で止まっていました**（`AVPlayerItemDidPlayToEndTime` を誰も見ていなかったため）。
+いまは再生画面下のコントロールバーで切り替えられます。設定は UserDefaults に残り、次回以降も維持されます。
+
+| 設定 | 動き | 既定 |
+|---|---|---|
+| 自動再生 | 終わったら次の動画へ進むか。オフならその場で止まる | オン |
+| リピート | なし → 1 本（頭に戻して再生）→ リスト（末尾で先頭へ折り返す）の順に切り替え | なし |
+| シャッフル | 次を無作為に選ぶ | オフ |
+| 再生速度 | 0.5〜2 倍（`AVPlayer.defaultRate` に入れるので、一時停止中に変えても勝手に再生は始まらない） | 1× |
+
+「自動再生」が次へ進むかどうかの親スイッチで、「リストをリピート」はその上で末尾を折り返すかを決めます。
+**1 本リピートだけは進む話ではないので、自動再生の設定に関わらず効きます**。
+これらは端末ごとの好みなので `/sync` では共有しません（ブラウザ UI は同じ設定を `mms_playback` に別途持っています）。
+
+追加したキー操作（すべて環境設定で変更可）：
+
+| キー | 動き |
+|---|---|
+| `S` | シャッフル切替 |
+| `E` | リピート切替 |
+| `,` / `.` | 再生速度を 1 段下げる / 上げる |
+| `P` | ピクチャインピクチャ（他アプリの上に浮かぶ小窓）の出し入れ |
+
+### お気に入りの保管場所を1つに束ねた
+
+以前は **Mac 本体が `library.json` の `VideoItem.isFavorite`、クライアントが `websync.json` の `favorites`** と、
+別々の場所に持っていました。そのため iPhone で付けたお気に入りが Mac に出ず、逆も出ませんでした。
+いまは `AppViewModel.bridgeFavorites()` が双方向に橋渡しします。
+
+| きっかけ | 動き |
+|---|---|
+| Mac で付け外し | `library.json` を更新し、`favoriteChangeHandler` 経由で `websync.json` にも書く |
+| ゴミ箱へ入れた | お気に入りを外したことも共有する（しないと他の端末から復活する） |
+| 他の端末が `/sync` を書いた | 通知で読み直し、`applyFavoriteMarks` で `library.json` へ取り込む |
+| 起動時（ライブラリ読み込み後に1回） | 保管庫がまだ知らない Mac のお気に入りを送り、知っている分は保管庫を正として取り込む |
+
+取り込みは **保管庫が知っている項目にしか触りません**。全体を「正」として上書きすると、
+`websync.json` を失った時に Mac のお気に入りまで巻き添えで消えるためです。
+
+### 字幕・音声トラック
+
+`controlsStyle = .none` の自前コントロールなので、AVKit 標準の字幕メニューは出ません。
+`AVMediaSelectionGroup` を読んで、再生設定メニューに「音声」「字幕」を出します。
+音声はトラックが2本以上あるときだけ、字幕は1本でもあれば「オフ」付きで出します。
+字幕を選んでいる間は、メニューのラベル横に字幕アイコンが点きます。
+
+### ピクチャインピクチャ（`P`）
+
+`AVPlayerView` にはプログラムから PiP を始める公開 API がなく（`allowsPictureInPicturePlayback` と delegate だけ）、
+標準コントロールを出さない限り PiP ボタンも現れません。そこで通常再生の映像面だけ
+`AVPlayerLayer` を直に載せる `PlayerLayerContainerView` に置き換え、
+`AVPictureInPictureController(playerLayer:)` を繋いでいます（`PictureInPictureCoordinator`）。
+`controlsStyle = .none` で使っていたので、AVKit 側の機能を失うことはありません。
+
+アプリ内で小さくたたむ **ミニプレイヤー（`I`）とは別物**です。あちらはウィンドウの中、こちらは他アプリの前面に出ます。
+プレイヤーを閉じるときは必ず小窓も畳みます（残すと、止める手立てのない再生が居座るため）。
+
+### コントロールセンターとメディアキー
+
+`MPNowPlayingInfoCenter` / `MPRemoteCommandCenter`（`NowPlayingCenter`）に登録し、
+**F8 などの再生キー・コントロールセンター・メニューバーの再生中表示**から操作できるようにしました。
+自前コントロールを使っている以上、AVKit が自動で面倒を見てくれる分がまるごと無いためです。
+登録した target はプレイヤーを閉じるときに必ず外します（外し忘れると次のプレイヤーと二重に反応します）。
+
+経過時間はシステムが再生速度から補間するので、更新は **再生・一時停止・シーク・動画の切り替え**の節目だけです。
+アートワークは同じ動画の間だけ使い回します（毎回 JPEG を読み直すと、シークのたびにディスクを叩くため）。
+
+### シークバーのホバープレビュー
+
+シークバーをなぞると、その位置のフレームと時刻が上に出ます（`ScrubPreviewGenerator`）。
+チャプター用の `PlayerThumbnailGenerator` と分けてあるのは狙いが違うためで、
+あちらは黒フレームを避けて厳密な時刻で取り直しますが、なぞっている最中は速さが最優先なので
+**前後2秒の許容つき＝近くのキーフレーム**で取ります。加えて 80ms の待ちを挟み、
+素早く動かしている間は一度もデコードしないようにしています。
+
+### 再生中のスリープ抑止
+
+再生中は `ProcessInfo.beginActivity`（`Common/Utilities/ScreenSleepBlocker.swift`）で画面とシステムのアイドルスリープを止めます。
+`AVPlayer.preventsDisplaySleepDuringVideoPlayback` は **macOS では既定が NO** なので、明示的に止めないと再生中に画面が暗くなります。
+持ち主は `PlaybackCoordinator` で、**一時停止したら抑止も解きます**（止めたまま離席したときに画面が点きっぱなしにならないように）。
+自動で進まない画像ビューアは対象外です。
 
 ---
 

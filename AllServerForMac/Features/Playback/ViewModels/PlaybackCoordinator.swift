@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+enum VariantPlaybackAlignmentMode: Equatable {
+  case sameTime
+  case content
+}
+
 // MARK: - Playback coordinator
 //
 // 元アプリ同様、再生中はウィンドウ全体をプレイヤーに差し替える（シートではなく全画面）。
@@ -10,6 +15,7 @@ final class PlaybackCoordinator: ObservableObject {
     enum LibraryScope: Equatable {
         case album(UUID)
         case favorites
+        case history
         case trash
     }
 
@@ -25,13 +31,19 @@ final class PlaybackCoordinator: ObservableObject {
     enum Mode: Equatable {
         case single(playlist: [VideoItem], current: VideoItem)
         case multi([VideoItem])
-        case variantSwitch([VideoItem])
+        case variantSwitch([VideoItem], alignment: VariantPlaybackAlignmentMode)
         case slideshow([VideoItem])
         case splitPlay(video: VideoItem, splitCount: Int)
         case photos(playlist: [VideoItem], current: VideoItem)
     }
 
-    @Published var mode: Mode?
+    @Published var mode: Mode? {
+        didSet {
+            // 新しいプレイヤーは再生状態から始まる。前のプレイヤーの一時停止を持ち越さない。
+            isActivePlayerPlaying = true
+            refreshSleepBlocker()
+        }
+    }
     @Published private(set) var libraryReturnState: LibraryReturnState?
     /// 通常再生をIキーで右下に小さくたたみ、アルバム一覧を裏に表示している間 true。
     @Published var isMiniPlayerActive = false
@@ -41,11 +53,41 @@ final class PlaybackCoordinator: ObservableObject {
     /// 探索を開いた時点の表示順。実体は ContentView が現在のライブラリから引き直すので、
     /// 再生中に削除した動画は背後の探索画面にも反映される。
     @Published private(set) var variantFinderItemIDs: [UUID] = []
+    /// 探索画面を開いたときに最初に表示する検索方式．
+    @Published private(set) var variantFinderAlignmentMode: VariantPlaybackAlignmentMode = .sameTime
 
     /// 一覧を開いたときのウィンドウの大きさ。探索オーバーレイをそこへ合わせるために控える。
     var variantFinderHostSize: CGSize?
 
     var isPresenting: Bool { mode != nil }
+
+    // MARK: - 再生中のスリープ抑止
+
+    private let sleepBlocker = ScreenSleepBlocker(reason: "動画を再生中です")
+    /// いま開いているプレイヤーが実際に再生中か。プレイヤー側から setPlaybackActive で伝える。
+    private var isActivePlayerPlaying = true
+
+    /// 写真ビューアは自動で進まないので、開いているだけで画面を起こし続けない。
+    /// それ以外（通常再生・同時再生・差分切り替え・スライドショー・分割再生）は
+    /// 無操作でも映像が流れ続けるため、抑止の対象にする。
+    private static func blocksSleep(_ mode: Mode?) -> Bool {
+        switch mode {
+        case .none, .photos: return false
+        case .single, .multi, .variantSwitch, .slideshow, .splitPlay: return true
+        }
+    }
+
+    /// プレイヤーの再生／一時停止に追従させる。一時停止したまま離席したときに
+    /// 画面が点きっぱなしにならないよう、再生していない間は抑止を解く。
+    func setPlaybackActive(_ playing: Bool) {
+        guard isActivePlayerPlaying != playing else { return }
+        isActivePlayerPlaying = playing
+        refreshSleepBlocker()
+    }
+
+    private func refreshSleepBlocker() {
+        sleepBlocker.setActive(Self.blocksSleep(mode) && isActivePlayerPlaying)
+    }
 
     var isPlayingOverVariantFinder: Bool {
         guard variantFinderAlbumID != nil else { return false }
@@ -53,15 +95,22 @@ final class PlaybackCoordinator: ObservableObject {
         return false
     }
 
-    func openVariantFinder(albumID: UUID, itemIDs: [UUID], hostSize: CGSize?) {
+    func openVariantFinder(
+        albumID: UUID,
+        itemIDs: [UUID],
+        hostSize: CGSize?,
+        alignmentMode: VariantPlaybackAlignmentMode = .sameTime
+    ) {
         variantFinderHostSize = hostSize ?? variantFinderHostSize
         variantFinderItemIDs = itemIDs
+        variantFinderAlignmentMode = alignmentMode
         variantFinderAlbumID = albumID
     }
 
     func closeVariantFinder() {
         variantFinderAlbumID = nil
         variantFinderItemIDs = []
+        variantFinderAlignmentMode = .sameTime
         variantFinderHostSize = nil
     }
 
@@ -97,7 +146,15 @@ final class PlaybackCoordinator: ObservableObject {
         let items = videos.filter { $0.mediaType == .video }
         guard items.count >= 2 else { return }
         isMiniPlayerActive = false
-        mode = .variantSwitch(Array(items.prefix(9)))
+        mode = .variantSwitch(Array(items.prefix(9)), alignment: .sameTime)
+    }
+
+    /// 尺が異なる動画の共通場面を探し，動画ごとの開始位置を補正して差分再生する．
+    func playContentAlignedVariantSwitch(_ videos: [VideoItem]) {
+        let items = videos.filter { $0.mediaType == .video }
+        guard items.count >= 2 else { return }
+        isMiniPlayerActive = false
+        mode = .variantSwitch(Array(items.prefix(9)), alignment: .content)
     }
 
     /// スライドショー（2本以上）

@@ -169,6 +169,9 @@ class LibraryViewModel: ObservableObject {
     @Published var linkedFolderConflicts: [LinkedFolderConflict] = []
     /// 実ファイルの移動など，削除処理の一部が失敗した場合に画面へ通知する内容です．
     @Published var mediaDeletionNotice: String?
+    /// お気に入りの変更を、クライアントと共有している保管庫（websync.json）へ流すための橋渡し。
+    /// ライブラリ側からクライアント共有の保管庫を直接触らずに済ませるため、AppViewModel が繋ぐ。
+    var favoriteChangeHandler: (([UUID], Bool) -> Void)?
     let duplicateCheckStatus = DuplicateCheckStatus()
 
     /// 自動重複チェック（バックグラウンドで定期的に走るもの）のオン/オフ。手動チェック（アルバム内の「重複チェック」ボタン）には影響しない。

@@ -28,6 +28,9 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     @Published private(set) var commonDuration: Double = 1
     @Published private(set) var isPlaying = false
     @Published private(set) var hasReachedEnd = false
+    @Published private(set) var isAligningByContent = false
+    @Published private(set) var alignmentErrorMessage: String?
+    @Published private(set) var alignmentSummary: String?
     /// 次の自動切り替えまでの残り秒。カウントダウン表示にそのまま使う。
     @Published private(set) var secondsUntilSwitch: Double = 0
 
@@ -74,24 +77,45 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private static let tickSeconds: Double = 0.1
     /// これ以上ずれたら揃え直す。60fps で 15 フレームぶん＝切り替えたときに気づく大きさ。
     private static let driftThreshold: Double = 0.25
-    /// ずれの点検の間隔。切り替えのたびに調べると、揃え直しが切り替えと重なって二重に引っかかる。
+    /// ずれの点検間隔．差分切り替えとは独立して定期確認し，必要な場合だけ揃え直す．
     private static let driftCheckSeconds: Double = 4
 
     /// 読み込んだ差分の実体。削除したあとに組み直すため、URL ごと持っておく。
-    private var playable: [(item: VideoItem, url: URL)]
+    private struct PlayableItem {
+        let item: VideoItem
+        let url: URL
+        var timelineMapping: VariantTimelineMapping
+    }
+
+    private var playable: [PlayableItem]
     private var group: SynchronizedPlayerGroup
+    private let alignmentMode: VariantPlaybackAlignmentMode
+    private var alignedCommonDuration: TimeInterval?
+    private var hasPreparedAlignment = false
+    private var alignmentTask: Task<Void, Never>?
     private var switchTask: Task<Void, Never>?
     private var isSliderEditing = false
     private var secondsSinceDriftCheck: Double = 0
 
-    init(videos: [VideoItem], dataManager: LibraryViewModel) {
-        let playable = videos.compactMap { item -> (item: VideoItem, url: URL)? in
+    init(
+        videos: [VideoItem],
+        dataManager: LibraryViewModel,
+        alignmentMode: VariantPlaybackAlignmentMode = .sameTime
+    ) {
+        let playable = videos.compactMap { item -> PlayableItem? in
             guard let url = dataManager.fileURL(for: item) else { return nil }
-            return (item: item, url: url)
+            return PlayableItem(
+                item: item,
+                url: url,
+                timelineMapping: .identity(duration: item.duration)
+            )
         }
 
         self.playable = playable
-        self.group = SynchronizedPlayerGroup(urls: playable.map(\.url))
+        self.alignmentMode = alignmentMode
+        self.group = alignmentMode == .content
+            ? SynchronizedPlayerGroup(urls: [])
+            : SynchronizedPlayerGroup(urls: playable.map(\.url))
         self.variants = playable.map { Variant(id: $0.item.id, title: $0.item.originalFilename) }
         self.isAutoSwitching = VariantSwitchSettings.isAutoSwitchEnabled
         self.minInterval = VariantSwitchSettings.minInterval
@@ -118,12 +142,95 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     // MARK: - 再生
 
     func start() {
-        guard !group.isEmpty else { return }
+        if alignmentMode == .content, !hasPreparedAlignment {
+            prepareContentAlignment()
+            return
+        }
+        startPreparedPlayback()
+    }
+
+    func retryContentAlignment() {
+        guard alignmentMode == .content, !isAligningByContent else { return }
+        alignmentErrorMessage = nil
+        hasPreparedAlignment = false
+        prepareContentAlignment()
+    }
+
+    private func startPreparedPlayback() {
+        guard !group.isEmpty, alignmentErrorMessage == nil else { return }
         hasReachedEnd = false
         isPlaying = true
         group.play()
         secondsUntilSwitch = isAutoSwitching ? nextInterval() : 0
         startTicking()
+    }
+
+    private func prepareContentAlignment() {
+        guard !isAligningByContent, playable.count >= 2 else { return }
+        alignmentTask?.cancel()
+        isAligningByContent = true
+        alignmentErrorMessage = nil
+
+        let inputs = playable.map {
+            VariantContentAligner.Input(
+                id: $0.item.id,
+                filename: $0.item.originalFilename,
+                url: $0.url,
+                duration: $0.item.duration
+            )
+        }
+        alignmentTask = Task { @MainActor [weak self] in
+            let result = await VariantContentAligner.align(inputs: inputs)
+            guard let self, !Task.isCancelled else { return }
+            self.isAligningByContent = false
+
+            switch result {
+            case .success(let alignment):
+                let entries = Dictionary(
+                    uniqueKeysWithValues: alignment.entries.map { ($0.videoID, $0) }
+                )
+                for index in self.playable.indices {
+                    if let mapping = entries[self.playable[index].item.id]?.mapping {
+                        self.playable[index].timelineMapping = mapping
+                    }
+                }
+                self.alignedCommonDuration = alignment.commonDuration
+                self.alignmentSummary = self.makeAlignmentSummary(alignment)
+                self.group.cleanup()
+                self.group = self.makePlayerGroup()
+                self.wireGroup()
+                self.commonDuration = alignment.commonDuration
+                self.hasPreparedAlignment = true
+                self.startPreparedPlayback()
+            case .failure(let error):
+                self.alignmentErrorMessage = error.localizedDescription
+                self.isPlaying = false
+            }
+        }
+    }
+
+    private func makePlayerGroup() -> SynchronizedPlayerGroup {
+        SynchronizedPlayerGroup(
+            urls: playable.map(\.url),
+            timelineMappings: playable.map(\.timelineMapping),
+            commonTimelineDuration: alignedCommonDuration
+        )
+    }
+
+    private func makeAlignmentSummary(_ alignment: VariantContentAlignment) -> String {
+        let starts = alignment.entries.map(\.startTime)
+        let spread = (starts.max() ?? 0) - (starts.min() ?? 0)
+        let matchedPointCount = alignment.entries.dropFirst().map {
+            $0.mapping.anchors.count
+        }.min() ?? 0
+        let seconds = Int(alignment.commonDuration.rounded())
+        let durationText = String(format: "%d:%02d", seconds / 60, seconds % 60)
+        return String(
+            format: "類似点%d個・開始差 %.2f秒・共通尺 %@",
+            matchedPointCount,
+            spread,
+            durationText
+        )
     }
 
     func togglePlayPause() {
@@ -134,7 +241,7 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
             // 最後まで行ってから押されたら、頭出しし直して続ける。
             if hasReachedEnd {
                 hasReachedEnd = false
-                group.applySeek { _ in .zero }
+                group.seekAll(toTimelineTime: 0)
             }
             isPlaying = true
             group.play()
@@ -195,6 +302,11 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     /// 表示と音を差し替える。手で切り替えたときも次の自動切り替えまでの時間は測り直す
     /// （切り替えた直後にまた勝手に変わると、見たかった1本を見られない）。
     private func applySwitch(to index: Int) {
+        guard variants.indices.contains(index) else { return }
+        commitSwitch(to: index)
+    }
+
+    private func commitSwitch(to index: Int) {
         activeIndex = index
         applyAudio()
         secondsUntilSwitch = isAutoSwitching ? nextInterval() : 0
@@ -296,7 +408,11 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         // 見ていたものが消えたなら先頭へ。残っているならその位置を追いかける。
         activeIndex = activeID.flatMap { id in variants.firstIndex { $0.id == id } } ?? 0
 
-        group = SynchronizedPlayerGroup(urls: remaining.map(\.url))
+        group = SynchronizedPlayerGroup(
+            urls: remaining.map(\.url),
+            timelineMappings: remaining.map(\.timelineMapping),
+            commonTimelineDuration: alignedCommonDuration
+        )
         wireGroup()
         applyAudio()
 
@@ -304,13 +420,12 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
             isPlaying = false
             return
         }
-        let target = CMTime(seconds: max(0, resumeAt), preferredTimescale: 600)
         if wasPlaying {
             isPlaying = true
-            group.startInSync { _ in target }
+            group.startInSync(atTimelineTime: resumeAt)
         } else {
             isPlaying = false
-            group.applySeek { _ in target }
+            group.seekAll(toTimelineTime: resumeAt)
         }
     }
 
@@ -345,6 +460,8 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     }
 
     func cleanup() {
+        alignmentTask?.cancel()
+        alignmentTask = nil
         switchTask?.cancel()
         switchTask = nil
         group.cleanup()

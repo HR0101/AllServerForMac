@@ -6,6 +6,7 @@ struct MainSidebarView: View {
     @ObservedObject var dataManager: LibraryViewModel
     @ObservedObject var webServerManager: ServerViewModel
     @EnvironmentObject var appSettings: AppSettings
+    @EnvironmentObject private var watchState: WatchStateStore
     @Binding var selection: NavigationSelection?
     @Binding var isShowingPreferences: Bool
     @Binding var isShowingStorageManager: Bool
@@ -218,6 +219,7 @@ struct MainSidebarView: View {
                     sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
                 }
                     sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
+                    sidebarNavigationButton(.history, title: "再生履歴", systemImage: "clock.arrow.circlepath", count: historyCount)
                     sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
                 }
 
@@ -298,6 +300,14 @@ struct MainSidebarView: View {
         } message: {
             Text("ドロップした\(pendingSidebarFileURLs.count)件のファイルを、新しく作るアルバムに取り込みます。")
         }
+    }
+
+    /// 再生履歴の件数。履歴には削除済み・ゴミ箱行きの ID も残るので、
+    /// 実際に一覧へ出るものだけを数える（お気に入り・ゴミ箱のバッジと同じ数え方に合わせる）。
+    private var historyCount: Int {
+        guard !watchState.historyOrder.isEmpty else { return 0 }
+        let available = Set(dataManager.videos.lazy.filter { !$0.isInTrash }.map(\.id))
+        return watchState.historyOrder.reduce(0) { $0 + (available.contains($1) ? 1 : 0) }
     }
 
     private func sidebarNavigationButton(_ target: NavigationSelection, title: String, systemImage: String, count: Int? = nil) -> some View {

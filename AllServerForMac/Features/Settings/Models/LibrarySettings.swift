@@ -11,6 +11,7 @@ enum SortOrder: String, CaseIterable, Identifiable {
     case byDurationDescending = "長い順"
     case byName = "名前"
     case byLastOpened = "最後に開いた日"
+    case byLastPlayed = "最後に再生した日"
     case byDateAdded = "追加日"
     case byDateModified = "変更日"
     case byDateCreated = "作成日"
@@ -71,7 +72,14 @@ extension Sequence where Element == VideoItem {
     /// サイズ・変更日・最後に開いた日は実ファイルの属性が必要なため、
     /// `metadata` で item ごとの `VideoFileMetadata` を解決する（未指定なら空扱い）。
     /// `reversed` が true のときは各順の既定の向きを反転した並びを返す（上下逆）。
-    func sorted(by order: SortOrder, reversed: Bool = false, metadata: (VideoItem) -> VideoFileMetadata = { _ in VideoFileMetadata() }) -> [VideoItem] {
+    /// `lastPlayed` はこのアプリでの再生履歴（`WatchStateStore.lastPlayed`）。
+    /// ファイル属性の「最後に開いた日」とは別物なので、別の引数で受ける。
+    func sorted(
+        by order: SortOrder,
+        reversed: Bool = false,
+        lastPlayed: [UUID: Date] = [:],
+        metadata: (VideoItem) -> VideoFileMetadata = { _ in VideoFileMetadata() }
+    ) -> [VideoItem] {
         let result: [VideoItem]
         switch order {
         case .byImport:
@@ -96,6 +104,10 @@ extension Sequence where Element == VideoItem {
             let dates = Dictionary(items.map { ($0.id, metadata($0).accessDate ?? .distantPast) },
                                    uniquingKeysWith: { first, _ in first })
             result = items.sorted { (dates[$0.id] ?? .distantPast) > (dates[$1.id] ?? .distantPast) }
+        case .byLastPlayed:
+            result = sorted {
+                (lastPlayed[$0.id] ?? .distantPast) > (lastPlayed[$1.id] ?? .distantPast)
+            }
         case .byDateModified:
             let items = Array(self)
             let dates = Dictionary(items.map { ($0.id, metadata($0).modificationDate ?? .distantPast) },

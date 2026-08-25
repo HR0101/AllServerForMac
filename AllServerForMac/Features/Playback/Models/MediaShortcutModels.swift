@@ -116,6 +116,11 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case videoRandomSeek
     case videoToggleUpNextPanel
     case videoToggleMiniPlayer
+    case videoToggleShuffle
+    case videoCycleRepeat
+    case videoRateDown
+    case videoRateUp
+    case videoTogglePictureInPicture
     case variantNext
     case variantPrevious
     case variantRandom
@@ -171,6 +176,11 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRandomSeek: return "動画: ランダム位置"
         case .videoToggleUpNextPanel: return "動画: 関連動画パネル切替"
         case .videoToggleMiniPlayer: return "動画: ミニプレイヤー"
+        case .videoToggleShuffle: return "動画: シャッフル切替"
+        case .videoCycleRepeat: return "動画: リピート切替"
+        case .videoRateDown: return "動画: 再生速度を下げる"
+        case .videoRateUp: return "動画: 再生速度を上げる"
+        case .videoTogglePictureInPicture: return "動画: ピクチャインピクチャ"
         case .variantNext: return "差分: 次のバージョンへ"
         case .variantPrevious: return "差分: 前のバージョンへ"
         case .variantRandom: return "差分: ランダムなバージョンへ"
@@ -222,6 +232,11 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRandomSeek: return "ランダムな位置へジャンプ"
         case .videoToggleUpNextPanel: return "同じアルバムの動画パネルを表示/非表示"
         case .videoToggleMiniPlayer: return "小さい画面で再生しながらアルバム一覧を表示"
+        case .videoToggleShuffle: return "次の動画を無作為に選ぶかを切り替え"
+        case .videoCycleRepeat: return "リピートなし → 1本 → リストの順に切り替え"
+        case .videoRateDown: return "再生速度を1段下げる"
+        case .videoRateUp: return "再生速度を1段上げる"
+        case .videoTogglePictureInPicture: return "他アプリの上に浮かぶ小窓で再生する／戻す"
         case .variantNext: return "次の差分バージョンへ切り替え"
         case .variantPrevious: return "前の差分バージョンへ切り替え"
         case .variantRandom: return "ランダムな差分バージョンへ切り替え"
@@ -277,6 +292,11 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRandomSeek: return [.r]
         case .videoToggleUpNextPanel: return [MediaShortcutKey(rawValue: "t")]
         case .videoToggleMiniPlayer: return [MediaShortcutKey(rawValue: "i")]
+        case .videoToggleShuffle: return [MediaShortcutKey(rawValue: "s")]
+        case .videoCycleRepeat: return [MediaShortcutKey(rawValue: "e")]
+        case .videoRateDown: return [MediaShortcutKey(rawValue: ",")]
+        case .videoRateUp: return [MediaShortcutKey(rawValue: ".")]
+        case .videoTogglePictureInPicture: return [MediaShortcutKey(rawValue: "p")]
         case .variantNext: return [MediaShortcutKey(rawValue: "n")]
         case .variantPrevious: return [MediaShortcutKey(rawValue: "b")]
         case .variantRandom: return [MediaShortcutKey(rawValue: "v")]
@@ -326,7 +346,12 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         .videoSeekForward15,
         .videoRandomSeek,
         .videoToggleUpNextPanel,
-        .videoToggleMiniPlayer
+        .videoToggleMiniPlayer,
+        .videoToggleShuffle,
+        .videoCycleRepeat,
+        .videoRateDown,
+        .videoRateUp,
+        .videoTogglePictureInPicture
     ]
 
     /// 差分切り替え再生だけで使うもの。再生・シーク・閉じるは `videoActions` と共通なので重ねない。

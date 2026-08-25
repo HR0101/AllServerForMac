@@ -22,6 +22,13 @@ final class AppViewModel: ObservableObject {
   let playbackCoordinator: PlaybackCoordinator
   let remotePlaybackSession: RemotePlaybackSession
   let appSettings: AppSettings
+  /// 視聴位置と再生履歴。実体はサーバーの WebSyncStore なので
+  /// ブラウザ UI・iPhone・Android と同じ記録を共有する。
+  let watchState: WatchStateStore
+  /// 自動再生・リピート・シャッフル・再生速度（端末ごとの好みなので同期しない）。
+  let playbackSettings = PlaybackSettings()
+
+  private var cancellables = Set<AnyCancellable>()
 
   convenience init() {
     self.init(
@@ -42,11 +49,14 @@ final class AppViewModel: ObservableObject {
       playbackCoordinator: playbackCoordinator
     )
     self.remotePlaybackSession = remotePlaybackSession
-    self.webServerManager = ServerViewModel(
+    // watchState が同じ syncStore を握るため、先にローカル変数で受けてから self へ入れる。
+    let webServerManager = ServerViewModel(
       dataManager: dataManager,
       remotePlaybackSession: remotePlaybackSession
     )
+    self.webServerManager = webServerManager
     self.appSettings = appSettings
+    self.watchState = WatchStateStore(store: webServerManager.syncStore)
 
     webServerManager.$serverStartTime
       .map { $0 != nil }
@@ -56,5 +66,52 @@ final class AppViewModel: ObservableObject {
     webServerManager.$serverURL
       .removeDuplicates()
       .assign(to: &$currentServerURL)
+
+    bridgeFavorites()
+  }
+
+  /// お気に入りの保管場所を1つに束ねる。
+  ///
+  /// Mac 本体は `library.json` の `VideoItem.isFavorite`、ブラウザ / iOS / Android は
+  /// `websync.json` の `favorites` と、これまで別々の場所に持っていた。
+  /// そのため iPhone で付けたお気に入りが Mac に出ず、逆も出なかった。
+  /// ここで双方向に橋渡しして、どこで付けても全部に出るようにする。
+  private func bridgeFavorites() {
+    // Mac 側の付け外しを保管庫へ送る。
+    dataManager.favoriteChangeHandler = { [weak self] ids, isFavorite in
+      self?.watchState.setFavorite(videoIDs: ids, isFavorite: isFavorite)
+    }
+
+    // ライブラリを読み終えた時点で1回だけ突き合わせる。
+    dataManager.$videos
+      .filter { !$0.isEmpty }
+      .first()
+      .sink { [weak self] videos in
+        // videos の通知を受けている最中に videos を書き換えると入れ子の送信になる。
+        // 次のループへ送って、素直な一方通行にしておく。
+        Task { @MainActor [weak self] in
+          guard let self else { return }
+          // まず、保管庫がまだ知らない Mac のお気に入りを送る。
+          // これをやらないと、次の取り込みで「保管庫にない＝欠損」のまま取り残される。
+          let unshared = videos
+            .filter { $0.isFavorite && !$0.isInTrash && self.watchState.favorites[$0.id] == nil }
+            .map(\.id)
+          if !unshared.isEmpty {
+            self.watchState.setFavorite(videoIDs: unshared, isFavorite: true)
+          }
+          // 保管庫が知っている分は保管庫を正とする（あちらだけが変更時刻を持っているため）。
+          self.dataManager.applyFavoriteMarks(self.watchState.favorites)
+        }
+      }
+      .store(in: &cancellables)
+
+    // 以後、他の端末が /sync を書いたら Mac の一覧も追従する。
+    // Mac 自身の変更でもここへ流れてくるが、その時は差分が無いので何も起きない。
+    watchState.$favorites
+      .dropFirst()
+      .sink { [weak self] marks in
+        self?.dataManager.applyFavoriteMarks(marks)
+      }
+      .store(in: &cancellables)
   }
 }

@@ -12,7 +12,7 @@ import ImageIO
 // 横に隣り合う画素の明暗を比べて 64 ビットにする。
 // 明るさ全体の変化や軽い圧縮では値が変わらず、構図が変わると大きく変わる。
 
-struct PerceptualHash: Equatable, Hashable {
+nonisolated struct PerceptualHash: Equatable, Hashable, Sendable {
     let bits: UInt64
 
     /// 何ビット違うか（0＝完全に同じ見た目、64＝正反対）。
