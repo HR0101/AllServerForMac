@@ -380,6 +380,15 @@ struct VideoPlayerView: View {
     @State private var videoMarqueeStart: CGPoint?
     @State private var videoMarqueeCurrent: CGPoint?
     @AppStorage(MediaShortcutSettings.versionKey) private var shortcutSettingsVersion = 0
+    /// 自動再生・リピート・シャッフル・再生速度。ViewModel が持つのと同じ実体。
+    @ObservedObject private var settings: PlaybackSettings
+    /// 他アプリの上に浮かぶ小窓（ミニプレイヤーとは別物）。
+    @StateObject private var pictureInPicture = PictureInPictureCoordinator()
+    /// シークバーをなぞっている位置のプレビュー。
+    @StateObject private var scrubPreview = ScrubPreviewGenerator()
+    /// なぞっている位置（0...1）。なぞっていなければ nil。
+    @State private var scrubHoverFraction: Double?
+    @State private var seekBarWidth: CGFloat = 0
     private let sidebarWidth: CGFloat = 240
     private let triggerWidth: CGFloat = 10
     private let upNextPanelWidth: CGFloat = 360
@@ -394,10 +403,29 @@ struct VideoPlayerView: View {
     private let videoStripScrollThreshold: CGFloat = 2
     private let secondsPerMinute = 60
     private let secondsPerHour = 3_600
+    private let scrubPreviewWidth: CGFloat = 168
+    private let scrubPreviewHeight: CGFloat = 95
+    /// 札の総高さ（画像＋時刻＋余白）＋シークバーとの間隔。
+    private let scrubPreviewTotalHeight: CGFloat = 138
 
-    init(videos: [VideoItem], currentVideo: VideoItem, dataManager: LibraryViewModel) {
+    init(
+        videos: [VideoItem],
+        currentVideo: VideoItem,
+        dataManager: LibraryViewModel,
+        watchState: WatchStateStore,
+        settings: PlaybackSettings
+    ) {
         self.dataManager = dataManager
-        _viewModel = StateObject(wrappedValue: VideoPlayerViewModel(videos: videos, currentVideo: currentVideo, dataManager: dataManager))
+        _settings = ObservedObject(wrappedValue: settings)
+        _viewModel = StateObject(
+            wrappedValue: VideoPlayerViewModel(
+                videos: videos,
+                currentVideo: currentVideo,
+                dataManager: dataManager,
+                watchState: watchState,
+                settings: settings
+            )
+        )
     }
 
     private var shortcutList: [(key: String, action: String)] {
@@ -416,7 +444,12 @@ struct VideoPlayerView: View {
                 .videoSeekForward15,
                 .videoRandomSeek,
                 .videoToggleUpNextPanel,
-                .videoToggleMiniPlayer
+                .videoToggleMiniPlayer,
+                .videoToggleShuffle,
+                .videoCycleRepeat,
+                .videoRateDown,
+                .videoRateUp,
+                .videoTogglePictureInPicture
             ],
             extraItems: [
                 ("0〜9", "動画の 0%〜90% の位置へジャンプ"),
@@ -444,11 +477,25 @@ struct VideoPlayerView: View {
             remotePlaybackSession.attach(viewModel)
             viewModel.setupPlayer()
         }
+        // setupPlayer は次のループでプレイヤーを作るので、素材はそれを待ってから掴む。
+        .onChange(of: viewModel.player == nil) { _, isMissing in
+            guard !isMissing else { return }
+            scrubPreview.prepare(asset: viewModel.currentAsset, videoID: viewModel.currentVideo.id)
+        }
         .onChange(of: viewModel.currentVideo.id) { _, _ in
             videoZoom.reset()
+            scrubHoverFraction = nil
+            scrubPreview.prepare(asset: viewModel.currentAsset, videoID: viewModel.currentVideo.id)
+        }
+        // 一時停止したまま離席したときに画面が点きっぱなしにならないよう、
+        // 実際の再生状態をコーディネーター（スリープ抑止の持ち主）へ伝える。
+        .onChange(of: viewModel.isPlaybackPlaying) { _, isPlaying in
+            coordinator.setPlaybackActive(isPlaying)
         }
         .onDisappear {
             remotePlaybackSession.detach(viewModel)
+            // 小窓だけ残すと、止める手立てのない再生が居座る。
+            pictureInPicture.detach()
             viewModel.cleanup()
         }
     }
@@ -479,6 +526,10 @@ struct VideoPlayerView: View {
                     coordinator.close()
                 }
                 .transition(.opacity)
+            }
+
+            if let notice = viewModel.resumeNotice {
+                resumeNoticeBadge(notice)
             }
 
             if showShortcutHelp {
@@ -516,12 +567,7 @@ struct VideoPlayerView: View {
     private var miniPlayerView: some View {
         ZStack(alignment: .bottom) {
             Color.black
-            PlayerContainerView(
-                player: viewModel.player,
-                controlsStyle: .none,
-                showsFullScreenToggleButton: false,
-                allowsPictureInPicturePlayback: false
-            )
+            PlayerLayerContainerView(player: viewModel.player)
 
             if isMiniControlsVisible {
                 HStack(spacing: 8) {
@@ -594,12 +640,9 @@ struct VideoPlayerView: View {
                 Color.black
                 // AVKit標準コントロールは表示時に動画全体を暗くするため使わず、
                 // 下部に独自のシークバーを重ねる。
-                PlayerContainerView(
-                    player: viewModel.player,
-                    controlsStyle: .none,
-                    showsFullScreenToggleButton: false,
-                    allowsPictureInPicturePlayback: false
-                )
+                PlayerLayerContainerView(player: viewModel.player) { layer in
+                    pictureInPicture.attach(playerLayer: layer)
+                }
                 .scaleEffect(x: videoZoom.scaleX, y: videoZoom.scaleY, anchor: .topLeading)
                 .offset(videoZoom.offset)
 
@@ -661,6 +704,25 @@ struct VideoPlayerView: View {
             }
         }
         .clipped()
+    }
+
+    /// 前回の続きから始まったことを数秒だけ知らせる札。
+    /// 何も出さずに途中から再生すると、不具合と区別がつかない。
+    private func resumeNoticeBadge(_ notice: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.arrow.circlepath")
+            Text(notice)
+        }
+        .font(.callout.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Capsule().fill(.black.opacity(0.62)))
+        .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .transition(.opacity)
+        .allowsHitTesting(false)
     }
 
     /// Tキーで開閉する、YouTubeの「次の動画」風の同じアルバムの動画一覧パネル。
@@ -787,10 +849,65 @@ struct VideoPlayerView: View {
             ) { isEditing in
                 viewModel.playbackSliderEditingChanged(isEditing: isEditing)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { seekBarWidth = $0 }
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                handleSeekBarHover(phase)
+            }
+            .overlay(alignment: .topLeading) {
+                if let fraction = scrubHoverFraction, seekBarWidth > 0 {
+                    scrubPreviewCard
+                        .offset(x: scrubPreviewOffsetX(for: fraction), y: -scrubPreviewTotalHeight)
+                }
+            }
 
             Text(formatTime(viewModel.duration))
                 .font(.caption.monospacedDigit())
                 .frame(minWidth: 46, alignment: .leading)
+
+            Divider().frame(height: 18)
+
+            Button {
+                settings.isShuffleEnabled.toggle()
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: playbackControlButtonWidth)
+                    .foregroundStyle(settings.isShuffleEnabled ? Color.accentColor : Color.primary)
+            }
+            .buttonStyle(.plain)
+            .help(settings.isShuffleEnabled ? "シャッフル: オン" : "シャッフル: オフ")
+            .accessibilityLabel("シャッフル")
+
+            Button {
+                settings.repeatMode = settings.repeatMode.next
+            } label: {
+                Image(systemName: settings.repeatMode.symbolName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: playbackControlButtonWidth)
+                    .foregroundStyle(settings.repeatMode == .off ? Color.primary : Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .help(settings.repeatMode.title)
+            .accessibilityLabel(settings.repeatMode.title)
+
+            if PictureInPictureCoordinator.isSupported {
+                Button {
+                    pictureInPicture.toggle()
+                } label: {
+                    Image(systemName: pictureInPicture.isActive
+                          ? "pip.exit"
+                          : "pip.enter")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: playbackControlButtonWidth)
+                        .foregroundStyle(pictureInPicture.isActive ? Color.accentColor : Color.primary)
+                }
+                .buttonStyle(.plain)
+                .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
+                .help(pictureInPicture.isActive ? "小窓をやめて戻す" : "ピクチャインピクチャ（P）")
+                .accessibilityLabel("ピクチャインピクチャ")
+            }
+
+            playbackOptionsMenu
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -798,6 +915,132 @@ struct VideoPlayerView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .padding(.horizontal, playbackControlsHorizontalPadding)
         .padding(.bottom, playbackControlsBottomPadding)
+    }
+
+    /// 再生速度と自動再生。ボタンを並べるには数が多いのでメニューにまとめる。
+    private var playbackOptionsMenu: some View {
+        Menu {
+            Picker("再生速度", selection: rateBinding) {
+                ForEach(PlaybackSettings.availableRates, id: \.self) { value in
+                    Text(PlaybackSettings.label(forRate: value)).tag(value)
+                }
+            }
+            .pickerStyle(.inline)
+
+            // トラックが1つしかない動画にまで選択 UI を出しても選ぶものがない。
+            if viewModel.audioTracks.count > 1 {
+                Divider()
+                Picker("音声", selection: audioTrackBinding) {
+                    ForEach(viewModel.audioTracks) { track in
+                        Text(track.displayName).tag(track.index)
+                    }
+                }
+            }
+
+            if !viewModel.subtitleTracks.isEmpty {
+                Divider()
+                Picker("字幕", selection: subtitleTrackBinding) {
+                    ForEach(viewModel.subtitleTracks) { track in
+                        Text(track.displayName).tag(track.index)
+                    }
+                }
+            }
+
+            Divider()
+
+            Toggle("終わったら次の動画へ", isOn: $settings.autoPlayNext)
+        } label: {
+            HStack(spacing: 4) {
+                if viewModel.selectedSubtitleIndex != VideoPlayerViewModel.MediaTrackChoice.offIndex {
+                    Image(systemName: "captions.bubble.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                Text(settings.rateLabel)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("再生速度・音声・字幕・自動再生")
+        .accessibilityLabel("再生の設定")
+    }
+
+    /// なぞっている位置のプレビュー札。画像が来るまでは時刻だけ出す
+    /// （出す/出さないを画像の有無で切り替えると、なぞるたびに札が点滅する）。
+    private var scrubPreviewCard: some View {
+        VStack(spacing: 4) {
+            Group {
+                if let image = scrubPreview.image {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Rectangle().fill(.black.opacity(0.55))
+                }
+            }
+            .frame(width: scrubPreviewWidth, height: scrubPreviewHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+            )
+
+            Text(formatTime(hoveredSeconds ?? 0))
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.white)
+        }
+        .padding(5)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .allowsHitTesting(false)
+    }
+
+    /// なぞっている位置の秒数（プレビュー画像の実際の位置ではなく、カーソルが指している位置）。
+    private var hoveredSeconds: Double? {
+        guard let fraction = scrubHoverFraction else { return nil }
+        return fraction * max(viewModel.duration, 0)
+    }
+
+    /// 札の中心をカーソルに合わせつつ、シークバーの端からはみ出さないように寄せる。
+    private func scrubPreviewOffsetX(for fraction: Double) -> CGFloat {
+        let cardWidth = scrubPreviewWidth + 10
+        let centered = seekBarWidth * fraction - cardWidth / 2
+        return min(max(centered, 0), max(seekBarWidth - cardWidth, 0))
+    }
+
+    private func handleSeekBarHover(_ phase: HoverPhase) {
+        switch phase {
+        case .active(let location):
+            // 操作系の表示維持は外側の onContinuousHover が既に担っている。
+            guard seekBarWidth > 0, viewModel.duration > minimumSliderDuration else { return }
+            let fraction = min(max(location.x / seekBarWidth, 0), 1)
+            scrubHoverFraction = fraction
+            scrubPreview.request(seconds: fraction * viewModel.duration)
+        case .ended:
+            scrubHoverFraction = nil
+            scrubPreview.cancel()
+        }
+    }
+
+    private var audioTrackBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.selectedAudioIndex },
+            set: { viewModel.selectAudioTrack(index: $0) }
+        )
+    }
+
+    private var subtitleTrackBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.selectedSubtitleIndex },
+            set: { viewModel.selectSubtitleTrack(index: $0) }
+        )
+    }
+
+    /// 速度の変更は ViewModel 経由。再生中のプレイヤーへ即座に効かせる必要がある。
+    private var rateBinding: Binding<Double> {
+        Binding(
+            get: { settings.rate },
+            set: { viewModel.applyRate($0) }
+        )
     }
 
     private var videoSelectionStrip: some View {
@@ -905,6 +1148,21 @@ struct VideoPlayerView: View {
             withAnimation(.easeInOut(duration: 0.22)) {
                 coordinator.isMiniPlayerActive = true
             }
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleShuffle, press: press) {
+            settings.isShuffleEnabled.toggle()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoCycleRepeat, press: press) {
+            settings.repeatMode = settings.repeatMode.next
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoRateDown, press: press) {
+            viewModel.stepRate(by: -1)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoRateUp, press: press) {
+            viewModel.stepRate(by: 1)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoTogglePictureInPicture, press: press) {
+            pictureInPicture.toggle()
             return .handled
         }
 

@@ -15,6 +15,7 @@ final class PlaybackCoordinator: ObservableObject {
     enum LibraryScope: Equatable {
         case album(UUID)
         case favorites
+        case history
         case trash
     }
 
@@ -36,7 +37,13 @@ final class PlaybackCoordinator: ObservableObject {
         case photos(playlist: [VideoItem], current: VideoItem)
     }
 
-    @Published var mode: Mode?
+    @Published var mode: Mode? {
+        didSet {
+            // 新しいプレイヤーは再生状態から始まる。前のプレイヤーの一時停止を持ち越さない。
+            isActivePlayerPlaying = true
+            refreshSleepBlocker()
+        }
+    }
     @Published private(set) var libraryReturnState: LibraryReturnState?
     /// 通常再生をIキーで右下に小さくたたみ、アルバム一覧を裏に表示している間 true。
     @Published var isMiniPlayerActive = false
@@ -53,6 +60,34 @@ final class PlaybackCoordinator: ObservableObject {
     var variantFinderHostSize: CGSize?
 
     var isPresenting: Bool { mode != nil }
+
+    // MARK: - 再生中のスリープ抑止
+
+    private let sleepBlocker = ScreenSleepBlocker(reason: "動画を再生中です")
+    /// いま開いているプレイヤーが実際に再生中か。プレイヤー側から setPlaybackActive で伝える。
+    private var isActivePlayerPlaying = true
+
+    /// 写真ビューアは自動で進まないので、開いているだけで画面を起こし続けない。
+    /// それ以外（通常再生・同時再生・差分切り替え・スライドショー・分割再生）は
+    /// 無操作でも映像が流れ続けるため、抑止の対象にする。
+    private static func blocksSleep(_ mode: Mode?) -> Bool {
+        switch mode {
+        case .none, .photos: return false
+        case .single, .multi, .variantSwitch, .slideshow, .splitPlay: return true
+        }
+    }
+
+    /// プレイヤーの再生／一時停止に追従させる。一時停止したまま離席したときに
+    /// 画面が点きっぱなしにならないよう、再生していない間は抑止を解く。
+    func setPlaybackActive(_ playing: Bool) {
+        guard isActivePlayerPlaying != playing else { return }
+        isActivePlayerPlaying = playing
+        refreshSleepBlocker()
+    }
+
+    private func refreshSleepBlocker() {
+        sleepBlocker.setActive(Self.blocksSleep(mode) && isActivePlayerPlaying)
+    }
 
     var isPlayingOverVariantFinder: Bool {
         guard variantFinderAlbumID != nil else { return false }
