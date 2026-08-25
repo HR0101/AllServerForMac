@@ -80,6 +80,7 @@ struct ContentView: View {
         .environmentObject(viewModel.remotePlaybackSession)
         .environmentObject(appSettings)
         .environmentObject(viewModel.variantFinder)
+        .environmentObject(viewModel.watchState)
         .focusedSceneValue(
             \.appMenuContext,
             dataManager.isStorageReady ? appMenuContext : nil
@@ -174,7 +175,9 @@ struct ContentView: View {
             VideoPlayerView(
                 videos: playlist,
                 currentVideo: current,
-                dataManager: dataManager
+                dataManager: dataManager,
+                watchState: viewModel.watchState,
+                settings: viewModel.playbackSettings
             )
                 .id(current.id)
         case .multi(let videos):
@@ -239,6 +242,12 @@ struct ContentView: View {
                             dataManager: dataManager
                         )
                             .navigationTitle("お気に入り")
+                    case .history:
+                        LibraryCategoryView(
+                            kind: .history,
+                            dataManager: dataManager
+                        )
+                            .navigationTitle("再生履歴")
                     case .trash:
                         LibraryCategoryView(
                             kind: .trash,
