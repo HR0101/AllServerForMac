@@ -15,6 +15,7 @@ struct FolderDetailView: View {
 
     @EnvironmentObject private var appSettings: AppSettings
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var watchState: WatchStateStore
 
     /// このフォルダ直下のメディアの選択。フォルダ画面はキーボード送りまでは持たず、
     /// クリック（⌘で追加）だけの軽い選択にとどめる。
@@ -49,6 +50,7 @@ struct FolderDetailView: View {
             videos: dataManager.videos,
             sortOrder: appSettings.sortOrder,
             sortReversed: appSettings.sortReversed,
+            lastPlayed: watchState.lastPlayed,
             metadata: { dataManager.fileMetadata(for: $0) }
         )
 
@@ -320,6 +322,7 @@ struct FolderContent {
         videos: [VideoItem],
         sortOrder: SortOrder,
         sortReversed: Bool,
+        lastPlayed: [UUID: Date],
         metadata: (VideoItem) -> VideoFileMetadata
     ) {
         guard let node else {
@@ -361,7 +364,7 @@ struct FolderContent {
 
         directMedia = (node.album?.videoIDs ?? [])
             .compactMap { itemByID[$0] }
-            .sorted(by: sortOrder, reversed: sortReversed, metadata: metadata)
+            .sorted(by: sortOrder, reversed: sortReversed, lastPlayed: lastPlayed, metadata: metadata)
     }
 
     /// ゴミ箱を除いた、そのノード配下の総メディア数。

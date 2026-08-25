@@ -57,6 +57,7 @@ struct AlbumDetailView: View {
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
+    @EnvironmentObject private var watchState: WatchStateStore
 
     /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
     /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
@@ -82,7 +83,7 @@ struct AlbumDetailView: View {
         return dataManager.videos
             .filter { memberIDs.contains($0.id) && !$0.isInTrash }
             .filtered(bySearch: searchText)
-            .sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed) { dataManager.fileMetadata(for: $0) }
+            .sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed, lastPlayed: watchState.lastPlayed) { dataManager.fileMetadata(for: $0) }
     }
 
     /// このアルバムの動画のみ（表示順）

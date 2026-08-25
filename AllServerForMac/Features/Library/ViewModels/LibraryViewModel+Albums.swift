@@ -250,6 +250,26 @@ extension LibraryViewModel {
 
     /// ゴミ箱を除いたお気に入り
     var favoriteVideos: [VideoItem] { videos.filter { $0.isFavorite && !$0.isInTrash } }
+
+    /// クライアント共有の保管庫（websync.json）側のお気に入りを取り込む。
+    ///
+    /// **保管庫が知っている項目にしか触らない**。全体を「正」として上書きすると、
+    /// websync.json を失った・消した時に Mac のお気に入りまで巻き添えで消える。
+    func applyFavoriteMarks(_ marks: [UUID: Bool]) {
+        guard !marks.isEmpty else { return }
+        var didChange = false
+        let updated = videos.map { item -> VideoItem in
+            // ゴミ箱の中身はお気に入りを持たない決まりなので、取り込みでも復活させない。
+            guard !item.isInTrash, let mark = marks[item.id], item.isFavorite != mark else { return item }
+            didChange = true
+            var next = item
+            next.isFavorite = mark
+            return next
+        }
+        guard didChange else { return }
+        videos = updated
+        saveData()
+    }
     /// ゴミ箱内のアイテム
     var trashedVideos: [VideoItem] { videos.filter { $0.isInTrash } }
 
@@ -268,6 +288,7 @@ extension LibraryViewModel {
             return updated
         }
         saveData()
+        favoriteChangeHandler?(Array(ids), shouldFavorite)
     }
 
     func moveToTrash(videoIDs: [UUID]) {
@@ -281,6 +302,8 @@ extension LibraryViewModel {
             return updated
         }
         saveData()
+        // ゴミ箱行きでお気に入りを外したことを共有しないと、他の端末から復活してしまう。
+        favoriteChangeHandler?(Array(ids), false)
     }
 
     func restoreFromTrash(videoIDs: [UUID]) {

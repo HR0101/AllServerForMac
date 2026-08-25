@@ -2,10 +2,11 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - お気に入り / ゴミ箱 カテゴリビュー
+// MARK: - お気に入り / 再生履歴 / ゴミ箱 カテゴリビュー
 struct LibraryCategoryView: View {
     enum Kind: Hashable {
         case favorites
+        case history
         case trash
     }
     let kind: Kind
@@ -13,6 +14,7 @@ struct LibraryCategoryView: View {
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
+    @EnvironmentObject private var watchState: WatchStateStore
 
     @State private var selectedVideoIDs = Set<UUID>()
     @State private var lastSelectedVideoID: UUID?
@@ -44,17 +46,37 @@ struct LibraryCategoryView: View {
     @State private var showBulkDeleteConfirmation = false
 
     private var isTrash: Bool { kind == .trash }
+    private var isHistory: Bool { kind == .history }
+
+    @State private var showClearHistoryAlert = false
 
     private var sourceItems: [VideoItem] {
         switch kind {
         case .favorites:
             return dataManager.favoriteVideos
+        case .history:
+            return historyItems
         case .trash:
             return dataManager.trashedVideos
         }
     }
+
+    /// 再生履歴に載っている順（新しい順）に並べた、いまもライブラリにある項目。
+    /// 履歴には削除済み・ゴミ箱行きの ID も残るので、ここで引き当てられたものだけを出す。
+    private var historyItems: [VideoItem] {
+        let itemByID = Dictionary(
+            dataManager.videos.lazy.filter { !$0.isInTrash }.map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        return watchState.historyOrder.compactMap { itemByID[$0] }
+    }
+
     private var displayedItems: [VideoItem] {
-        sourceItems.filtered(bySearch: searchText).sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed) { dataManager.fileMetadata(for: $0) }
+        let filtered = sourceItems.filtered(bySearch: searchText)
+        // 履歴は「再生した順」そのものが中身なので並べ替えない
+        // （名前順に並べ替えた履歴には意味がない）。
+        guard !isHistory else { return filtered }
+        return filtered.sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed, lastPlayed: watchState.lastPlayed) { dataManager.fileMetadata(for: $0) }
     }
     private var selectedVideoItems: [VideoItem] {
         displayedItems.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
@@ -111,7 +133,7 @@ struct LibraryCategoryView: View {
                 }
             }
             Divider()
-            MediaGridControlBar(dataManager: dataManager)
+            MediaGridControlBar(dataManager: dataManager, showsSortControls: !isHistory)
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
@@ -131,6 +153,14 @@ struct LibraryCategoryView: View {
                     }
                 }
             } else {
+                if isHistory, !items.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(role: .destructive) { showClearHistoryAlert = true } label: {
+                            Label("履歴を消去", systemImage: "clock.badge.xmark")
+                        }
+                        .help("再生履歴を空にします（視聴位置や動画そのものは消えません）")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     if !videoItems.isEmpty {
                         Button { startRandomPlayback(from: videoItems) } label: {
@@ -211,6 +241,15 @@ struct LibraryCategoryView: View {
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text("完全に削除するとアプリ管理内のファイルは復元できません．Macのゴミ箱へ移動するとFinderから復元できます．")
+        }
+        .confirmationDialog("再生履歴を消去しますか？", isPresented: $showClearHistoryAlert, titleVisibility: .visible) {
+            Button("消去", role: .destructive) {
+                watchState.clearHistory()
+                selectedVideoIDs.removeAll()
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("動画そのものと「続きから」の視聴位置は消えません。ブラウザや iPhone の履歴からも消えます。")
         }
         .alert("エクスポート完了", isPresented: $showExportResultAlert) {
             Button("OK", role: .cancel) { }
@@ -332,7 +371,11 @@ struct LibraryCategoryView: View {
                                 newAlbumNameForMove = ""
                                 showMoveToNewAlbumAlert = true
                             },
-                            affectedItems: menuTargets(for: video, in: items)
+                            affectedItems: menuTargets(for: video, in: items),
+                            onRemoveFromHistory: isHistory ? {
+                                watchState.removeHistory(videoIDs: targetIDs(for: video))
+                                selectedVideoIDs.removeAll()
+                            } : nil
                         )
                         .id(video.id)
                     }
@@ -574,7 +617,7 @@ struct LibraryCategoryView: View {
     @MainActor
     private func restoreReturnState(proxy: ScrollViewProxy) async {
         guard let state = coordinator.libraryReturnState else { return }
-        let scope: PlaybackCoordinator.LibraryScope = isTrash ? .trash : .favorites
+        let scope: PlaybackCoordinator.LibraryScope = categoryScope
         guard state.scope == scope else {
             coordinator.clearLibraryReturnState()
             return
@@ -616,7 +659,7 @@ struct LibraryCategoryView: View {
             restoredSelection = selectedVideoIDs
         }
 
-        let scope: PlaybackCoordinator.LibraryScope = isTrash ? .trash : .favorites
+        let scope: PlaybackCoordinator.LibraryScope = categoryScope
         coordinator.rememberLibraryState(
             PlaybackCoordinator.LibraryReturnState(
                 scope: scope,
@@ -694,12 +737,44 @@ struct LibraryCategoryView: View {
         }
     }
 
+    private var categoryScope: PlaybackCoordinator.LibraryScope {
+        switch kind {
+        case .favorites: return .favorites
+        case .history: return .history
+        case .trash: return .trash
+        }
+    }
+
     private var emptyState: some View {
         ContentUnavailableView(
-            isTrash ? "ゴミ箱は空です" : "お気に入りはありません",
-            systemImage: isTrash ? "trash" : "heart",
-            description: Text(isTrash ? "削除した項目はここに移動します" : "グリッドの右クリックメニューからお気に入りに追加できます")
+            emptyStateTitle,
+            systemImage: emptyStateSymbol,
+            description: Text(emptyStateDescription)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyStateTitle: String {
+        switch kind {
+        case .favorites: return "お気に入りはありません"
+        case .history: return "再生履歴はありません"
+        case .trash: return "ゴミ箱は空です"
+        }
+    }
+
+    private var emptyStateSymbol: String {
+        switch kind {
+        case .favorites: return "heart"
+        case .history: return "clock.arrow.circlepath"
+        case .trash: return "trash"
+        }
+    }
+
+    private var emptyStateDescription: String {
+        switch kind {
+        case .favorites: return "グリッドの右クリックメニューからお気に入りに追加できます"
+        case .history: return "再生した動画がここに新しい順で並びます（ブラウザや iPhone での再生も含みます）"
+        case .trash: return "削除した項目はここに移動します"
+        }
     }
 }
