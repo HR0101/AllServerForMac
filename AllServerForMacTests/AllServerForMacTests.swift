@@ -189,4 +189,113 @@ struct AllServerForMacTests {
     #expect(fileManager.fileExists(atPath: blockedURL.path))
     #expect(viewModel.mediaDeletionNotice != nil)
   }
+
+  @Test
+  func estimatesPositiveContentOffset() throws {
+    let shared = makeHashSequence(count: 120, seed: 100)
+    let candidate = makeHashSequence(count: 16, seed: 200)
+      + shared
+      + makeHashSequence(count: 8, seed: 300)
+
+    let estimate = try #require(
+      VariantContentAligner.estimateOffset(
+        reference: shared,
+        candidate: candidate,
+        sampleInterval: 1
+      )
+    )
+
+    #expect(estimate.offset == 16)
+    #expect(estimate.score == 0)
+    #expect(estimate.overlapDuration == 120)
+  }
+
+  @Test
+  func estimatesNegativeContentOffset() throws {
+    let shared = makeHashSequence(count: 120, seed: 400)
+    let reference = makeHashSequence(count: 12, seed: 500)
+      + shared
+
+    let estimate = try #require(
+      VariantContentAligner.estimateOffset(
+        reference: reference,
+        candidate: shared,
+        sampleInterval: 1
+      )
+    )
+
+    #expect(estimate.offset == -12)
+    #expect(estimate.score == 0)
+    #expect(estimate.overlapDuration == 120)
+  }
+
+  @Test
+  func rejectsContentSignaturesThatAreTooShort() {
+    let hashes = makeHashSequence(count: 9, seed: 600)
+
+    let estimate = VariantContentAligner.estimateOffset(
+      reference: hashes,
+      candidate: hashes,
+      sampleInterval: 1
+    )
+
+    #expect(estimate == nil)
+  }
+
+  @Test
+  func matchesSimilarPointsAcrossInsertedScene() throws {
+    let shared = makeHashSequence(count: 120, seed: 700)
+    let candidate = makeHashSequence(count: 16, seed: 800)
+      + Array(shared.prefix(50))
+      + makeHashSequence(count: 20, seed: 900)
+      + Array(shared.dropFirst(50))
+      + makeHashSequence(count: 8, seed: 1_000)
+
+    let match = try #require(
+      VariantContentAligner.matchTimeline(
+        reference: shared,
+        candidate: candidate,
+        sampleInterval: 1
+      )
+    )
+
+    #expect(match.mapping.videoTime(forLogicalTime: 20) == 36)
+    #expect(match.mapping.videoTime(forLogicalTime: 80) == 116)
+    #expect(match.mapping.logicalTime(forVideoTime: 116) == 80)
+    #expect(match.mapping.anchors.count >= 100)
+    #expect(match.score == 0)
+  }
+
+  @Test
+  func discoversSharedSectionInsideDifferentLengthVideos() throws {
+    let shared = makeHashSequence(count: 40, seed: 1_100)
+    let longerVideo = makeHashSequence(count: 10, seed: 1_200)
+      + shared
+      + makeHashSequence(count: 20, seed: 1_300)
+
+    let match = try #require(
+      VariantContentAligner.discoveryMatch(
+        reference: shared,
+        candidate: longerVideo
+      )
+    )
+
+    #expect(match.mapping.anchors.count == 40)
+    #expect(match.mapping.videoTime(forLogicalTime: 0.5) == 20.5)
+    #expect(match.score == 0)
+  }
+
+  private func makeHashSequence(
+    count: Int,
+    seed: UInt64
+  ) -> [PerceptualHash] {
+    var state = seed
+    return (0..<count).map { _ in
+      state &+= 0x9E3779B97F4A7C15
+      var value = state
+      value = (value ^ (value >> 30)) &* 0xBF58476D1CE4E5B9
+      value = (value ^ (value >> 27)) &* 0x94D049BB133111EB
+      return PerceptualHash(bits: value ^ (value >> 31))
+    }
+  }
 }

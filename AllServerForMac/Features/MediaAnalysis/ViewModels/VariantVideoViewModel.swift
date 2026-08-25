@@ -1,8 +1,34 @@
 import Combine
 import Foundation
 
+private struct VariantPartialMatchInput: Sendable {
+    let id: UUID
+    let duration: TimeInterval
+    let signature: [PerceptualHash]
+}
+
+private struct VariantPartialMatchRecord: Sendable {
+    let firstID: UUID
+    let secondID: UUID
+    let sharedDuration: TimeInterval
+    let score: Double
+}
+
 @MainActor
 final class VariantVideoViewModel: ObservableObject {
+    enum ScanPhase: Equatable {
+        case idle
+        case extractingFrames
+        case comparingCandidates
+    }
+
+    enum SearchMode: String, CaseIterable, Identifiable {
+        case normal
+        case partial
+
+        var id: Self { self }
+    }
+
     struct Group: Identifiable {
         let id = UUID()
         var items: [VideoItem]
@@ -12,6 +38,12 @@ final class VariantVideoViewModel: ObservableObject {
         var selectedIDs: Set<UUID>
         /// 何を根拠にまとまったのか（画面に出して、しきい値の調整の手がかりにする）。
         var stats: VariantVideoDetector.GroupStats?
+        /// 強制差分候補では，動画内で一致した区間の長さを表示する．
+        var sharedDuration: TimeInterval? = nil
+        /// 強制差分候補の照合スコア．小さいほど映像が近い．
+        var partialMatchScore: Double? = nil
+        /// 候補をどちらの位置合わせ方式で再生するか．
+        var alignmentMode: VariantPlaybackAlignmentMode = .sameTime
 
         var selectedItems: [VideoItem] { items.filter { selectedIDs.contains($0.id) } }
     }
@@ -24,6 +56,10 @@ final class VariantVideoViewModel: ObservableObject {
     @Published private(set) var unreadableCount = 0
     /// 前回までに作った指紋をそのまま使えた本数（＝フレームを起こし直さずに済んだ本数）。
     @Published private(set) var reusedCount = 0
+    @Published private(set) var searchMode: SearchMode = .normal
+    @Published private(set) var scanPhase: ScanPhase = .idle
+    @Published private(set) var comparedPairCount = 0
+    @Published private(set) var totalPairCount = 0
 
     /// 尺の一致とみなす幅（秒）。差分書き出しは同じタイムラインから出すのでフレーム単位で揃うが、
     /// 書き出し設定が違うと末尾が数フレームずれることがあるので、少しだけ余裕を持たせる。
@@ -47,14 +83,25 @@ final class VariantVideoViewModel: ObservableObject {
         didSet { rebuildGroups() }
     }
 
+    /// 強制差分候補として扱う最小の尺差．通常差分と同じ動画を重複表示しないために使う．
+    @Published var minimumPartialDurationDifference: Double = 5 {
+        didSet {
+            guard !isScanning else { return }
+            rebuildGroups()
+        }
+    }
+
     /// 指紋は尺のしきい値を変えても使い回せるので、項目ごとに取っておく。
     private var fingerprints: [UUID: VariantVideoDetector.Fingerprint] = [:]
+    /// 強制差分候補用の，動画全体を2秒間隔で読んだ時間列指紋．
+    private var partialSignatures: [UUID: [PerceptualHash]] = [:]
     private var buckets: [[VideoItem]] = []
     private var scanTask: Task<Void, Never>?
+    private var partialMatchTask: Task<Void, Never>?
     private var lastScanInput: ScanInput?
     /// 最後まで探し終えた顔ぶれ。同じものを渡されたら結果をそのまま見せる。
     /// 途中で中止したときは埋めないので、次に開いたときに続きから進む。
-    private var completedScanKey: [UUID]?
+    private var completedScanKeys: [SearchMode: [UUID]] = [:]
     /// 前回までに作った指紋の保存先。画面を閉じて再生して戻ってきても作り直さずに済ませる。
     private var signatureStore: VariantSignatureStore?
 
@@ -70,7 +117,16 @@ final class VariantVideoViewModel: ObservableObject {
     private static let signatureConcurrency = 3
 
     var progress: Double {
-        totalCount == 0 ? 0 : Double(scannedCount) / Double(totalCount)
+        switch scanPhase {
+        case .idle:
+            return 0
+        case .extractingFrames:
+            return totalCount == 0 ? 0 : Double(scannedCount) / Double(totalCount)
+        case .comparingCandidates:
+            return totalPairCount == 0
+                ? 0
+                : Double(comparedPairCount) / Double(totalPairCount)
+        }
     }
 
     var totalGroupedCount: Int { groups.reduce(0) { $0 + $1.items.count } }
@@ -79,11 +135,28 @@ final class VariantVideoViewModel: ObservableObject {
     ///
     /// 再生に入るとライブラリ画面ごと差し替わり、戻ってきたときにこの画面は作り直される。
     /// そのたびに探し直すと、選び直した組み合わせまで消えてしまう。
-    func scan(items: [VideoItem], dataManager: LibraryViewModel) {
+    func scan(
+        items: [VideoItem],
+        dataManager: LibraryViewModel,
+        initialSearchMode: SearchMode? = nil
+    ) {
+        if let initialSearchMode, initialSearchMode != searchMode {
+            scanTask?.cancel()
+            partialMatchTask?.cancel()
+            scanTask = nil
+            partialMatchTask = nil
+            isScanning = false
+            scanPhase = .idle
+            searchMode = initialSearchMode
+            groups = []
+        }
         guard !isScanning else { return }
 
         let videos = items.filter { $0.mediaType == .video && !$0.isInTrash }
-        if completedScanKey == videos.map(\.id) { return }
+        if completedScanKeys[searchMode] == videos.map(\.id) {
+            rebuildGroups()
+            return
+        }
         var urls: [UUID: URL] = [:]
         var stamps: [UUID: VariantSignatureStore.Stamp] = [:]
         for video in videos {
@@ -103,6 +176,24 @@ final class VariantVideoViewModel: ObservableObject {
         runScan()
     }
 
+    func setSearchMode(_ mode: SearchMode) {
+        guard searchMode != mode else { return }
+        scanTask?.cancel()
+        partialMatchTask?.cancel()
+        scanTask = nil
+        partialMatchTask = nil
+        isScanning = false
+        scanPhase = .idle
+        searchMode = mode
+        groups = []
+        guard let input = lastScanInput else { return }
+        if completedScanKeys[mode] == input.items.map(\.id) {
+            rebuildGroups()
+        } else {
+            runScan()
+        }
+    }
+
     private func rescanIfIdle() {
         guard !isScanning, lastScanInput != nil else { return }
         runScan()
@@ -111,6 +202,29 @@ final class VariantVideoViewModel: ObservableObject {
     private func runScan() {
         guard let input = lastScanInput else { return }
         scanTask?.cancel()
+        partialMatchTask?.cancel()
+        partialMatchTask = nil
+
+        switch searchMode {
+        case .normal:
+            runNormalScan(input)
+        case .partial:
+            runPartialScan(input)
+        }
+    }
+
+    private func resetProgress() {
+        unreadableCount = 0
+        reusedCount = 0
+        scannedCount = 0
+        totalCount = 0
+        comparedPairCount = 0
+        totalPairCount = 0
+        scanPhase = .idle
+    }
+
+    private func runNormalScan(_ input: ScanInput) {
+        let mode = SearchMode.normal
 
         // まず尺で束ねる。ここで大半が落ちるので、重いフレーム展開はごく一部で済む。
         buckets = VariantVideoDetector.durationBuckets(of: input.items, tolerance: durationTolerance)
@@ -118,12 +232,10 @@ final class VariantVideoViewModel: ObservableObject {
 
         // ここで groups を空にしない。指紋がキャッシュに残っていれば直後に組み直せるので、
         // 空にすると「進捗画面が一瞬出て、すぐ一覧に戻る」というちらつきになるだけ。
-        unreadableCount = 0
-        reusedCount = 0
-        scannedCount = 0
-        totalCount = 0
+        resetProgress()
 
         isScanning = true
+        scanPhase = .extractingFrames
         scanTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
@@ -140,9 +252,37 @@ final class VariantVideoViewModel: ObservableObject {
             }
             guard !Task.isCancelled else { return }
             self.isScanning = false
+            self.scanPhase = .idle
             self.rebuildGroups()
-            self.completedScanKey = input.items.map(\.id)
+            self.completedScanKeys[mode] = input.items.map(\.id)
             await self.signatureStore?.save()
+        }
+    }
+
+    private func runPartialScan(_ input: ScanInput) {
+        let mode = SearchMode.partial
+        buckets = []
+        resetProgress()
+        let missing = input.items.filter { partialSignatures[$0.id] == nil }
+        reusedCount = input.items.count - missing.count
+        totalCount = missing.count
+
+        guard !missing.isEmpty else {
+            completedScanKeys[mode] = input.items.map(\.id)
+            rebuildGroups()
+            return
+        }
+
+        isScanning = true
+        scanPhase = .extractingFrames
+        scanTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.buildPartialSignatures(for: missing, input: input)
+            guard !Task.isCancelled else { return }
+            self.isScanning = false
+            self.scanPhase = .idle
+            self.completedScanKeys[mode] = input.items.map(\.id)
+            self.rebuildGroups()
         }
     }
 
@@ -212,17 +352,66 @@ final class VariantVideoViewModel: ObservableObject {
         }
     }
 
+    private func buildPartialSignatures(for pending: [VideoItem], input: ScanInput) async {
+        var index = 0
+        while index < pending.count {
+            if Task.isCancelled { return }
+            let slice = pending[index..<min(index + Self.signatureConcurrency, pending.count)]
+            index += slice.count
+
+            let results = await withTaskGroup(of: (UUID, [PerceptualHash]?).self) { taskGroup in
+                for item in slice {
+                    let id = item.id
+                    let duration = item.duration
+                    let url = input.urls[id]
+                    taskGroup.addTask(priority: .utility) {
+                        guard let url else { return (id, nil) }
+                        return (
+                            id,
+                            await VariantContentAligner.discoverySignature(
+                                forVideoAt: url,
+                                duration: duration
+                            )
+                        )
+                    }
+                }
+                var collected: [(UUID, [PerceptualHash]?)] = []
+                for await result in taskGroup { collected.append(result) }
+                return collected
+            }
+
+            guard !Task.isCancelled else { return }
+            for (id, signature) in results {
+                if let signature {
+                    partialSignatures[id] = signature
+                } else {
+                    unreadableCount += 1
+                }
+            }
+            scannedCount = min(index, pending.count)
+        }
+    }
+
     /// 「探し直す」ボタン用。取り込み直したファイルを拾わせたいときに使う。
     func rescan() {
         guard !isScanning, lastScanInput != nil else { return }
-        completedScanKey = nil
+        completedScanKeys[searchMode] = nil
+        switch searchMode {
+        case .normal:
+            fingerprints.removeAll()
+        case .partial:
+            partialSignatures.removeAll()
+        }
         runScan()
     }
 
     func cancelScan() {
         scanTask?.cancel()
+        partialMatchTask?.cancel()
         scanTask = nil
+        partialMatchTask = nil
         isScanning = false
+        scanPhase = .idle
         // 途中まで作った指紋も次回のために残す。
         if let store = signatureStore {
             Task { await store.save() }
@@ -250,7 +439,20 @@ final class VariantVideoViewModel: ObservableObject {
             uniquingKeysWith: { current, _ in current }
         )
 
-        groups = buckets.flatMap { bucket in
+        switch searchMode {
+        case .normal:
+            partialMatchTask?.cancel()
+            partialMatchTask = nil
+            groups = normalGroups(previousSelections: previousSelections)
+        case .partial:
+            schedulePartialGroupRebuild(previousSelections: previousSelections)
+        }
+    }
+
+    private func normalGroups(
+        previousSelections: [Set<UUID>: Set<UUID>]
+    ) -> [Group] {
+        buckets.flatMap { bucket in
             VariantVideoDetector.groups(
                 in: bucket,
                 fingerprints: fingerprints,
@@ -268,5 +470,133 @@ final class VariantVideoViewModel: ObservableObject {
         }
         // 本数の多い束＝見比べがいのある束を上に。
         .sorted { $0.items.count > $1.items.count }
+    }
+
+    private func schedulePartialGroupRebuild(
+        previousSelections: [Set<UUID>: Set<UUID>]
+    ) {
+        partialMatchTask?.cancel()
+        guard let items = lastScanInput?.items, items.count > 1 else {
+            groups = []
+            isScanning = false
+            scanPhase = .idle
+            return
+        }
+
+        let inputs = items.compactMap { item -> VariantPartialMatchInput? in
+            guard let signature = partialSignatures[item.id] else { return nil }
+            return VariantPartialMatchInput(
+                id: item.id,
+                duration: item.duration,
+                signature: signature
+            )
+        }
+        guard inputs.count > 1 else {
+            groups = []
+            isScanning = false
+            scanPhase = .idle
+            return
+        }
+
+        let minimumDurationDifference = minimumPartialDurationDifference
+        let progressUpdates = AsyncStream.makeStream(
+            of: Int.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        let worker = Task.detached(priority: .utility) {
+            defer { progressUpdates.continuation.finish() }
+            return Self.partialMatchRecords(
+                inputs: inputs,
+                minimumDurationDifference: minimumDurationDifference,
+                reportProgress: { completedCount in
+                    progressUpdates.continuation.yield(completedCount)
+                }
+            )
+        }
+        comparedPairCount = 0
+        totalPairCount = inputs.count * (inputs.count - 1) / 2
+        isScanning = true
+        scanPhase = .comparingCandidates
+        partialMatchTask = Task { @MainActor [weak self] in
+            let records: [VariantPartialMatchRecord] = await withTaskCancellationHandler {
+                for await completedCount in progressUpdates.stream {
+                    guard !Task.isCancelled else { break }
+                    self?.comparedPairCount = completedCount
+                }
+                return await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  self.searchMode == .partial else { return }
+
+            let itemsByID = Dictionary(
+                items.map { ($0.id, $0) },
+                uniquingKeysWith: { current, _ in current }
+            )
+            self.groups = records.compactMap { record in
+                guard let first = itemsByID[record.firstID],
+                      let second = itemsByID[record.secondID] else { return nil }
+                let ids = Set([first.id, second.id])
+                return Group(
+                    items: [first, second],
+                    duration: min(first.duration, second.duration),
+                    selectedIDs: previousSelections[ids] ?? ids,
+                    stats: nil,
+                    sharedDuration: record.sharedDuration,
+                    partialMatchScore: record.score,
+                    alignmentMode: .content
+                )
+            }
+            self.isScanning = false
+            self.scanPhase = .idle
+            self.partialMatchTask = nil
+        }
+    }
+
+    nonisolated private static func partialMatchRecords(
+        inputs: [VariantPartialMatchInput],
+        minimumDurationDifference: TimeInterval,
+        reportProgress: @Sendable (Int) -> Void
+    ) -> [VariantPartialMatchRecord] {
+        guard inputs.count > 1 else { return [] }
+        var matches: [VariantPartialMatchRecord] = []
+        var completedCount = 0
+
+        for firstIndex in 0..<(inputs.count - 1) {
+            if Task.isCancelled { return [] }
+            let first = inputs[firstIndex]
+            for secondIndex in (firstIndex + 1)..<inputs.count {
+                if Task.isCancelled { return [] }
+                let second = inputs[secondIndex]
+                let durationDifference = abs(first.duration - second.duration)
+                if durationDifference >= minimumDurationDifference,
+                   let match = VariantContentAligner.discoveryMatch(
+                        reference: first.signature,
+                        candidate: second.signature
+                   ),
+                   let firstAnchor = match.mapping.anchors.first,
+                   let lastAnchor = match.mapping.anchors.last {
+                    matches.append(
+                        VariantPartialMatchRecord(
+                            firstID: first.id,
+                            secondID: second.id,
+                            sharedDuration: lastAnchor.logicalTime - firstAnchor.logicalTime,
+                            score: match.score
+                        )
+                    )
+                }
+                completedCount += 1
+                reportProgress(completedCount)
+            }
+        }
+
+        return matches.sorted {
+            if $0.sharedDuration == $1.sharedDuration {
+                return $0.score < $1.score
+            }
+            return $0.sharedDuration > $1.sharedDuration
+        }
     }
 }

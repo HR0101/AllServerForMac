@@ -158,6 +158,12 @@ struct LibraryCategoryView: View {
                         .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
                     }
                     ToolbarItem(placement: .primaryAction) {
+                        Button { startContentAlignedVariantPlayback(selectedItems) } label: {
+                            Label("類似点で合わせる", systemImage: "link")
+                        }
+                        .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
+                    }
+                    ToolbarItem(placement: .primaryAction) {
                         Button { startSlideshowPlayback(selectedItems) } label: {
                             Label("スライドショー", systemImage: "play.square.stack")
                         }
@@ -639,6 +645,12 @@ struct LibraryCategoryView: View {
         guard videos.count >= 2 else { return }
         rememberGridState()
         coordinator.playVariantSwitch(videos)
+    }
+
+    private func startContentAlignedVariantPlayback(_ videos: [VideoItem]) {
+        guard videos.count >= 2 else { return }
+        rememberGridState()
+        coordinator.playContentAlignedVariantSwitch(videos)
     }
 
     private func startSlideshowPlayback(_ videos: [VideoItem]) {

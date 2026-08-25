@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+enum VariantPlaybackAlignmentMode: Equatable {
+  case sameTime
+  case content
+}
+
 // MARK: - Playback coordinator
 //
 // 元アプリ同様、再生中はウィンドウ全体をプレイヤーに差し替える（シートではなく全画面）。
@@ -25,7 +30,7 @@ final class PlaybackCoordinator: ObservableObject {
     enum Mode: Equatable {
         case single(playlist: [VideoItem], current: VideoItem)
         case multi([VideoItem])
-        case variantSwitch([VideoItem])
+        case variantSwitch([VideoItem], alignment: VariantPlaybackAlignmentMode)
         case slideshow([VideoItem])
         case splitPlay(video: VideoItem, splitCount: Int)
         case photos(playlist: [VideoItem], current: VideoItem)
@@ -41,6 +46,8 @@ final class PlaybackCoordinator: ObservableObject {
     /// 探索を開いた時点の表示順。実体は ContentView が現在のライブラリから引き直すので、
     /// 再生中に削除した動画は背後の探索画面にも反映される。
     @Published private(set) var variantFinderItemIDs: [UUID] = []
+    /// 探索画面を開いたときに最初に表示する検索方式．
+    @Published private(set) var variantFinderAlignmentMode: VariantPlaybackAlignmentMode = .sameTime
 
     /// 一覧を開いたときのウィンドウの大きさ。探索オーバーレイをそこへ合わせるために控える。
     var variantFinderHostSize: CGSize?
@@ -53,15 +60,22 @@ final class PlaybackCoordinator: ObservableObject {
         return false
     }
 
-    func openVariantFinder(albumID: UUID, itemIDs: [UUID], hostSize: CGSize?) {
+    func openVariantFinder(
+        albumID: UUID,
+        itemIDs: [UUID],
+        hostSize: CGSize?,
+        alignmentMode: VariantPlaybackAlignmentMode = .sameTime
+    ) {
         variantFinderHostSize = hostSize ?? variantFinderHostSize
         variantFinderItemIDs = itemIDs
+        variantFinderAlignmentMode = alignmentMode
         variantFinderAlbumID = albumID
     }
 
     func closeVariantFinder() {
         variantFinderAlbumID = nil
         variantFinderItemIDs = []
+        variantFinderAlignmentMode = .sameTime
         variantFinderHostSize = nil
     }
 
@@ -97,7 +111,15 @@ final class PlaybackCoordinator: ObservableObject {
         let items = videos.filter { $0.mediaType == .video }
         guard items.count >= 2 else { return }
         isMiniPlayerActive = false
-        mode = .variantSwitch(Array(items.prefix(9)))
+        mode = .variantSwitch(Array(items.prefix(9)), alignment: .sameTime)
+    }
+
+    /// 尺が異なる動画の共通場面を探し，動画ごとの開始位置を補正して差分再生する．
+    func playContentAlignedVariantSwitch(_ videos: [VideoItem]) {
+        let items = videos.filter { $0.mediaType == .video }
+        guard items.count >= 2 else { return }
+        isMiniPlayerActive = false
+        mode = .variantSwitch(Array(items.prefix(9)), alignment: .content)
     }
 
     /// スライドショー（2本以上）
