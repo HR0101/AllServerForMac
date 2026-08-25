@@ -4,6 +4,7 @@ import Foundation
 enum NavigationSelection: Hashable {
   case home
   case favorites
+  case history
   case trash
   case album(UUID)
   /// アルバム名の "/" 区切りで表現されるフォルダ。実体を持たないためIDではなく

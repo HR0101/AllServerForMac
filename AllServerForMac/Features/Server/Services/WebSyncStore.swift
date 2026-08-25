@@ -148,7 +148,40 @@ final class WebSyncStore: @unchecked Sendable {
             doc = merged
             let data = encode(merged)
             save(data)
+            // Mac アプリ本体の一覧・プレイヤーへ「外から書き換わった」ことを伝える。
+            // 自分（Mac 側）の書き込みでは流さないので、通知でループしない。
+            NotificationCenter.default.post(name: Self.didChangeExternallyNotification, object: nil)
             return data
+        }
+    }
+
+    // MARK: - Mac アプリ本体からの読み書き
+    //
+    // ブラウザ UI・iOS・Android が /sync 越しに使っているのと同じ保管庫を、
+    // Mac アプリ自身も直接使うための入口。HTTP 側の merge とまったく同じキューに
+    // 乗せるので、再生中の Mac と外部クライアントの PUT が混ざっても壊れない。
+
+    /// 外部クライアントの PUT で中身が変わったときに流れる通知（`merge` からのみ）。
+    static let didChangeExternallyNotification = Notification.Name("WebSyncStoreDidChangeExternally")
+
+    /// Mac アプリ本体が読むための型付きスナップショット。
+    func snapshot() -> SyncDoc {
+        return queue.sync { doc }
+    }
+
+    /// Mac アプリ本体からの書き込み。上限の適用と保存まで含めてキューの中で完結させる。
+    /// 呼び出し側（メインスレッド）を待たせないよう非同期で流す。
+    func updateLocally(_ mutate: @escaping (inout SyncDoc) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let now = Date().timeIntervalSince1970 * 1000
+            var updated = self.doc
+            mutate(&updated)
+            self.applyLimits(&updated, now: now)
+            updated.schemaVersion = 1
+            updated.updatedAt = now
+            self.doc = updated
+            self.save(self.encode(updated))
         }
     }
 
