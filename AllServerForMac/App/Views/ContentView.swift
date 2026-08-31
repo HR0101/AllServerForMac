@@ -254,6 +254,8 @@ struct ContentView: View {
                             dataManager: dataManager
                         )
                             .navigationTitle("ゴミ箱")
+                    case .sceneExtraction:
+                        SceneExtractionView(viewModel: viewModel.sceneExtraction)
                     case .album(let albumID):
                         if let album = dataManager.albums.first(
                             where: { $0.id == albumID }

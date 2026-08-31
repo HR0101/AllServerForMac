@@ -27,6 +27,8 @@ final class AppViewModel: ObservableObject {
   let watchState: WatchStateStore
   /// 自動再生・リピート・シャッフル・再生速度（端末ごとの好みなので同期しない）。
   let playbackSettings = PlaybackSettings()
+  /// シーン抽出画面の再生位置，解析結果，GTラベルを画面切替後も保持します．
+  let sceneExtraction = SceneExtractionViewModel()
 
   private var cancellables = Set<AnyCancellable>()
 
