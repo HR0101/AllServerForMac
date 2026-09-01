@@ -266,6 +266,7 @@ struct SceneExtractionTests {
     )
     var settings = AnalysisSettings()
     settings.clipDuration = 2
+    settings.peakLeadTime = 1
     settings.targetFramesPerSecond = 24
     settings.targetFrameCount = 49
     settings.includesAudio = true
