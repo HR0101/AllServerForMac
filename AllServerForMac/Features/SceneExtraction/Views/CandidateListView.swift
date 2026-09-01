@@ -8,10 +8,29 @@ struct CandidateListView: View {
   let canExport: Bool
   let onSelect: (CandidateSegment) -> Void
   let onPreview: (CandidateSegment) -> Void
-  let onLabel: (CandidateLabel, UUID) -> Void
+  let onReview: (CandidateLabel, UUID) -> Void
   let onUpdateStart: (Double, UUID) -> Void
   let onUpdateEnd: (Double, UUID) -> Void
   let onExport: (CandidateSegment) -> Void
+  @FocusState private var isReviewFocused: Bool
+
+  private var sortedCandidates: [CandidateSegment] {
+    candidates.sorted { $0.score > $1.score }
+  }
+
+  private var selectedCandidate: CandidateSegment? {
+    guard let selectedCandidateID else { return sortedCandidates.first }
+    return sortedCandidates.first { $0.id == selectedCandidateID }
+  }
+
+  private var selectedIndex: Int? {
+    guard let selectedCandidate else { return nil }
+    return sortedCandidates.firstIndex { $0.id == selectedCandidate.id }
+  }
+
+  private var reviewedCount: Int {
+    candidates.filter { $0.userLabel != nil }.count
+  }
 
   var body: some View {
     GroupBox("候補区間") {
@@ -22,12 +41,84 @@ struct CandidateListView: View {
           description: Text("解析後の候補または手動GTがここに表示されます．")
         )
       } else {
-        ScrollView {
-          LazyVStack(spacing: 8) {
-            ForEach(candidates.sorted { $0.score > $1.score }) { candidate in
-              candidateRow(candidate)
-            }
+        VStack(spacing: 10) {
+          quickReviewBar
+          Divider()
+          candidateScrollView
+        }
+      }
+    }
+    .focusable()
+    .focusEffectDisabled()
+    .focused($isReviewFocused)
+    .onKeyPress(phases: .down, action: handleReviewKey)
+    .onAppear {
+      isReviewFocused = true
+    }
+  }
+
+  private var quickReviewBar: some View {
+    HStack(spacing: 10) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(positionText)
+          .font(.headline.monospacedDigit())
+        Text("判定済み \(reviewedCount)／\(candidates.count)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      .frame(minWidth: 105, alignment: .leading)
+
+      Button {
+        moveSelection(by: -1)
+        isReviewFocused = true
+      } label: {
+        Label("前へ", systemImage: "chevron.left")
+      }
+      .disabled(!canMove(by: -1))
+
+      Button {
+        if let selectedCandidate {
+          onPreview(selectedCandidate)
+        }
+        isReviewFocused = true
+      } label: {
+        Label("プレビュー", systemImage: "play.fill")
+      }
+
+      Spacer(minLength: 8)
+
+      if let selectedCandidate {
+        quickLabelButton(.accepted, candidate: selectedCandidate, shortcut: "1")
+        quickLabelButton(.uncertain, candidate: selectedCandidate, shortcut: "2")
+        quickLabelButton(.rejected, candidate: selectedCandidate, shortcut: "3")
+      }
+
+      Spacer(minLength: 8)
+
+      Button {
+        moveSelection(by: 1)
+        isReviewFocused = true
+      } label: {
+        Label("次へ", systemImage: "chevron.right")
+      }
+      .disabled(!canMove(by: 1))
+    }
+  }
+
+  private var candidateScrollView: some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        LazyVStack(spacing: 8) {
+          ForEach(sortedCandidates) { candidate in
+            candidateRow(candidate)
+              .id(candidate.id)
           }
+        }
+      }
+      .onChange(of: selectedCandidateID) { _, newID in
+        guard let newID else { return }
+        withAnimation(.easeOut(duration: 0.18)) {
+          proxy.scrollTo(newID, anchor: .center)
         }
       }
     }
@@ -42,6 +133,7 @@ struct CandidateListView: View {
           Text(String(format: "score %.3f", candidate.score))
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.secondary)
+          labelBadge(candidate.userLabel)
         }
 
         HStack(spacing: 5) {
@@ -79,19 +171,11 @@ struct CandidateListView: View {
         .font(.system(.caption2, design: .monospaced))
         .foregroundStyle(.secondary)
 
-      Picker(
-        "ラベル",
-        selection: Binding(
-          get: { candidate.userLabel ?? .uncertain },
-          set: { onLabel($0, candidate.id) }
-        )
-      ) {
+      HStack(spacing: 5) {
         ForEach(CandidateLabel.allCases, id: \.self) { label in
-          Text(label.displayName).tag(label)
+          rowLabelButton(label, candidate: candidate)
         }
       }
-      .labelsHidden()
-      .frame(width: 88)
 
       Button("プレビュー") {
         onPreview(candidate)
@@ -110,6 +194,125 @@ struct CandidateListView: View {
     .contentShape(Rectangle())
     .onTapGesture {
       onSelect(candidate)
+      isReviewFocused = true
+    }
+  }
+
+  private func quickLabelButton(
+    _ label: CandidateLabel,
+    candidate: CandidateSegment,
+    shortcut: String
+  ) -> some View {
+    Button {
+      onReview(label, candidate.id)
+      isReviewFocused = true
+    } label: {
+      VStack(spacing: 2) {
+        Label(label.displayName, systemImage: labelIcon(label))
+          .font(.headline)
+        Text("キー \(shortcut)")
+          .font(.caption2.monospaced())
+          .opacity(0.85)
+      }
+      .frame(minWidth: 86)
+      .padding(.vertical, 5)
+    }
+    .buttonStyle(.borderedProminent)
+    .tint(labelColor(label))
+  }
+
+  private func rowLabelButton(
+    _ label: CandidateLabel,
+    candidate: CandidateSegment
+  ) -> some View {
+    let isActive = candidate.userLabel == label
+    return Button {
+      onReview(label, candidate.id)
+      isReviewFocused = true
+    } label: {
+      Image(systemName: labelIcon(label))
+        .font(.system(size: 13, weight: .bold))
+        .frame(width: 28, height: 24)
+        .foregroundStyle(isActive ? Color.white : labelColor(label))
+        .background(
+          RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(isActive ? labelColor(label) : labelColor(label).opacity(0.12))
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .stroke(labelColor(label).opacity(0.65), lineWidth: 1)
+        )
+    }
+    .buttonStyle(.plain)
+    .help("\(label.displayName)にして次の未判定候補へ移動")
+    .accessibilityLabel("\(label.displayName)にする")
+  }
+
+  private func labelBadge(_ label: CandidateLabel?) -> some View {
+    Text(label?.displayName ?? "未判定")
+      .font(.caption2.weight(.semibold))
+      .foregroundStyle(label.map(labelColor) ?? Color.secondary)
+      .padding(.horizontal, 7)
+      .padding(.vertical, 2)
+      .background(
+        Capsule()
+          .fill((label.map(labelColor) ?? Color.secondary).opacity(0.12))
+      )
+  }
+
+  private var positionText: String {
+    guard let selectedIndex else { return "候補 －／\(candidates.count)" }
+    return "候補 \(selectedIndex + 1)／\(candidates.count)"
+  }
+
+  private func canMove(by offset: Int) -> Bool {
+    guard let selectedIndex else { return false }
+    return sortedCandidates.indices.contains(selectedIndex + offset)
+  }
+
+  private func moveSelection(by offset: Int) {
+    guard let selectedIndex else { return }
+    let targetIndex = selectedIndex + offset
+    guard sortedCandidates.indices.contains(targetIndex) else { return }
+    onPreview(sortedCandidates[targetIndex])
+  }
+
+  /// 数値欄の編集中は候補一覧からフォーカスが外れるため，1・2・3を通常入力できます．
+  private func handleReviewKey(_ press: KeyPress) -> KeyPress.Result {
+    guard let selectedCandidate else { return .ignored }
+
+    switch press.key {
+    case "1":
+      onReview(.accepted, selectedCandidate.id)
+    case "2":
+      onReview(.uncertain, selectedCandidate.id)
+    case "3":
+      onReview(.rejected, selectedCandidate.id)
+    default:
+      return .ignored
+    }
+    return .handled
+  }
+
+  private func labelColor(_ label: CandidateLabel) -> Color {
+    switch label {
+    case .accepted:
+      return .green
+    case .rejected:
+      return .red
+    case .uncertain:
+      return .orange
+    }
+  }
+
+  private func labelIcon(_ label: CandidateLabel) -> String {
+    switch label {
+    case .accepted:
+      return "checkmark"
+    case .rejected:
+      return "xmark"
+    case .uncertain:
+      return "questionmark"
     }
   }
 

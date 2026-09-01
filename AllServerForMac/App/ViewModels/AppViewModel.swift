@@ -11,6 +11,7 @@ final class AppViewModel: ObservableObject {
   @Published var isShowingPreferences = false
   @Published var isShowingStorageManager = false
   @Published var isShowingAccessLog = false
+  @Published var sceneExtractionNavigationError: String?
   @Published private(set) var isServerRunning = false
   @Published private(set) var currentServerURL: String?
 
@@ -31,6 +32,7 @@ final class AppViewModel: ObservableObject {
   let sceneExtraction = SceneExtractionViewModel()
 
   private var cancellables = Set<AnyCancellable>()
+  private var sceneExtractionReturnSelection: NavigationSelection = .home
 
   convenience init() {
     self.init(
@@ -70,6 +72,36 @@ final class AppViewModel: ObservableObject {
       .assign(to: &$currentServerURL)
 
     bridgeFavorites()
+  }
+
+  /// ライブラリ内の動画を解析画面へ渡します．
+  func openSceneExtraction(for item: VideoItem) {
+    guard item.mediaType == .video else {
+      sceneExtractionNavigationError = "画像はシーン抽出できません．動画を1本選択してください．"
+      return
+    }
+    guard !item.isInTrash else {
+      sceneExtractionNavigationError = "ゴミ箱内の動画は解析できません．先に元へ戻してください．"
+      return
+    }
+    guard let url = dataManager.fileURL(for: item) else {
+      sceneExtractionNavigationError = "動画の実ファイルが見つかりません．リンク元や保存先を確認してください．"
+      return
+    }
+
+    if selection != .sceneExtraction {
+      sceneExtractionReturnSelection = selection ?? .home
+    }
+    selection = .sceneExtraction
+    Task {
+      await sceneExtraction.loadVideo(from: url)
+    }
+  }
+
+  /// 解析結果を保持したまま，元のライブラリ画面へ戻します．
+  func closeSceneExtraction() {
+    sceneExtraction.pause()
+    selection = sceneExtractionReturnSelection
   }
 
   /// お気に入りの保管場所を1つに束ねる。

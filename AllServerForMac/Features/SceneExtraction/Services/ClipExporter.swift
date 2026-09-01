@@ -15,6 +15,7 @@ nonisolated enum ClipExporterError: LocalizedError {
   case appendVideoFailed(String)
   case appendAudioFailed(String)
   case retimeAudioFailed
+  case emptyOutput
   case writerFailed(String)
 
   var errorDescription: String? {
@@ -39,6 +40,8 @@ nonisolated enum ClipExporterError: LocalizedError {
       return "音声サンプルを書き込めませんでした．\(reason)"
     case .retimeAudioFailed:
       return "音声タイムスタンプをクリップ位置へ変換できませんでした．"
+    case .emptyOutput:
+      return "書き出し結果が空です．完成した動画ファイルを作成できませんでした．"
     case .writerFailed(let reason):
       return "クリップを完了できませんでした．\(reason)"
     }
@@ -48,7 +51,7 @@ nonisolated enum ClipExporterError: LocalizedError {
 nonisolated struct ClipExporter: Sendable {
   private let videoBitRatePerPixel = 6.0
   private let audioBitRate = 192_000
-  private let readinessPollInterval = 0.002
+  private let readinessPollNanoseconds: UInt64 = 2_000_000
 
   func export(
     document: VideoDocument,
@@ -82,6 +85,7 @@ nonisolated struct ClipExporter: Sendable {
       candidate: candidate,
       outputDirectory: outputDirectory
     )
+    let workingOutputURL = makeWorkingOutputURL(for: outputURL)
     let metadataURL = outputURL.deletingPathExtension().appendingPathExtension("json")
     let asset = AVURLAsset(url: document.url)
     guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
@@ -98,7 +102,7 @@ nonisolated struct ClipExporter: Sendable {
       throw ClipExporterError.invalidVideoSize
     }
 
-    let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+    let writer = try AVAssetWriter(outputURL: workingOutputURL, fileType: .mp4)
     let videoInput = makeVideoInput(
       width: width,
       height: height,
@@ -133,19 +137,19 @@ nonisolated struct ClipExporter: Sendable {
     writer.startSession(atSourceTime: .zero)
 
     do {
-      try writeVideo(
-        asset: asset,
-        track: videoTrack,
-        candidate: candidate,
-        settings: settings,
-        writer: writer,
-        input: videoInput,
-        adaptor: adaptor
-      )
-      videoInput.markAsFinished()
-
       if let audioTrack, let audioInput {
-        try writeAudio(
+        // 映像だけを先に全量投入すると，Writerが未処理の音声を待って停止します．
+        // 両トラックを並行して進め，時刻のインターリーブを維持します．
+        async let videoWrite: Void = writeVideo(
+          asset: asset,
+          track: videoTrack,
+          candidate: candidate,
+          settings: settings,
+          writer: writer,
+          input: videoInput,
+          adaptor: adaptor
+        )
+        async let audioWrite: Void = writeAudio(
           asset: asset,
           track: audioTrack,
           candidate: candidate,
@@ -153,8 +157,18 @@ nonisolated struct ClipExporter: Sendable {
           writer: writer,
           input: audioInput
         )
+        _ = try await (videoWrite, audioWrite)
+      } else {
+        try await writeVideo(
+          asset: asset,
+          track: videoTrack,
+          candidate: candidate,
+          settings: settings,
+          writer: writer,
+          input: videoInput,
+          adaptor: adaptor
+        )
       }
-      audioInput?.markAsFinished()
       writer.endSession(
         atSourceTime: CMTime(
           value: CMTimeValue(settings.targetFrameCount),
@@ -162,9 +176,11 @@ nonisolated struct ClipExporter: Sendable {
         )
       )
       try await finishWriting(writer)
+      try validateOutput(at: workingOutputURL)
+      try FileManager.default.moveItem(at: workingOutputURL, to: outputURL)
     } catch {
       writer.cancelWriting()
-      try? FileManager.default.removeItem(at: outputURL)
+      try? FileManager.default.removeItem(at: workingOutputURL)
       throw error
     }
 
@@ -248,7 +264,10 @@ nonisolated struct ClipExporter: Sendable {
     writer: AVAssetWriter,
     input: AVAssetWriterInput,
     adaptor: AVAssetWriterInputPixelBufferAdaptor
-  ) throws {
+  ) async throws {
+    defer {
+      input.markAsFinished()
+    }
     let reader = try AVAssetReader(asset: asset)
     reader.timeRange = sourceTimeRange(candidate: candidate, settings: settings)
     let output = AVAssetReaderTrackOutput(
@@ -293,7 +312,7 @@ nonisolated struct ClipExporter: Sendable {
       ), let pixelBuffer = CMSampleBufferGetImageBuffer(selectedSample) else {
         throw ClipExporterError.missingVideoFrame
       }
-      try waitUntilReady(input, writer: writer)
+      try await waitUntilReady(input, writer: writer)
       guard adaptor.append(pixelBuffer, withPresentationTime: outputTime) else {
         throw ClipExporterError.appendVideoFailed(writer.error?.localizedDescription ?? "原因不明です．")
       }
@@ -311,7 +330,10 @@ nonisolated struct ClipExporter: Sendable {
     settings: AnalysisSettings,
     writer: AVAssetWriter,
     input: AVAssetWriterInput
-  ) throws {
+  ) async throws {
+    defer {
+      input.markAsFinished()
+    }
     let reader = try AVAssetReader(asset: asset)
     reader.timeRange = sourceTimeRange(candidate: candidate, settings: settings)
     let output = AVAssetReaderTrackOutput(
@@ -342,7 +364,7 @@ nonisolated struct ClipExporter: Sendable {
       if CMSampleBufferGetPresentationTimeStamp(retimedBuffer).seconds >= outputEnd {
         break
       }
-      try waitUntilReady(input, writer: writer)
+      try await waitUntilReady(input, writer: writer)
       guard input.append(retimedBuffer) else {
         throw ClipExporterError.appendAudioFailed(writer.error?.localizedDescription ?? "原因不明です．")
       }
@@ -414,13 +436,13 @@ nonisolated struct ClipExporter: Sendable {
   private func waitUntilReady(
     _ input: AVAssetWriterInput,
     writer: AVAssetWriter
-  ) throws {
+  ) async throws {
     while !input.isReadyForMoreMediaData {
       try Task.checkCancellation()
       if writer.status == .failed || writer.status == .cancelled {
         throw ClipExporterError.writerFailed(writer.error?.localizedDescription ?? "Writerが停止しました．")
       }
-      Thread.sleep(forTimeInterval: readinessPollInterval)
+      try await Task.sleep(nanoseconds: readinessPollNanoseconds)
     }
   }
 
@@ -438,6 +460,14 @@ nonisolated struct ClipExporter: Sendable {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
     encoder.dateEncodingStrategy = .iso8601
     try encoder.encode(metadata).write(to: url, options: .atomic)
+  }
+
+  private func validateOutput(at url: URL) throws {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+    guard fileSize > 0 else {
+      throw ClipExporterError.emptyOutput
+    }
   }
 
   private func makeOutputURL(
@@ -460,6 +490,11 @@ nonisolated struct ClipExporter: Sendable {
     }
     let result = sanitizedScalars.joined()
     return result.isEmpty ? "clip" : result
+  }
+
+  private func makeWorkingOutputURL(for outputURL: URL) -> URL {
+    let workingName = ".\(outputURL.deletingPathExtension().lastPathComponent).partial.mp4"
+    return outputURL.deletingLastPathComponent().appendingPathComponent(workingName)
   }
 
   private func evenDimension(_ value: CGFloat) -> Int {

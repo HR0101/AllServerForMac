@@ -25,6 +25,7 @@ struct MediaGridItem: View {
     var currentAlbumID: UUID? = nil
     var onMoveToAlbum: (UUID) -> Void = { _ in }
     var onMoveToNewAlbum: () -> Void = {}
+    var onAnalyzeScenes: (() -> Void)?
     /// このセルのメニュー操作が実際に対象とする項目（表示順）。
     /// 複数選択中に右クリックすると選択全体が対象になるため、
     /// 確認文が「このセル1件」の話に見えないよう、対象の実態をここで受け取る。
@@ -164,6 +165,9 @@ struct MediaGridItem: View {
         }
         .contextMenu {
             Button("開く") { onOpen() }
+            if video.mediaType == .video, !isTrashView, let onAnalyzeScenes {
+                Button("シーン抽出") { onAnalyzeScenes() }
+            }
             Button("外部プレイヤーで開く") { onOpenExternal() }
             Button("Finderで表示") { onReveal() }
             Button("フォルダにエクスポート…") { exportThisItem() }

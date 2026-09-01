@@ -11,6 +11,7 @@ struct LibraryCategoryView: View {
     }
     let kind: Kind
     @ObservedObject var dataManager: LibraryViewModel
+    let onAnalyzeScenes: (VideoItem) -> Void
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var appSettings: AppSettings
@@ -173,6 +174,16 @@ struct LibraryCategoryView: View {
                         Text("\(selectedVideoIDs.count)項目を選択中")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
+                    }
+                }
+                if selectedItems.count == 1, let video = selectedItems.first {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            onAnalyzeScenes(video)
+                        } label: {
+                            Label("シーン抽出", systemImage: "waveform.path.ecg")
+                        }
+                        .help("選択した動画から候補シーンを抽出します")
                     }
                 }
                 if selectedItems.count >= 2 {
@@ -371,6 +382,9 @@ struct LibraryCategoryView: View {
                                 newAlbumNameForMove = ""
                                 showMoveToNewAlbumAlert = true
                             },
+                            onAnalyzeScenes: !isTrash && video.mediaType == .video ? {
+                                onAnalyzeScenes(video)
+                            } : nil,
                             affectedItems: menuTargets(for: video, in: items),
                             onRemoveFromHistory: isHistory ? {
                                 watchState.removeHistory(videoIDs: targetIDs(for: video))

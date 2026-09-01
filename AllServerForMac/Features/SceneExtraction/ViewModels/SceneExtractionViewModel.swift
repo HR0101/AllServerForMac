@@ -190,6 +190,26 @@ final class SceneExtractionViewModel: ObservableObject {
     candidates[index].userLabel = label
   }
 
+  /// ラベルを保存し，スコア順で次の未判定候補を自動プレビューします．
+  func reviewCandidate(_ label: CandidateLabel, candidateID: UUID) {
+    setLabel(label, for: candidateID)
+    let orderedCandidates = candidates.sorted { $0.score > $1.score }
+    guard let currentIndex = orderedCandidates.firstIndex(where: { $0.id == candidateID }) else {
+      return
+    }
+
+    let followingCandidates = orderedCandidates.dropFirst(currentIndex + 1)
+    let precedingCandidates = orderedCandidates.prefix(currentIndex)
+    let nextCandidate = followingCandidates.first { $0.userLabel == nil }
+      ?? precedingCandidates.first { $0.userLabel == nil }
+
+    if let nextCandidate {
+      previewCandidate(nextCandidate)
+    } else {
+      selectedCandidateID = candidateID
+    }
+  }
+
   func setOutputDirectory(_ url: URL) {
     outputDirectoryURL = url
   }
@@ -243,6 +263,10 @@ final class SceneExtractionViewModel: ObservableObject {
       self.isExportingClip = false
       self.exportTask = nil
     }
+  }
+
+  func cancelClipExport() {
+    exportTask?.cancel()
   }
 
   func exportDataset() {

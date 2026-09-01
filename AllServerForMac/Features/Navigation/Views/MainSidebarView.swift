@@ -210,15 +210,6 @@ struct MainSidebarView: View {
                 sidebarNavigationButton(.home, title: "ホーム", systemImage: "house.fill")
 
                 VStack(alignment: .leading, spacing: 5) {
-                    sidebarSectionTitle("解析")
-                    sidebarNavigationButton(
-                        .sceneExtraction,
-                        title: "シーン抽出",
-                        systemImage: "waveform.path.ecg"
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 5) {
                     sidebarSectionTitle("ライブラリ")
 
                 if let allVideos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allVideosAlbumName }) {

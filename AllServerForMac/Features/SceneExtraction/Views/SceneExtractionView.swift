@@ -2,14 +2,16 @@
 
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SceneExtractionView: View {
   @ObservedObject var viewModel: SceneExtractionViewModel
+  let onClose: () -> Void
+  @AppStorage("sceneExtraction.tutorialVersion") private var seenTutorialVersion = 0
+  @State private var isShowingTutorial = false
 
   private let minimumPlayerWidth: CGFloat = 560
   private let minimumChartWidth: CGFloat = 360
-  private let candidateListHeight: CGFloat = 230
+  private let candidateListHeight: CGFloat = 310
 
   var body: some View {
     VStack(spacing: 14) {
@@ -45,7 +47,7 @@ struct SceneExtractionView: View {
         canExport: viewModel.outputDirectoryURL != nil && !viewModel.isExportingClip,
         onSelect: viewModel.selectCandidate,
         onPreview: viewModel.previewCandidate,
-        onLabel: viewModel.setLabel,
+        onReview: viewModel.reviewCandidate,
         onUpdateStart: viewModel.updateCandidateStart,
         onUpdateEnd: viewModel.updateCandidateEnd,
         onExport: viewModel.exportClip
@@ -55,6 +57,19 @@ struct SceneExtractionView: View {
     .padding(16)
     .background(NeomorphicTheme.background)
     .navigationTitle("シーン抽出")
+    .task {
+      if seenTutorialVersion < SceneExtractionTutorialContent.currentVersion {
+        isShowingTutorial = true
+      }
+    }
+    .sheet(
+      isPresented: $isShowingTutorial,
+      onDismiss: {
+        seenTutorialVersion = SceneExtractionTutorialContent.currentVersion
+      }
+    ) {
+      SceneExtractionTutorialView()
+    }
     .alert(
       "処理に失敗しました",
       isPresented: Binding(
@@ -104,6 +119,18 @@ struct SceneExtractionView: View {
           .controlSize(.small)
       }
 
+      if viewModel.isExportingClip {
+        Text("クリップを作成中です．完了後に最終MP4が表示されます．")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Button(role: .cancel) {
+          viewModel.cancelClipExport()
+        } label: {
+          Label("書き出しをキャンセル", systemImage: "xmark.circle")
+        }
+      }
+
       Button {
         viewModel.exportDataset()
       } label: {
@@ -121,11 +148,10 @@ struct SceneExtractionView: View {
   private var header: some View {
     HStack(spacing: 12) {
       Button {
-        openVideo()
+        onClose()
       } label: {
-        Label("動画を開く", systemImage: "folder")
+        Label("ライブラリへ戻る", systemImage: "chevron.backward")
       }
-      .disabled(viewModel.isLoadingVideo)
 
       if viewModel.isAnalyzing {
         Button(role: .cancel) {
@@ -152,6 +178,12 @@ struct SceneExtractionView: View {
       }
       .disabled(!viewModel.isGroundTruthModeEnabled || viewModel.videoDocument == nil)
 
+      Button {
+        isShowingTutorial = true
+      } label: {
+        Label("使い方", systemImage: "questionmark.circle")
+      }
+
       Spacer()
 
       if let document = viewModel.videoDocument {
@@ -164,20 +196,6 @@ struct SceneExtractionView: View {
             .foregroundStyle(.secondary)
         }
       }
-    }
-  }
-
-  private func openVideo() {
-    let panel = NSOpenPanel()
-    panel.title = "解析する動画を選択"
-    panel.allowedContentTypes = [.movie]
-    panel.allowsMultipleSelection = false
-    panel.canChooseDirectories = false
-    panel.canChooseFiles = true
-
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    Task {
-      await viewModel.loadVideo(from: url)
     }
   }
 

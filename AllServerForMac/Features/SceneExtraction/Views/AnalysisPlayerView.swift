@@ -40,7 +40,7 @@ struct AnalysisPlayerView: View {
         ContentUnavailableView(
           "動画が選択されていません",
           systemImage: "film",
-          description: Text("上部の「動画を開く」から解析対象を選択してください．")
+          description: Text("ライブラリで動画を選び，「シーン抽出」を実行してください．")
         )
         .foregroundStyle(.white.opacity(0.8))
       }

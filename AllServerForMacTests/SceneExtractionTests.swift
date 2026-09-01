@@ -8,6 +8,89 @@ import Testing
 
 struct SceneExtractionTests {
   @Test
+  func tutorialCoversCompleteWorkflow() {
+    let steps = SceneExtractionTutorialContent.steps
+
+    #expect(steps.count == 6)
+    #expect(steps.map(\.id) == Array(1...6))
+    #expect(steps.allSatisfy { !$0.title.isEmpty })
+    #expect(steps.allSatisfy { $0.details.count >= 4 })
+    #expect(SceneExtractionTutorialContent.currentVersion > 0)
+    #expect(steps[1].title.contains("ライブラリ"))
+    #expect(steps[1].summary.contains("シーン抽出"))
+    #expect(!steps[1].summary.contains("動画を開く"))
+    #expect(steps[4].details.contains { $0.contains("1・2・3キー") })
+  }
+
+  @Test
+  @MainActor
+  func reviewingCandidateAdvancesToNextUnlabeledCandidate() {
+    let first = CandidateSegment(
+      startTime: 0,
+      endTime: 10,
+      peakTime: 4,
+      score: 0.9,
+      audioScore: 0.9,
+      visualScore: 0.8,
+      transitionScore: 0.7,
+      reason: ["テスト"]
+    )
+    let second = CandidateSegment(
+      startTime: 10,
+      endTime: 20,
+      peakTime: 14,
+      score: 0.8,
+      audioScore: 0.8,
+      visualScore: 0.7,
+      transitionScore: 0.6,
+      reason: ["テスト"]
+    )
+    let viewModel = SceneExtractionViewModel()
+    viewModel.candidates = [first, second]
+    viewModel.selectedCandidateID = first.id
+
+    viewModel.reviewCandidate(.accepted, candidateID: first.id)
+
+    #expect(viewModel.candidates.first { $0.id == first.id }?.userLabel == .accepted)
+    #expect(viewModel.selectedCandidateID == second.id)
+  }
+
+  @Test
+  func glossaryExplainsImportantVisibleTerms() {
+    let requiredTerms: Set<String> = [
+      "候補区間",
+      "ピーク時刻",
+      "合成スコア",
+      "候補しきい値",
+      "A・音声スコア",
+      "B・映像スコア",
+      "C・遷移スコア",
+      "FFT",
+      "RMS",
+      "freeze",
+      "dissolve",
+      "fade",
+      "GT",
+      "fps",
+      "出力フレーム数",
+      "H.264",
+      "HEVC",
+      "sidecar JSON",
+      "CSV"
+    ]
+    let terms = SceneExtractionTutorialContent.glossaryTerms
+    let availableTerms = Set(terms.map(\.term))
+    let explainedCategories = Set(terms.map(\.category))
+    let requiredCategories = Set(
+      SceneExtractionGlossaryCategory.allCases.filter { $0 != .all }
+    )
+
+    #expect(requiredTerms.isSubset(of: availableTerms))
+    #expect(requiredCategories.isSubset(of: explainedCategories))
+    #expect(terms.allSatisfy { !$0.shortDefinition.isEmpty && !$0.detail.isEmpty })
+  }
+
+  @Test
   func mergerFillsMissingAudioFeaturesWithZero() throws {
     let visualPoints = (0..<3).map { index in
       makeVisualPoint(time: Double(index), frameDiff: Double(index) * 0.1)
@@ -138,6 +221,78 @@ struct SceneExtractionTests {
     #expect(result.metadataURL.map { FileManager.default.fileExists(atPath: $0.path) } == true)
   }
 
+  @Test
+  func clipExporterCompletesWithAudioAndVideo() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("SceneExtractionAudioExporterTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+      at: temporaryDirectory,
+      withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let videoOnlyURL = temporaryDirectory.appendingPathComponent("video-only.mp4")
+    let audioURL = temporaryDirectory.appendingPathComponent("audio.caf")
+    let sourceURL = temporaryDirectory.appendingPathComponent("source-with-audio.mp4")
+    try await makeSyntheticVideo(at: videoOnlyURL)
+    try makeSilentAudio(at: audioURL, duration: 2)
+    try await muxVideoAndAudio(
+      videoURL: videoOnlyURL,
+      audioURL: audioURL,
+      outputURL: sourceURL,
+      duration: 2
+    )
+
+    let document = VideoDocument(
+      url: sourceURL,
+      duration: 2,
+      nominalFrameRate: 30,
+      resolutionWidth: 160,
+      resolutionHeight: 90,
+      hasAudioTrack: true,
+      hasVideoTrack: true,
+      audioSampleRate: 48_000,
+      timeScale: 600
+    )
+    let candidate = CandidateSegment(
+      startTime: 0,
+      endTime: 2,
+      peakTime: 1,
+      score: 0.9,
+      audioScore: 0.9,
+      visualScore: 0.9,
+      transitionScore: 0,
+      reason: ["音声付きテスト"]
+    )
+    var settings = AnalysisSettings()
+    settings.clipDuration = 2
+    settings.targetFramesPerSecond = 24
+    settings.targetFrameCount = 49
+    settings.includesAudio = true
+
+    let result = try await ClipExporter().export(
+      document: document,
+      candidate: candidate,
+      settings: settings,
+      outputDirectory: temporaryDirectory
+    )
+    let exportedAsset = AVURLAsset(url: result.videoURL)
+    let videoTracks = try await exportedAsset.loadTracks(withMediaType: .video)
+    let audioTracks = try await exportedAsset.loadTracks(withMediaType: .audio)
+    let fileSize = try #require(
+      FileManager.default.attributesOfItem(atPath: result.videoURL.path)[.size] as? NSNumber
+    )
+    let partialFiles = try FileManager.default.contentsOfDirectory(
+      at: temporaryDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.lastPathComponent.contains(".partial.mp4") }
+
+    #expect(!videoTracks.isEmpty)
+    #expect(!audioTracks.isEmpty)
+    #expect(fileSize.int64Value > 0)
+    #expect(partialFiles.isEmpty)
+  }
+
   private func makeVisualPoint(time: Double, frameDiff: Double) -> VisualFeaturePoint {
     VisualFeaturePoint(
       time: time,
@@ -228,6 +383,81 @@ struct SceneExtractionTests {
     input.markAsFinished()
     await writer.finishWriting()
     #expect(writer.status == .completed)
+  }
+
+  private func makeSilentAudio(at url: URL, duration: Double) throws {
+    let sampleRate = 48_000.0
+    let channelCount: AVAudioChannelCount = 2
+    let frameCount = AVAudioFrameCount(sampleRate * duration)
+    let format = try #require(
+      AVAudioFormat(
+        standardFormatWithSampleRate: sampleRate,
+        channels: channelCount
+      )
+    )
+    let buffer = try #require(
+      AVAudioPCMBuffer(
+        pcmFormat: format,
+        frameCapacity: frameCount
+      )
+    )
+    buffer.frameLength = frameCount
+    if let channelData = buffer.floatChannelData {
+      for channel in 0..<Int(channelCount) {
+        channelData[channel].initialize(
+          repeating: 0,
+          count: Int(frameCount)
+        )
+      }
+    }
+
+    let audioFile = try AVAudioFile(
+      forWriting: url,
+      settings: format.settings
+    )
+    try audioFile.write(from: buffer)
+  }
+
+  private func muxVideoAndAudio(
+    videoURL: URL,
+    audioURL: URL,
+    outputURL: URL,
+    duration: Double
+  ) async throws {
+    let videoAsset = AVURLAsset(url: videoURL)
+    let audioAsset = AVURLAsset(url: audioURL)
+    let sourceVideoTrack = try #require(
+      try await videoAsset.loadTracks(withMediaType: .video).first
+    )
+    let sourceAudioTrack = try #require(
+      try await audioAsset.loadTracks(withMediaType: .audio).first
+    )
+    let composition = AVMutableComposition()
+    let videoTrack = try #require(
+      composition.addMutableTrack(
+        withMediaType: .video,
+        preferredTrackID: kCMPersistentTrackID_Invalid
+      )
+    )
+    let audioTrack = try #require(
+      composition.addMutableTrack(
+        withMediaType: .audio,
+        preferredTrackID: kCMPersistentTrackID_Invalid
+      )
+    )
+    let timeRange = CMTimeRange(
+      start: .zero,
+      duration: CMTime(seconds: duration, preferredTimescale: 600)
+    )
+    try videoTrack.insertTimeRange(timeRange, of: sourceVideoTrack, at: .zero)
+    try audioTrack.insertTimeRange(timeRange, of: sourceAudioTrack, at: .zero)
+    let exportSession = try #require(
+      AVAssetExportSession(
+        asset: composition,
+        presetName: AVAssetExportPresetHighestQuality
+      )
+    )
+    try await exportSession.export(to: outputURL, as: .mp4)
   }
 
   private func countVideoFrames(at url: URL) async throws -> Int {
