@@ -111,6 +111,19 @@ struct ContentView: View {
         } message: {
             Text(dataManager.mediaDeletionNotice ?? "")
         }
+        .alert(
+            "シーン抽出を開始できません",
+            isPresented: Binding(
+                get: { viewModel.sceneExtractionNavigationError != nil },
+                set: { if !$0 { viewModel.sceneExtractionNavigationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.sceneExtractionNavigationError = nil
+            }
+        } message: {
+            Text(viewModel.sceneExtractionNavigationError ?? "")
+        }
     }
 
     /// ミニプレイヤー表示中は通常再生の裏でライブラリも操作できるようにする。
@@ -239,28 +252,37 @@ struct ContentView: View {
                     case .favorites:
                         LibraryCategoryView(
                             kind: .favorites,
-                            dataManager: dataManager
+                            dataManager: dataManager,
+                            onAnalyzeScenes: viewModel.openSceneExtraction
                         )
                             .navigationTitle("お気に入り")
                     case .history:
                         LibraryCategoryView(
                             kind: .history,
-                            dataManager: dataManager
+                            dataManager: dataManager,
+                            onAnalyzeScenes: viewModel.openSceneExtraction
                         )
                             .navigationTitle("再生履歴")
                     case .trash:
                         LibraryCategoryView(
                             kind: .trash,
-                            dataManager: dataManager
+                            dataManager: dataManager,
+                            onAnalyzeScenes: viewModel.openSceneExtraction
                         )
                             .navigationTitle("ゴミ箱")
+                    case .sceneExtraction:
+                        SceneExtractionView(
+                            viewModel: viewModel.sceneExtraction,
+                            onClose: viewModel.closeSceneExtraction
+                        )
                     case .album(let albumID):
                         if let album = dataManager.albums.first(
                             where: { $0.id == albumID }
                         ) {
                             AlbumDetailView(
                                 album: album,
-                                dataManager: dataManager
+                                dataManager: dataManager,
+                                onAnalyzeScenes: viewModel.openSceneExtraction
                             )
                                 .navigationTitle(album.name)
                         } else {
@@ -271,7 +293,8 @@ struct ContentView: View {
                             path: path,
                             isPhoto: isPhoto,
                             dataManager: dataManager,
-                            selection: $viewModel.selection
+                            selection: $viewModel.selection,
+                            onAnalyzeScenes: viewModel.openSceneExtraction
                         )
                             .navigationTitle(path.components(separatedBy: "/").last ?? path)
                     case .none:

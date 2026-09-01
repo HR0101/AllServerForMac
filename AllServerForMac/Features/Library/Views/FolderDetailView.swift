@@ -12,6 +12,7 @@ struct FolderDetailView: View {
     let isPhoto: Bool
     @ObservedObject var dataManager: LibraryViewModel
     @Binding var selection: NavigationSelection?
+    let onAnalyzeScenes: (VideoItem) -> Void
 
     @EnvironmentObject private var appSettings: AppSettings
     @EnvironmentObject private var coordinator: PlaybackCoordinator
@@ -77,6 +78,20 @@ struct FolderDetailView: View {
         .background(CommandDeckBackground())
         .safeAreaInset(edge: .top, spacing: 0) {
             breadcrumb
+        }
+        .toolbar {
+            if selectedMediaIDs.count == 1,
+               let video = context.directMedia.first(where: { selectedMediaIDs.contains($0.id) }),
+               video.mediaType == .video {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onAnalyzeScenes(video)
+                    } label: {
+                        Label("シーン抽出", systemImage: "waveform.path.ecg")
+                    }
+                    .help("選択した動画から候補シーンを抽出します")
+                }
+            }
         }
         .alert("新規アルバムに移動", isPresented: $showMoveToNewAlbumAlert) {
             TextField("アルバム名", text: $newAlbumNameForMove)
@@ -239,6 +254,9 @@ struct FolderDetailView: View {
                 newAlbumNameForMove = ""
                 showMoveToNewAlbumAlert = true
             },
+            onAnalyzeScenes: video.mediaType == .video ? {
+                onAnalyzeScenes(video)
+            } : nil,
             affectedItems: items.filter { targetIDs(for: video).contains($0.id) }
         )
         .id(video.id)

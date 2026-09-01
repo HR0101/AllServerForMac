@@ -230,9 +230,25 @@ struct VariantSwitchPlayerView: View {
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.7))
             }
+            if let normalizationText = viewModel.activeBGMNormalizationText {
+                Label(normalizationText, systemImage: "speaker.wave.2.fill")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            if viewModel.synchronizesSwitchesToBeats {
+                Label(
+                    viewModel.isAnalyzingBeats
+                        ? "拍解析中"
+                        : viewModel.isNextSwitchBeatAligned ? "拍同期" : "通常間隔",
+                    systemImage: "waveform.path.ecg"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.7))
+            }
             if viewModel.isAutoSwitching,
                viewModel.variantCount > 1,
-               viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold {
+               (viewModel.synchronizesSwitchesToBeats
+                || viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold) {
                 Text(String(format: "次まで %.1fs", max(0, viewModel.secondsUntilSwitch)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.7))
@@ -267,6 +283,8 @@ struct VariantSwitchPlayerView: View {
                 Divider().frame(height: 22)
                 intervalControls
             }
+            beatSynchronizationControls
+            audioNormalizationControls
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -454,7 +472,9 @@ struct VariantSwitchPlayerView: View {
             .help("一定間隔で差分を自動的に切り替える（\(keyLabel(.variantToggleAuto))）")
 
             HStack(spacing: 4) {
-                Text("間隔").font(.caption).foregroundStyle(.secondary)
+                Text(viewModel.synchronizesSwitchesToBeats ? "予備間隔" : "間隔")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 intervalField(
                     value: viewModel.minInterval,
                     label: "下限の秒数",
@@ -470,7 +490,9 @@ struct VariantSwitchPlayerView: View {
             }
             .opacity(viewModel.isAutoSwitching ? 1 : 0.4)
             .disabled(!viewModel.isAutoSwitching)
-            .help("この範囲からランダムに選んだ秒数ごとに切り替えます。上下を同じ値にすれば固定間隔（− / + キーでも変えられます）")
+            .help(viewModel.synchronizesSwitchesToBeats
+                ? "拍解析に失敗した場合だけ，この秒数の範囲で切り替えます．"
+                : "この範囲からランダムに選んだ秒数ごとに切り替えます．上下を同じ値にすれば固定間隔です．")
 
             Toggle(isOn: $viewModel.avoidsImmediateRepeat) {
                 Text("同じものを続けない").font(.caption)
@@ -479,6 +501,101 @@ struct VariantSwitchPlayerView: View {
             .controlSize(.mini)
             .help("切り替えたのに同じ差分が選ばれて「何も変わらない」のを防ぎます")
         }
+    }
+
+    private var audioNormalizationControls: some View {
+        HStack(spacing: 10) {
+            Toggle(isOn: $viewModel.normalizesBGMVolume) {
+                Text("BGM音量を揃える")
+                    .font(.caption.weight(.semibold))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help("BGMだけを分離せず，動画内の音声全体をBGM音量の目安として比較します．大きい動画だけを減衰するため，音割れを防げます．")
+
+            if viewModel.isAnalyzingBGMVolume {
+                ProgressView()
+                    .controlSize(.small)
+                Text("共通場面の音量を解析中…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let status = viewModel.activeBGMNormalizationText {
+                Label(status, systemImage: "waveform")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+            Text("切り替え時の急な音量差を抑えます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var beatSynchronizationControls: some View {
+        HStack(spacing: 10) {
+            Toggle(isOn: $viewModel.synchronizesSwitchesToBeats) {
+                Text("BGMの拍に合わせる")
+                    .font(.caption.weight(.semibold))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .disabled(!viewModel.isAutoSwitching)
+            .help("拍とは音楽の一定の脈，小節とは通常4拍をまとめた区切りです．BPMは1分間の拍数を表します．")
+
+            if viewModel.synchronizesSwitchesToBeats {
+                HStack(spacing: 4) {
+                    Picker(
+                        "切り替え",
+                        selection: Binding(
+                            get: { viewModel.switchQuarterBeats },
+                            set: viewModel.setSwitchQuarterBeats
+                        )
+                    ) {
+                        ForEach(
+                            VariantSwitchSettings.supportedSwitchQuarterBeats,
+                            id: \.self
+                        ) { quarterBeats in
+                            Text(
+                                VariantSwitchSettings.switchStepLabel(
+                                    forQuarterBeats: quarterBeats
+                                )
+                            )
+                            .tag(quarterBeats)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .fixedSize()
+
+                    Text("拍ごと")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .help("何拍ごとに差分を切り替えるかを選びます．4拍で約1小節，8拍で約2小節，1/2拍・1/4拍は拍と拍のあいだでも切り替えます．")
+            }
+
+            if viewModel.isAnalyzingBeats {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if let status = viewModel.beatSynchronizationStatusText {
+                Label(status, systemImage: "waveform.path.ecg")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+            Text(viewModel.synchronizesSwitchesToBeats
+                ? "4拍子の小節先頭を推定し，選んだ拍数ごとに切り替えます（1拍未満も可）"
+                : "テンポと小節の区切りを解析してから切り替えます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+        .opacity(viewModel.isAutoSwitching ? 1 : 0.5)
     }
 
     /// 上下限は互いを押し合うので、`Binding` を直に持たせず必ずビューモデルの設定メソッドを通す。

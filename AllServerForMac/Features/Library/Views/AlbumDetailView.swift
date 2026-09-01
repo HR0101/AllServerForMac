@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct AlbumDetailView: View {
     let album: Album
     @ObservedObject var dataManager: LibraryViewModel
+    let onAnalyzeScenes: (VideoItem) -> Void
 
     @State private var isTargeted = false
     @State private var selectedVideoIDs = Set<UUID>()
@@ -301,6 +302,16 @@ struct AlbumDetailView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
+                if selectedItems.count == 1, let video = selectedItems.first {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            onAnalyzeScenes(video)
+                        } label: {
+                            Label("シーン抽出", systemImage: "waveform.path.ecg")
+                        }
+                        .help("選択した動画から候補シーンを抽出します")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     if selectedItems.count >= 2 {
                         Button {
@@ -537,6 +548,9 @@ struct AlbumDetailView: View {
                                 newAlbumNameForMove = ""
                                 showMoveToNewAlbumAlert = true
                             },
+                            onAnalyzeScenes: video.mediaType == .video ? {
+                                onAnalyzeScenes(video)
+                            } : nil,
                             affectedItems: menuTargets(for: video, in: items)
                         )
                         .id(video.id)
