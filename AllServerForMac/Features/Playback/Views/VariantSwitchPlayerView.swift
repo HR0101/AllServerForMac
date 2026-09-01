@@ -247,7 +247,8 @@ struct VariantSwitchPlayerView: View {
             }
             if viewModel.isAutoSwitching,
                viewModel.variantCount > 1,
-               viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold {
+               (viewModel.synchronizesSwitchesToBeats
+                || viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold) {
                 Text(String(format: "次まで %.1fs", max(0, viewModel.secondsUntilSwitch)))
                     .font(.system(size: 12).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.7))
@@ -471,7 +472,9 @@ struct VariantSwitchPlayerView: View {
             .help("一定間隔で差分を自動的に切り替える（\(keyLabel(.variantToggleAuto))）")
 
             HStack(spacing: 4) {
-                Text("間隔").font(.caption).foregroundStyle(.secondary)
+                Text(viewModel.synchronizesSwitchesToBeats ? "予備間隔" : "間隔")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 intervalField(
                     value: viewModel.minInterval,
                     label: "下限の秒数",
@@ -487,7 +490,9 @@ struct VariantSwitchPlayerView: View {
             }
             .opacity(viewModel.isAutoSwitching ? 1 : 0.4)
             .disabled(!viewModel.isAutoSwitching)
-            .help("この範囲からランダムに選んだ秒数ごとに切り替えます。上下を同じ値にすれば固定間隔（− / + キーでも変えられます）")
+            .help(viewModel.synchronizesSwitchesToBeats
+                ? "拍解析に失敗した場合だけ，この秒数の範囲で切り替えます．"
+                : "この範囲からランダムに選んだ秒数ごとに切り替えます．上下を同じ値にすれば固定間隔です．")
 
             Toggle(isOn: $viewModel.avoidsImmediateRepeat) {
                 Text("同じものを続けない").font(.caption)
@@ -537,7 +542,40 @@ struct VariantSwitchPlayerView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .disabled(!viewModel.isAutoSwitching)
-            .help("拍とは，音楽でリズムを刻むタイミングです．通常の切り替え予定時刻を，近くで検出した拍へ最大0.75秒だけ合わせます．")
+            .help("拍とは音楽の一定の脈，小節とは通常4拍をまとめた区切りです．BPMは1分間の拍数を表します．")
+
+            if viewModel.synchronizesSwitchesToBeats {
+                HStack(spacing: 4) {
+                    Picker(
+                        "切り替え",
+                        selection: Binding(
+                            get: { viewModel.switchQuarterBeats },
+                            set: viewModel.setSwitchQuarterBeats
+                        )
+                    ) {
+                        ForEach(
+                            VariantSwitchSettings.supportedSwitchQuarterBeats,
+                            id: \.self
+                        ) { quarterBeats in
+                            Text(
+                                VariantSwitchSettings.switchStepLabel(
+                                    forQuarterBeats: quarterBeats
+                                )
+                            )
+                            .tag(quarterBeats)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .fixedSize()
+
+                    Text("拍ごと")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .help("何拍ごとに差分を切り替えるかを選びます．4拍で約1小節，8拍で約2小節，1/2拍・1/4拍は拍と拍のあいだでも切り替えます．")
+            }
 
             if viewModel.isAnalyzingBeats {
                 ProgressView()
@@ -550,7 +588,9 @@ struct VariantSwitchPlayerView: View {
             }
 
             Spacer()
-            Text("拍が見つからない区間では通常間隔で切り替えます")
+            Text(viewModel.synchronizesSwitchesToBeats
+                ? "4拍子の小節先頭を推定し，選んだ拍数ごとに切り替えます（1拍未満も可）"
+                : "テンポと小節の区切りを解析してから切り替えます")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

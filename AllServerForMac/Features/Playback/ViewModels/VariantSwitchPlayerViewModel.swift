@@ -85,7 +85,10 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     @Published private(set) var isAnalyzingBeats = false
     @Published private(set) var beatAnalysisCompleted = false
     @Published private(set) var detectedBeatCount = 0
+    @Published private(set) var detectedBPM: Double?
+    @Published private(set) var beatAnalysisConfidence: Double?
     @Published private(set) var isNextSwitchBeatAligned = false
+    @Published private(set) var switchQuarterBeats: Int
 
     /// 見比べた結果「これは要らない」と分かったものを選ぶモード。
     /// 差分として並べてみて初めて、中身がまったく同じだと気づくことがある。
@@ -120,9 +123,19 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         guard detectedBeatCount > 0 else {
             return "拍を検出できないため通常間隔"
         }
+        let bpmText = detectedBPM.map { String(format: "%.0f BPM", $0) } ?? "テンポ解析済み"
+        let confidenceText = beatAnalysisConfidence.map {
+            String(format: "信頼度 %.0f%%", $0 * 100)
+        } ?? ""
+        let stepText = VariantSwitchSettings.switchStepLabel(
+            forQuarterBeats: switchQuarterBeats
+        )
+        let details = [bpmText, confidenceText, "\(stepText)拍ごと"]
+            .filter { !$0.isEmpty }
+            .joined(separator: "・")
         return isNextSwitchBeatAligned
-            ? "拍同期・\(detectedBeatCount)拍"
-            : "次の拍が遠いため通常間隔"
+            ? details
+            : "次の音楽境界がないため通常間隔"
     }
 
     /// 削除対象に選ばれているもの。並びは画面と同じ（確認ダイアログの一覧と見た目を合わせる）。
@@ -133,6 +146,8 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     /// 通常時は従来の更新頻度を保ち，拍同期中だけ切り替え誤差を小さくする．
     private static let standardTickSeconds: Double = 0.1
     private static let beatSynchronizedTickSeconds: Double = 0.025
+    /// 1拍未満の刻みでは0.025秒の取りこぼしでも位置がずれて聞こえるため，さらに細かくする．
+    private static let subBeatTickSeconds: Double = 0.01
     /// これ以上ずれたら揃え直す。60fps で 15 フレームぶん＝切り替えたときに気づく大きさ。
     private static let driftThreshold: Double = 0.25
     /// ずれの点検間隔．差分切り替えとは独立して定期確認し，必要な場合だけ揃え直す．
@@ -158,7 +173,7 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private var secondsSinceDriftCheck: Double = 0
     private var audioLevels: [Double?] = []
     private var audioNormalizationGains: [Float] = []
-    private var detectedBeatTimes: [TimeInterval] = []
+    private var detectedBeatGrid: VariantBeatGrid?
     private var scheduledSwitchTimelineTime: TimeInterval?
 
     init(
@@ -187,6 +202,7 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         self.avoidsImmediateRepeat = VariantSwitchSettings.avoidsImmediateRepeat
         self.normalizesBGMVolume = VariantSwitchSettings.normalizesBGMVolume
         self.synchronizesSwitchesToBeats = VariantSwitchSettings.synchronizesSwitchesToBeats
+        self.switchQuarterBeats = VariantSwitchSettings.switchQuarterBeats
 
         wireGroup()
         applyAudio()
@@ -500,13 +516,17 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         isAnalyzingBeats = true
         beatAnalysisCompleted = false
         detectedBeatCount = 0
-        detectedBeatTimes = []
+        detectedBPM = nil
+        beatAnalysisConfidence = nil
+        detectedBeatGrid = nil
 
         beatAnalysisTask = Task { @MainActor [weak self] in
-            let beatTimes = await VariantBeatAnalyzer.analyze(sources: sources)
+            let beatGrid = await VariantBeatAnalyzer.analyze(sources: sources)
             guard let self, !Task.isCancelled else { return }
-            self.detectedBeatTimes = beatTimes
-            self.detectedBeatCount = beatTimes.count
+            self.detectedBeatGrid = beatGrid
+            self.detectedBeatCount = beatGrid?.beatTimes.count ?? 0
+            self.detectedBPM = beatGrid?.bpm
+            self.beatAnalysisConfidence = beatGrid?.confidence
             self.isAnalyzingBeats = false
             self.beatAnalysisCompleted = true
             self.beatAnalysisTask = nil
@@ -549,11 +569,12 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         )
         let baseInterval = nextInterval()
         let schedule: VariantBeatSwitchSchedule
-        if synchronizesSwitchesToBeats, !detectedBeatTimes.isEmpty {
+        if synchronizesSwitchesToBeats, detectedBeatGrid != nil {
             schedule = VariantBeatSwitchScheduler.schedule(
                 baseInterval: baseInterval,
                 currentTime: currentTime,
-                beatTimes: detectedBeatTimes
+                beatGrid: detectedBeatGrid,
+                quarterBeatsPerSwitch: switchQuarterBeats
             )
         } else {
             schedule = VariantBeatSwitchSchedule(
@@ -565,6 +586,13 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         scheduledSwitchTimelineTime = currentTime + schedule.delay
         secondsUntilSwitch = schedule.delay
         isNextSwitchBeatAligned = schedule.isBeatAligned
+    }
+
+    /// 拍数の選択（1/4拍単位）を保存し，現在位置から次の音楽境界を計算し直す．
+    func setSwitchQuarterBeats(_ value: Int) {
+        switchQuarterBeats = VariantSwitchSettings.normalizedSwitchQuarterBeats(value)
+        VariantSwitchSettings.switchQuarterBeats = switchQuarterBeats
+        scheduleNextSwitch()
     }
 
     /// 下限を変える。上限より大きくなったら上限も押し上げる。
@@ -650,8 +678,10 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         beatAnalysisCompleted = false
         audioLevels = []
         audioNormalizationGains = []
-        detectedBeatTimes = []
+        detectedBeatGrid = nil
         detectedBeatCount = 0
+        detectedBPM = nil
+        beatAnalysisConfidence = nil
         group.cleanup()
         playable = remaining
         variants = remaining.map { Variant(id: $0.item.id, title: $0.item.originalFilename) }
@@ -685,15 +715,19 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
 
     // MARK: - 自動切り替えの時計
 
+    /// 自動切り替えの時計の細かさ．拍同期と選んだ刻みで変える．
+    private var tickSeconds: Double {
+        guard synchronizesSwitchesToBeats else { return Self.standardTickSeconds }
+        return switchQuarterBeats < VariantSwitchSettings.quarterBeatsPerBeat
+            ? Self.subBeatTickSeconds
+            : Self.beatSynchronizedTickSeconds
+    }
+
     private func startTicking() {
         switchTask?.cancel()
         switchTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                guard let tickSeconds = self.map({ viewModel in
-                    viewModel.synchronizesSwitchesToBeats
-                        ? Self.beatSynchronizedTickSeconds
-                        : Self.standardTickSeconds
-                }) else { return }
+                guard let tickSeconds = self?.tickSeconds else { return }
                 try? await Task.sleep(nanoseconds: UInt64(tickSeconds * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
                 self.tick(elapsed: tickSeconds)

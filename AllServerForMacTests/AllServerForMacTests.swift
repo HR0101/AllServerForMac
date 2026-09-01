@@ -315,40 +315,153 @@ struct AllServerForMacTests {
       energies[index] = 1
     }
 
-    let beatTimes = VariantBeatAnalyzer.detectBeatTimes(
+    let beatGrid = VariantBeatAnalyzer.detectBeatGrid(
       energyFrames: energies,
       hopDuration: hopDuration
     )
 
-    #expect(beatTimes.count == expectedIndices.count)
+    #expect(beatGrid != nil)
+    #expect(abs((beatGrid?.bpm ?? 0) - 125) < 2)
     for expectedIndex in expectedIndices {
       let expectedTime = (Double(expectedIndex) + 0.5) * hopDuration
-      #expect(beatTimes.contains { abs($0 - expectedTime) < 0.001 })
+      #expect(beatGrid?.beatTimes.contains { abs($0 - expectedTime) < 0.05 } == true)
     }
   }
 
   @Test
-  func snapsAutomaticSwitchToNearestBeat() {
+  func switchesAtEveryEighthBeatFromMusicalBoundary() {
     let schedule = VariantBeatSwitchScheduler.schedule(
       baseInterval: 3,
-      currentTime: 10,
-      beatTimes: [12.4, 12.9, 13.2, 13.8]
+      currentTime: 10.1,
+      beatGrid: makeTestBeatGrid(),
+      quarterBeatsPerSwitch: 32
     )
 
     #expect(schedule.isBeatAligned)
-    #expect(abs(schedule.delay - 2.9) < 0.0001)
+    #expect(abs(schedule.delay - 3.9) < 0.0001)
   }
 
   @Test
-  func keepsNormalIntervalWhenNoBeatIsNearby() {
+  func switchesAtHalfBeatBetweenDetectedBeats() {
     let schedule = VariantBeatSwitchScheduler.schedule(
       baseInterval: 3,
-      currentTime: 10,
-      beatTimes: [11, 14]
+      currentTime: 10.1,
+      beatGrid: makeTestBeatGrid(),
+      quarterBeatsPerSwitch: 2
+    )
+
+    #expect(schedule.isBeatAligned)
+    // 拍は0.5秒間隔なので，1/2拍の境界は10.25秒．
+    #expect(abs(schedule.delay - 0.15) < 0.0001)
+  }
+
+  @Test
+  func switchesAtQuarterBeatBetweenDetectedBeats() {
+    let schedule = VariantBeatSwitchScheduler.schedule(
+      baseInterval: 3,
+      currentTime: 10.05,
+      beatGrid: makeTestBeatGrid(),
+      quarterBeatsPerSwitch: 1
+    )
+
+    #expect(schedule.isBeatAligned)
+    // 1/4拍の境界は0.125秒ごとなので，次は10.125秒．
+    #expect(abs(schedule.delay - 0.075) < 0.0001)
+  }
+
+  @Test
+  func keepsSubBeatSwitchesOnTheMusicalGrid() {
+    let beatGrid = makeTestBeatGrid()
+    var currentTime = 10.0
+    var boundaries: [TimeInterval] = []
+    for _ in 0..<4 {
+      let schedule = VariantBeatSwitchScheduler.schedule(
+        baseInterval: 3,
+        currentTime: currentTime,
+        beatGrid: beatGrid,
+        quarterBeatsPerSwitch: 2
+      )
+      #expect(schedule.isBeatAligned)
+      currentTime += schedule.delay
+      boundaries.append(currentTime)
+    }
+
+    #expect(boundaries.count == 4)
+    for (index, boundary) in boundaries.enumerated() {
+      #expect(abs(boundary - (10.25 + Double(index) * 0.25)) < 0.0001)
+    }
+  }
+
+  @Test
+  func keepsNormalIntervalWhenNoBoundaryRemains() {
+    let schedule = VariantBeatSwitchScheduler.schedule(
+      baseInterval: 3,
+      currentTime: 30,
+      beatGrid: makeTestBeatGrid(),
+      quarterBeatsPerSwitch: 1
     )
 
     #expect(!schedule.isBeatAligned)
     #expect(abs(schedule.delay - 3) < 0.0001)
+  }
+
+  @Test
+  func keepsNormalIntervalWhenBeatGridIsUnavailable() {
+    let schedule = VariantBeatSwitchScheduler.schedule(
+      baseInterval: 3,
+      currentTime: 10,
+      beatGrid: nil,
+      quarterBeatsPerSwitch: 32
+    )
+
+    #expect(!schedule.isBeatAligned)
+    #expect(abs(schedule.delay - 3) < 0.0001)
+  }
+
+  /// 10秒から0.5秒間隔（120 BPM）で40拍ぶんの拍グリッド．
+  private func makeTestBeatGrid() -> VariantBeatGrid {
+    VariantBeatGrid(
+      beatTimes: (0..<40).map { 10 + Double($0) * 0.5 },
+      bpm: 120,
+      confidence: 0.9,
+      beatsPerBar: 4
+    )
+  }
+
+  @Test
+  func alignsBeatGridToAccentedFourBeatBar() {
+    let hopDuration = 0.05
+    var energies = [Double](repeating: 0.01, count: 220)
+    for beatNumber in 0..<20 {
+      let index = 10 + beatNumber * 10
+      energies[index] = beatNumber.isMultiple(of: 4) ? 1 : 0.45
+    }
+
+    let beatGrid = VariantBeatAnalyzer.detectBeatGrid(
+      energyFrames: energies,
+      hopDuration: hopDuration
+    )
+
+    #expect(beatGrid != nil)
+    #expect(abs((beatGrid?.bpm ?? 0) - 120) < 2)
+    #expect(abs((beatGrid?.beatTimes.first ?? 0) - 0.525) < 0.06)
+    #expect(beatGrid?.beatsPerBar == 4)
+  }
+
+  @Test
+  func normalizesUnsupportedBeatCountToNearestChoice() {
+    #expect(VariantSwitchSettings.normalizedSwitchQuarterBeats(30) == 32)
+    #expect(VariantSwitchSettings.normalizedSwitchQuarterBeats(3) == 2)
+    #expect(VariantSwitchSettings.normalizedSwitchQuarterBeats(0) == 1)
+    #expect(VariantSwitchSettings.normalizedSwitchQuarterBeats(200) == 128)
+  }
+
+  @Test
+  func labelsSubBeatStepsAsFractions() {
+    #expect(VariantSwitchSettings.switchStepLabel(forQuarterBeats: 1) == "1/4")
+    #expect(VariantSwitchSettings.switchStepLabel(forQuarterBeats: 2) == "1/2")
+    #expect(VariantSwitchSettings.switchStepLabel(forQuarterBeats: 4) == "1")
+    #expect(VariantSwitchSettings.switchStepLabel(forQuarterBeats: 32) == "8")
   }
 
   @Test
@@ -366,7 +479,7 @@ struct AllServerForMacTests {
     let audioURL = temporaryDirectory.appendingPathComponent("beats.wav")
     let duration = 4.0
     try makeBeatTestAudio(url: audioURL, duration: duration)
-    let beatTimes = await VariantBeatAnalyzer.analyze(
+    let beatGrid = await VariantBeatAnalyzer.analyze(
       sources: [
         VariantBeatAnalysisSource(
           url: audioURL,
@@ -377,10 +490,12 @@ struct AllServerForMacTests {
       ]
     )
 
-    #expect(beatTimes.count >= 5)
-    #expect(beatTimes.contains { abs($0 - 1.0) < 0.12 })
-    #expect(beatTimes.contains { abs($0 - 2.0) < 0.12 })
-    #expect(beatTimes.contains { abs($0 - 3.0) < 0.12 })
+    #expect(beatGrid != nil)
+    #expect(beatGrid?.beatTimes.count ?? 0 >= 5)
+    #expect(abs((beatGrid?.bpm ?? 0) - 120) < 4)
+    #expect(beatGrid?.beatTimes.contains { abs($0 - 1.0) < 0.12 } == true)
+    #expect(beatGrid?.beatTimes.contains { abs($0 - 2.0) < 0.12 } == true)
+    #expect(beatGrid?.beatTimes.contains { abs($0 - 3.0) < 0.12 } == true)
   }
 
   @Test

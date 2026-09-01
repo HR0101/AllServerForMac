@@ -299,62 +299,160 @@ nonisolated struct VariantBeatSwitchSchedule: Equatable, Sendable {
   let isBeatAligned: Bool
 }
 
-/// 通常の切り替え予定時刻を，近くにある拍へ吸着させる．
+/// 推定したテンポ，小節位置，拍時刻をまとめた音楽上のグリッド．
+nonisolated struct VariantBeatGrid: Equatable, Sendable {
+  let beatTimes: [TimeInterval]
+  let bpm: Double
+  let confidence: Double
+  let beatsPerBar: Int
+
+  /// 1拍あたりの秒数．細かい刻みの最小間隔を決めるのに使う．
+  var beatDuration: TimeInterval {
+    bpm > 0 ? 60 / bpm : 0
+  }
+}
+
+/// 小節先頭を基準に，ユーザーが選んだ拍数ごとの境界を次の切り替え時刻にする．
+///
+/// 1拍より短い刻み（1/2拍・1/4拍）も選べるよう，境界は1/4拍単位で数える．検出した拍と拍の
+/// あいだは等分した位置を使うので，テンポが少し揺れても実際の拍にぶら下がった刻みになる．
 nonisolated enum VariantBeatSwitchScheduler {
-  static let maximumSnapDistance: TimeInterval = 0.75
-  private static let minimumFutureDelay: TimeInterval = 0.08
+  /// 境界を数える解像度．1拍を4等分し，1/4拍までの刻みを扱えるようにする．
+  static let quarterBeatsPerBeat = 4
+  /// 拍を検出できないときの下限．
+  private static let minimumFallbackDelay: TimeInterval = 0.20
+  /// 時計の刻み（0.025秒）より短い予定を立てても取りこぼすため，これ以上先の境界だけを見る．
+  private static let minimumBoundaryLookahead: TimeInterval = 0.03
 
   static func schedule(
     baseInterval: TimeInterval,
     currentTime: TimeInterval,
-    beatTimes: [TimeInterval]
+    beatGrid: VariantBeatGrid?,
+    quarterBeatsPerSwitch: Int
   ) -> VariantBeatSwitchSchedule {
-    let safeInterval = max(baseInterval, minimumFutureDelay)
-    let desiredTime = currentTime + safeInterval
-    let candidates = beatTimes.filter {
-      $0 > currentTime + minimumFutureDelay
-        && abs($0 - desiredTime) <= maximumSnapDistance
-    }
-    guard let nearestBeat = candidates.min(by: {
-      let firstDistance = abs($0 - desiredTime)
-      let secondDistance = abs($1 - desiredTime)
-      if firstDistance == secondDistance { return $0 < $1 }
-      return firstDistance < secondDistance
-    }) else {
-      return VariantBeatSwitchSchedule(
-        delay: safeInterval,
-        isBeatAligned: false
-      )
-    }
-    return VariantBeatSwitchSchedule(
-      delay: nearestBeat - currentTime,
-      isBeatAligned: true
+    let safeInterval = max(baseInterval, minimumFallbackDelay)
+    let fallback = VariantBeatSwitchSchedule(
+      delay: safeInterval,
+      isBeatAligned: false
     )
+    guard let beatGrid, beatGrid.beatTimes.count >= 2 else { return fallback }
+
+    let step = max(1, quarterBeatsPerSwitch)
+    let lookahead = boundaryLookahead(
+      step: step,
+      beatDuration: beatGrid.beatDuration
+    )
+    let threshold = currentTime + lookahead
+    let lastPosition =
+      (beatGrid.beatTimes.count - 1) * quarterBeatsPerBeat
+
+    var position = firstBoundaryPosition(
+      after: threshold,
+      step: step,
+      beatTimes: beatGrid.beatTimes
+    )
+    while position <= lastPosition {
+      let boundaryTime = time(
+        atQuarterBeat: position,
+        beatTimes: beatGrid.beatTimes
+      )
+      if boundaryTime > threshold {
+        return VariantBeatSwitchSchedule(
+          delay: boundaryTime - currentTime,
+          isBeatAligned: true
+        )
+      }
+      position += step
+    }
+    return fallback
+  }
+
+  /// 直前に切り替えた境界をもう一度拾わないよう，刻みの半分までは先を見る．
+  private static func boundaryLookahead(
+    step: Int,
+    beatDuration: TimeInterval
+  ) -> TimeInterval {
+    guard beatDuration > 0 else { return minimumFallbackDelay }
+    let stepDuration =
+      beatDuration * Double(step) / Double(quarterBeatsPerBeat)
+    return min(
+      minimumFallbackDelay,
+      max(minimumBoundaryLookahead, stepDuration / 2)
+    )
+  }
+
+  /// 指定時刻以降で最初に来る境界の位置（1/4拍単位）を求める．
+  private static func firstBoundaryPosition(
+    after time: TimeInterval,
+    step: Int,
+    beatTimes: [TimeInterval]
+  ) -> Int {
+    guard let nextBeatIndex = beatTimes.firstIndex(where: { $0 > time }) else {
+      return .max
+    }
+    // 直前の拍の位置まで戻してから刻みへ丸めることで，拍と拍のあいだの境界も拾う．
+    let previousBeatPosition =
+      max(0, nextBeatIndex - 1) * quarterBeatsPerBeat
+    return (previousBeatPosition / step) * step
+  }
+
+  /// 1/4拍単位の位置を，拍と拍のあいだを等分した時刻へ変換する．
+  private static func time(
+    atQuarterBeat position: Int,
+    beatTimes: [TimeInterval]
+  ) -> TimeInterval {
+    let beatIndex = position / quarterBeatsPerBeat
+    let remainder = position % quarterBeatsPerBeat
+    guard beatIndex < beatTimes.count else { return .infinity }
+    guard remainder > 0, beatIndex + 1 < beatTimes.count else {
+      return beatTimes[beatIndex]
+    }
+    let beatInterval = beatTimes[beatIndex + 1] - beatTimes[beatIndex]
+    return beatTimes[beatIndex]
+      + beatInterval * Double(remainder) / Double(quarterBeatsPerBeat)
   }
 }
 
-/// 音声の低域を重視した短時間エネルギーから，局所的な立ち上がりを拍候補として抽出する．
+/// 周波数帯域ごとの立ち上がりからテンポを推定し，4拍子の小節先頭にそろえた拍グリッドを作る．
 ///
-/// 音源分離ではないため，強い効果音を拍として拾う場合がある．その場合でも切り替え間隔は
-/// 最大0.75秒しか動かさず，拍を検出できなければ従来の間隔へ戻す．
+/// 単発の効果音をそのまま拍とせず，一定間隔で繰り返す成分を自己相関で探す．音源分離では
+/// ないためBGMより大きい効果音が続く素材では誤る可能性があり，信頼度が低ければ通常間隔へ戻す．
 nonisolated enum VariantBeatAnalyzer {
-  /// AVAssetReaderがPCM変換で受け付ける下限の8kHzを使用する．
-  private static let analysisSampleRate = 8_000.0
-  private static let energyFrameDuration: TimeInterval = 0.04
-  private static let bassLowPassFrequency = 250.0
-  private static let bassHighPassFrequency = 45.0
-  private static let bassEnergyWeight = 0.8
-  private static let fullBandEnergyWeight = 0.2
-  private static let adaptiveWindowDuration: TimeInterval = 1.2
-  private static let onsetHistoryDuration: TimeInterval = 0.20
-  private static let minimumBeatSeparation: TimeInterval = 0.22
-  private static let minimumOnsetStrength = 0.06
-  private static let minimumDetectedBeatCount = 3
+  private struct EnergyFrame: Sendable {
+    let bass: Double
+    let mid: Double
+    let high: Double
+  }
 
-  /// 音声を持つ先頭の差分から拍を検出し，共通タイムライン上の時刻として返す．
-  static func analyze(sources: [VariantBeatAnalysisSource]) async -> [TimeInterval] {
-    for source in sources {
-      guard !Task.isCancelled else { return [] }
+  private struct TempoEstimate {
+    let frameInterval: Int
+    let correlation: Double
+  }
+
+  private static let analysisSampleRate = 22_050.0
+  private static let energyFrameDuration: TimeInterval = 0.02
+  private static let bassCrossoverFrequency = 180.0
+  private static let midCrossoverFrequency = 2_000.0
+  private static let bassOnsetWeight = 0.55
+  private static let midOnsetWeight = 0.30
+  private static let highOnsetWeight = 0.15
+  private static let adaptiveWindowDuration: TimeInterval = 1.0
+  private static let minimumTempo = 60.0
+  private static let maximumTempo = 200.0
+  private static let minimumDetectedBeatCount = 4
+  private static let minimumTempoCorrelation = 0.12
+  private static let minimumAcceptedConfidence = 0.20
+  private static let preferredConfidence = 0.72
+  /// 長尺動画を差分本数ぶん読み直さないよう，候補比較は先頭3本までに制限する．
+  private static let maximumAnalysisSourceCount = 3
+  private static let assumedBeatsPerBar = 4
+  private static let peakSnapDuration: TimeInterval = 0.10
+
+  /// 音声を持つ差分を順に調べ，最も信頼できる拍グリッドを共通タイムライン上で返す．
+  static func analyze(sources: [VariantBeatAnalysisSource]) async -> VariantBeatGrid? {
+    var bestGrid: VariantBeatGrid?
+    for source in sources.prefix(maximumAnalysisSourceCount) {
+      guard !Task.isCancelled else { return nil }
       let startTime = max(
         0,
         source.timelineMapping.videoTime(forLogicalTime: 0)
@@ -367,90 +465,310 @@ nonisolated enum VariantBeatAnalyzer {
       )
       guard endTime > startTime else { continue }
 
-      let videoBeatTimes = await detectBeatTimes(
+      guard let videoGrid = await detectBeatGrid(
         url: source.url,
         range: startTime..<endTime
-      )
-      let logicalBeatTimes = makeUniqueLogicalBeatTimes(
-        videoBeatTimes: videoBeatTimes,
+      ), let logicalGrid = makeLogicalBeatGrid(
+        videoGrid: videoGrid,
         mapping: source.timelineMapping,
         logicalDuration: source.logicalDuration
-      )
-      if logicalBeatTimes.count >= minimumDetectedBeatCount {
-        return logicalBeatTimes
+      ) else {
+        continue
+      }
+      if bestGrid == nil || logicalGrid.confidence > bestGrid?.confidence ?? 0 {
+        bestGrid = logicalGrid
+      }
+      if logicalGrid.confidence >= preferredConfidence {
+        break
       }
     }
-    return []
+    guard let bestGrid,
+          bestGrid.confidence >= minimumAcceptedConfidence else { return nil }
+    return bestGrid
   }
 
-  /// テスト可能な純粋計算として，エネルギー列から拍時刻を求める．
+  /// テスト用に，単一エネルギー列からテンポ補正済みの拍時刻を求める．
   static func detectBeatTimes(
     energyFrames: [Double],
     hopDuration: TimeInterval,
     startTime: TimeInterval = 0
   ) -> [TimeInterval] {
-    guard hopDuration > 0, energyFrames.count >= 5 else { return [] }
-    let logEnergies = energyFrames.map {
-      log1p(max(0, $0) * 100)
+    let frames = energyFrames.map {
+      EnergyFrame(bass: $0, mid: $0, high: $0)
     }
-    let historyFrameCount = max(
-      2,
-      Int((onsetHistoryDuration / hopDuration).rounded())
-    )
-    var onsetStrengths = [Double](repeating: 0, count: logEnergies.count)
+    return makeBeatGrid(
+      energyFrames: frames,
+      hopDuration: hopDuration,
+      startTime: startTime
+    )?.beatTimes ?? []
+  }
 
-    for index in logEnergies.indices {
-      let lowerBound = max(0, index - historyFrameCount)
-      guard lowerBound < index else { continue }
-      let history = logEnergies[lowerBound..<index]
-      let historyMean = history.reduce(0, +) / Double(history.count)
-      onsetStrengths[index] = max(0, logEnergies[index] - historyMean)
+  /// テスト用に，推定したBPMと信頼度を含む拍グリッドを返す．
+  static func detectBeatGrid(
+    energyFrames: [Double],
+    hopDuration: TimeInterval,
+    startTime: TimeInterval = 0
+  ) -> VariantBeatGrid? {
+    let frames = energyFrames.map {
+      EnergyFrame(bass: $0, mid: $0, high: $0)
+    }
+    return makeBeatGrid(
+      energyFrames: frames,
+      hopDuration: hopDuration,
+      startTime: startTime
+    )
+  }
+
+  private static func makeBeatGrid(
+    energyFrames: [EnergyFrame],
+    hopDuration: TimeInterval,
+    startTime: TimeInterval
+  ) -> VariantBeatGrid? {
+    guard hopDuration > 0, energyFrames.count >= 20 else { return nil }
+    let onsetStrengths = makeOnsetStrengths(
+      energyFrames: energyFrames,
+      hopDuration: hopDuration
+    )
+    guard let tempo = estimateTempo(
+      onsetStrengths: onsetStrengths,
+      hopDuration: hopDuration
+    ) else { return nil }
+    let beatIndices = makeTempoAlignedBeatIndices(
+      onsetStrengths: onsetStrengths,
+      frameInterval: tempo.frameInterval,
+      hopDuration: hopDuration
+    )
+    guard beatIndices.count >= minimumDetectedBeatCount else { return nil }
+
+    let downbeatOffset = estimateDownbeatOffset(
+      beatIndices: beatIndices,
+      onsetStrengths: onsetStrengths
+    )
+    let alignedBeatIndices = Array(beatIndices.dropFirst(downbeatOffset))
+    guard alignedBeatIndices.count >= minimumDetectedBeatCount else { return nil }
+    let beatTimes = alignedBeatIndices.map {
+      startTime + (Double($0) + 0.5) * hopDuration
+    }
+    let bpm = refinedBPM(
+      beatTimes: beatTimes,
+      fallback: 60 / (Double(tempo.frameInterval) * hopDuration)
+    )
+    let confidence = analysisConfidence(
+      correlation: tempo.correlation,
+      beatIndices: alignedBeatIndices,
+      expectedFrameInterval: tempo.frameInterval
+    )
+    return VariantBeatGrid(
+      beatTimes: beatTimes,
+      bpm: bpm,
+      confidence: confidence,
+      beatsPerBar: assumedBeatsPerBar
+    )
+  }
+
+  /// 低域・中域・高域それぞれの正方向変化を混ぜ，音色が違うBGMでも立ち上がりを残す．
+  private static func makeOnsetStrengths(
+    energyFrames: [EnergyFrame],
+    hopDuration: TimeInterval
+  ) -> [Double] {
+    let logFrames = energyFrames.map { frame in
+      EnergyFrame(
+        bass: log1p(max(0, frame.bass) * 100),
+        mid: log1p(max(0, frame.mid) * 100),
+        high: log1p(max(0, frame.high) * 100)
+      )
+    }
+    var rawOnsets = [Double](repeating: 0, count: logFrames.count)
+    for index in 1..<logFrames.count {
+      rawOnsets[index] =
+        bassOnsetWeight * max(0, logFrames[index].bass - logFrames[index - 1].bass)
+        + midOnsetWeight * max(0, logFrames[index].mid - logFrames[index - 1].mid)
+        + highOnsetWeight * max(0, logFrames[index].high - logFrames[index - 1].high)
     }
 
     let adaptiveRadius = max(
       2,
       Int((adaptiveWindowDuration / hopDuration / 2).rounded())
     )
-    let refractoryFrames = max(
-      1,
-      Int((minimumBeatSeparation / hopDuration).rounded())
-    )
-    var beatIndices: [Int] = []
-
-    for index in 1..<(onsetStrengths.count - 1) {
+    var adaptiveOnsets = [Double](repeating: 0, count: rawOnsets.count)
+    for index in rawOnsets.indices {
       let lowerBound = max(0, index - adaptiveRadius)
-      let upperBound = min(onsetStrengths.count, index + adaptiveRadius + 1)
-      let localValues = onsetStrengths[lowerBound..<upperBound]
+      let upperBound = min(rawOnsets.count, index + adaptiveRadius + 1)
+      let localValues = rawOnsets[lowerBound..<upperBound]
       let localMean = localValues.reduce(0, +) / Double(localValues.count)
-      let variance = localValues.reduce(0) {
-        $0 + ($1 - localMean) * ($1 - localMean)
-      } / Double(localValues.count)
-      let threshold = localMean + max(minimumOnsetStrength, sqrt(variance) * 1.1)
-      let strength = onsetStrengths[index]
-      guard strength >= threshold,
-            strength >= onsetStrengths[index - 1],
-            strength > onsetStrengths[index + 1] else { continue }
+      adaptiveOnsets[index] = max(0, rawOnsets[index] - localMean * 0.5)
+    }
 
-      if let previousIndex = beatIndices.last,
-         index - previousIndex < refractoryFrames {
-        if strength > onsetStrengths[previousIndex] {
-          beatIndices[beatIndices.count - 1] = index
-        }
-      } else {
-        beatIndices.append(index)
+    guard adaptiveOnsets.count >= 3 else { return adaptiveOnsets }
+    var smoothed = adaptiveOnsets
+    for index in 1..<(adaptiveOnsets.count - 1) {
+      smoothed[index] = adaptiveOnsets[index - 1] * 0.25
+        + adaptiveOnsets[index] * 0.5
+        + adaptiveOnsets[index + 1] * 0.25
+    }
+    return smoothed
+  }
+
+  /// 自己相関に2倍周期を加味し，半周期にも強い一致がある遅い候補は減点する．
+  private static func estimateTempo(
+    onsetStrengths: [Double],
+    hopDuration: TimeInterval
+  ) -> TempoEstimate? {
+    let minimumLag = max(
+      1,
+      Int((60 / maximumTempo / hopDuration).rounded())
+    )
+    let maximumLag = min(
+      onsetStrengths.count / 3,
+      Int((60 / minimumTempo / hopDuration).rounded())
+    )
+    guard minimumLag <= maximumLag else { return nil }
+
+    var correlations: [Int: Double] = [:]
+    for lag in minimumLag...min(maximumLag * 2, onsetStrengths.count / 2) {
+      correlations[lag] = normalizedCorrelation(
+        values: onsetStrengths,
+        lag: lag
+      )
+    }
+
+    var bestLag = minimumLag
+    var bestCombinedScore = -Double.infinity
+    for lag in minimumLag...maximumLag {
+      let correlation = correlations[lag] ?? 0
+      let doublePeriodCorrelation = correlations[lag * 2] ?? 0
+      let halfPeriodCorrelation = correlations[max(1, lag / 2)] ?? 0
+      let combinedScore = correlation
+        + doublePeriodCorrelation * 0.25
+        - halfPeriodCorrelation * 0.25
+      if combinedScore > bestCombinedScore {
+        bestCombinedScore = combinedScore
+        bestLag = lag
+      }
+    }
+    let bestCorrelation = correlations[bestLag] ?? 0
+    guard bestCorrelation >= minimumTempoCorrelation else { return nil }
+    return TempoEstimate(
+      frameInterval: bestLag,
+      correlation: bestCorrelation
+    )
+  }
+
+  private static func normalizedCorrelation(
+    values: [Double],
+    lag: Int
+  ) -> Double {
+    guard lag > 0, lag < values.count else { return 0 }
+    var productSum = 0.0
+    var currentSquaredSum = 0.0
+    var delayedSquaredSum = 0.0
+    for index in lag..<values.count {
+      let current = values[index]
+      let delayed = values[index - lag]
+      productSum += current * delayed
+      currentSquaredSum += current * current
+      delayedSquaredSum += delayed * delayed
+    }
+    let denominator = sqrt(currentSquaredSum * delayedSquaredSum)
+    guard denominator > 0 else { return 0 }
+    return productSum / denominator
+  }
+
+  /// 推定周期の各位相を採点し，期待位置の近くで最も強い立ち上がりへ微調整する．
+  private static func makeTempoAlignedBeatIndices(
+    onsetStrengths: [Double],
+    frameInterval: Int,
+    hopDuration: TimeInterval
+  ) -> [Int] {
+    guard frameInterval > 0 else { return [] }
+    var bestPhase = 0
+    var bestPhaseScore = -Double.infinity
+    for phase in 0..<min(frameInterval, onsetStrengths.count) {
+      var score = 0.0
+      var index = phase
+      while index < onsetStrengths.count {
+        score += pow(onsetStrengths[index], 1.25)
+        index += frameInterval
+      }
+      if score > bestPhaseScore {
+        bestPhaseScore = score
+        bestPhase = phase
       }
     }
 
-    return beatIndices.map {
-      startTime + (Double($0) + 0.5) * hopDuration
+    let snapRadius = max(1, Int((peakSnapDuration / hopDuration).rounded()))
+    var beatIndices: [Int] = []
+    var expectedIndex = bestPhase
+    while expectedIndex < onsetStrengths.count {
+      let lowerBound = max(0, expectedIndex - snapRadius)
+      let upperBound = min(onsetStrengths.count - 1, expectedIndex + snapRadius)
+      let snappedIndex = (lowerBound...upperBound).max {
+        onsetStrengths[$0] < onsetStrengths[$1]
+      } ?? expectedIndex
+      if beatIndices.last != snappedIndex {
+        beatIndices.append(snappedIndex)
+      }
+      expectedIndex += frameInterval
     }
+    return beatIndices
   }
 
-  private static func detectBeatTimes(
+  /// 4拍のうち平均アクセントが最も強い位相を，小節の1拍目候補とする．
+  private static func estimateDownbeatOffset(
+    beatIndices: [Int],
+    onsetStrengths: [Double]
+  ) -> Int {
+    guard beatIndices.count >= assumedBeatsPerBar else { return 0 }
+    var bestOffset = 0
+    var bestScore = -Double.infinity
+    for offset in 0..<assumedBeatsPerBar {
+      let values = stride(
+        from: offset,
+        to: beatIndices.count,
+        by: assumedBeatsPerBar
+      ).map { onsetStrengths[beatIndices[$0]] }
+      guard !values.isEmpty else { continue }
+      let score = values.reduce(0, +) / Double(values.count)
+      if score > bestScore {
+        bestScore = score
+        bestOffset = offset
+      }
+    }
+    return bestOffset
+  }
+
+  private static func analysisConfidence(
+    correlation: Double,
+    beatIndices: [Int],
+    expectedFrameInterval: Int
+  ) -> Double {
+    guard beatIndices.count >= 2, expectedFrameInterval > 0 else { return 0 }
+    let deviations = zip(beatIndices.dropFirst(), beatIndices).map {
+      abs(Double($0 - $1 - expectedFrameInterval))
+        / Double(expectedFrameInterval)
+    }
+    let meanDeviation = deviations.reduce(0, +) / Double(deviations.count)
+    let regularity = max(0, 1 - meanDeviation)
+    return min(1, max(0, correlation * 0.75 + regularity * 0.25))
+  }
+
+  private static func refinedBPM(
+    beatTimes: [TimeInterval],
+    fallback: Double
+  ) -> Double {
+    let intervals = zip(beatTimes.dropFirst(), beatTimes).map(-)
+      .filter { $0 > 0 }
+      .sorted()
+    guard !intervals.isEmpty else { return fallback }
+    let median = intervals[intervals.count / 2]
+    return median > 0 ? 60 / median : fallback
+  }
+
+  private static func detectBeatGrid(
     url: URL,
     range: Range<TimeInterval>
-  ) async -> [TimeInterval] {
-    guard !Task.isCancelled else { return [] }
+  ) async -> VariantBeatGrid? {
+    guard !Task.isCancelled else { return nil }
     let asset = AVURLAsset(url: url)
     guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
           let energyFrames = readEnergyFrames(
@@ -458,9 +776,9 @@ nonisolated enum VariantBeatAnalyzer {
             track: track,
             range: range
           ) else {
-      return []
+      return nil
     }
-    return detectBeatTimes(
+    return makeBeatGrid(
       energyFrames: energyFrames,
       hopDuration: energyFrameDuration,
       startTime: range.lowerBound
@@ -471,7 +789,7 @@ nonisolated enum VariantBeatAnalyzer {
     asset: AVAsset,
     track: AVAssetTrack,
     range: Range<TimeInterval>
-  ) -> [Double]? {
+  ) -> [EnergyFrame]? {
     do {
       let reader = try AVAssetReader(asset: asset)
       reader.timeRange = CMTimeRange(
@@ -501,17 +819,19 @@ nonisolated enum VariantBeatAnalyzer {
         1,
         Int((analysisSampleRate * energyFrameDuration).rounded())
       )
-      let lowPassAlpha = 1 - exp(
-        -2 * Double.pi * bassLowPassFrequency / analysisSampleRate
+      let bassAlpha = 1 - exp(
+        -2 * Double.pi * bassCrossoverFrequency / analysisSampleRate
       )
-      let highPassAlpha = 1 - exp(
-        -2 * Double.pi * bassHighPassFrequency / analysisSampleRate
+      let midAlpha = 1 - exp(
+        -2 * Double.pi * midCrossoverFrequency / analysisSampleRate
       )
-      var lowPassedSample = 0.0
-      var subBassSample = 0.0
-      var accumulatedEnergy = 0.0
+      var bassLowPassedSample = 0.0
+      var midLowPassedSample = 0.0
+      var accumulatedBassEnergy = 0.0
+      var accumulatedMidEnergy = 0.0
+      var accumulatedHighEnergy = 0.0
       var accumulatedSampleCount = 0
-      var energyFrames: [Double] = []
+      var energyFrames: [EnergyFrame] = []
       let estimatedFrameCount = Int(
         (range.upperBound - range.lowerBound) / energyFrameDuration
       )
@@ -545,18 +865,28 @@ nonisolated enum VariantBeatAnalyzer {
 
         for sample in samples {
           let value = Double(sample) / Double(Int16.max)
-          lowPassedSample += lowPassAlpha * (value - lowPassedSample)
-          subBassSample += highPassAlpha * (value - subBassSample)
-          let bassSample = lowPassedSample - subBassSample
-          accumulatedEnergy += bassEnergyWeight * bassSample * bassSample
-            + fullBandEnergyWeight * value * value
+          bassLowPassedSample += bassAlpha * (value - bassLowPassedSample)
+          midLowPassedSample += midAlpha * (value - midLowPassedSample)
+          let bassSample = bassLowPassedSample
+          let midSample = midLowPassedSample - bassLowPassedSample
+          let highSample = value - midLowPassedSample
+          accumulatedBassEnergy += bassSample * bassSample
+          accumulatedMidEnergy += midSample * midSample
+          accumulatedHighEnergy += highSample * highSample
           accumulatedSampleCount += 1
 
           if accumulatedSampleCount == samplesPerFrame {
             energyFrames.append(
-              sqrt(accumulatedEnergy / Double(accumulatedSampleCount))
+              makeEnergyFrame(
+                bassEnergy: accumulatedBassEnergy,
+                midEnergy: accumulatedMidEnergy,
+                highEnergy: accumulatedHighEnergy,
+                sampleCount: accumulatedSampleCount
+              )
             )
-            accumulatedEnergy = 0
+            accumulatedBassEnergy = 0
+            accumulatedMidEnergy = 0
+            accumulatedHighEnergy = 0
             accumulatedSampleCount = 0
           }
         }
@@ -564,7 +894,12 @@ nonisolated enum VariantBeatAnalyzer {
 
       if accumulatedSampleCount > 0 {
         energyFrames.append(
-          sqrt(accumulatedEnergy / Double(accumulatedSampleCount))
+          makeEnergyFrame(
+            bassEnergy: accumulatedBassEnergy,
+            midEnergy: accumulatedMidEnergy,
+            highEnergy: accumulatedHighEnergy,
+            sampleCount: accumulatedSampleCount
+          )
         )
       }
       guard !Task.isCancelled,
@@ -576,12 +911,26 @@ nonisolated enum VariantBeatAnalyzer {
     }
   }
 
-  private static func makeUniqueLogicalBeatTimes(
-    videoBeatTimes: [TimeInterval],
+  private static func makeEnergyFrame(
+    bassEnergy: Double,
+    midEnergy: Double,
+    highEnergy: Double,
+    sampleCount: Int
+  ) -> EnergyFrame {
+    let divisor = Double(max(1, sampleCount))
+    return EnergyFrame(
+      bass: sqrt(bassEnergy / divisor),
+      mid: sqrt(midEnergy / divisor),
+      high: sqrt(highEnergy / divisor)
+    )
+  }
+
+  private static func makeLogicalBeatGrid(
+    videoGrid: VariantBeatGrid,
     mapping: VariantTimelineMapping,
     logicalDuration: TimeInterval
-  ) -> [TimeInterval] {
-    let sortedTimes = videoBeatTimes.map {
+  ) -> VariantBeatGrid? {
+    let sortedTimes = videoGrid.beatTimes.map {
       mapping.logicalTime(forVideoTime: $0)
     }.filter {
       $0 >= 0 && $0 <= logicalDuration
@@ -590,12 +939,18 @@ nonisolated enum VariantBeatAnalyzer {
     var uniqueTimes: [TimeInterval] = []
     for time in sortedTimes {
       if let previousTime = uniqueTimes.last,
-         time - previousTime < minimumBeatSeparation / 2 {
+         time - previousTime < energyFrameDuration {
         continue
       }
       uniqueTimes.append(time)
     }
-    return uniqueTimes
+    guard uniqueTimes.count >= minimumDetectedBeatCount else { return nil }
+    return VariantBeatGrid(
+      beatTimes: uniqueTimes,
+      bpm: refinedBPM(beatTimes: uniqueTimes, fallback: videoGrid.bpm),
+      confidence: videoGrid.confidence,
+      beatsPerBar: videoGrid.beatsPerBar
+    )
   }
 }
 
