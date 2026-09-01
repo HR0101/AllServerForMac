@@ -230,6 +230,21 @@ struct VariantSwitchPlayerView: View {
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.7))
             }
+            if let normalizationText = viewModel.activeBGMNormalizationText {
+                Label(normalizationText, systemImage: "speaker.wave.2.fill")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            if viewModel.synchronizesSwitchesToBeats {
+                Label(
+                    viewModel.isAnalyzingBeats
+                        ? "拍解析中"
+                        : viewModel.isNextSwitchBeatAligned ? "拍同期" : "通常間隔",
+                    systemImage: "waveform.path.ecg"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.7))
+            }
             if viewModel.isAutoSwitching,
                viewModel.variantCount > 1,
                viewModel.minInterval > VariantSwitchSettings.fineIntervalThreshold {
@@ -267,6 +282,8 @@ struct VariantSwitchPlayerView: View {
                 Divider().frame(height: 22)
                 intervalControls
             }
+            beatSynchronizationControls
+            audioNormalizationControls
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -479,6 +496,66 @@ struct VariantSwitchPlayerView: View {
             .controlSize(.mini)
             .help("切り替えたのに同じ差分が選ばれて「何も変わらない」のを防ぎます")
         }
+    }
+
+    private var audioNormalizationControls: some View {
+        HStack(spacing: 10) {
+            Toggle(isOn: $viewModel.normalizesBGMVolume) {
+                Text("BGM音量を揃える")
+                    .font(.caption.weight(.semibold))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help("BGMだけを分離せず，動画内の音声全体をBGM音量の目安として比較します．大きい動画だけを減衰するため，音割れを防げます．")
+
+            if viewModel.isAnalyzingBGMVolume {
+                ProgressView()
+                    .controlSize(.small)
+                Text("共通場面の音量を解析中…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let status = viewModel.activeBGMNormalizationText {
+                Label(status, systemImage: "waveform")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+            Text("切り替え時の急な音量差を抑えます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var beatSynchronizationControls: some View {
+        HStack(spacing: 10) {
+            Toggle(isOn: $viewModel.synchronizesSwitchesToBeats) {
+                Text("BGMの拍に合わせる")
+                    .font(.caption.weight(.semibold))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .disabled(!viewModel.isAutoSwitching)
+            .help("拍とは，音楽でリズムを刻むタイミングです．通常の切り替え予定時刻を，近くで検出した拍へ最大0.75秒だけ合わせます．")
+
+            if viewModel.isAnalyzingBeats {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if let status = viewModel.beatSynchronizationStatusText {
+                Label(status, systemImage: "waveform.path.ecg")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+            Text("拍が見つからない区間では通常間隔で切り替えます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+        .opacity(viewModel.isAutoSwitching ? 1 : 0.5)
     }
 
     /// 上下限は互いを押し合うので、`Binding` を直に持たせず必ずビューモデルの設定メソッドを通す。

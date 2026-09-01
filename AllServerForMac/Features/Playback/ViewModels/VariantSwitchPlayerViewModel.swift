@@ -37,7 +37,14 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     @Published var isAutoSwitching: Bool {
         didSet {
             VariantSwitchSettings.isAutoSwitchEnabled = isAutoSwitching
-            secondsUntilSwitch = isAutoSwitching ? nextInterval() : 0
+            if isAutoSwitching {
+                prepareBeatAnalysis()
+            } else {
+                beatAnalysisTask?.cancel()
+                beatAnalysisTask = nil
+                isAnalyzingBeats = false
+            }
+            scheduleNextSwitch()
         }
     }
 
@@ -58,6 +65,28 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     @Published var volume: Float = 1 { didSet { applyAudio() } }
     @Published var isMuted: Bool = false { didSet { applyAudio() } }
 
+    /// 動画ごとの代表音量を測り，切り替え時のBGM音量差を抑える．
+    @Published var normalizesBGMVolume: Bool {
+        didSet {
+            VariantSwitchSettings.normalizesBGMVolume = normalizesBGMVolume
+            handleBGMNormalizationSettingChange()
+        }
+    }
+    @Published private(set) var isAnalyzingBGMVolume = false
+    @Published private(set) var audioLevelAnalysisCompleted = false
+
+    /// 自動切り替えの予定時刻を，検出したBGMの拍候補へ合わせる．
+    @Published var synchronizesSwitchesToBeats: Bool {
+        didSet {
+            VariantSwitchSettings.synchronizesSwitchesToBeats = synchronizesSwitchesToBeats
+            handleBeatSynchronizationSettingChange()
+        }
+    }
+    @Published private(set) var isAnalyzingBeats = false
+    @Published private(set) var beatAnalysisCompleted = false
+    @Published private(set) var detectedBeatCount = 0
+    @Published private(set) var isNextSwitchBeatAligned = false
+
     /// 見比べた結果「これは要らない」と分かったものを選ぶモード。
     /// 差分として並べてみて初めて、中身がまったく同じだと気づくことがある。
     @Published var isDeleteMode = false {
@@ -68,13 +97,42 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     var players: [AVPlayer] { group.players }
     var variantCount: Int { variants.count }
 
+    var activeBGMNormalizationText: String? {
+        guard normalizesBGMVolume else { return nil }
+        if isAnalyzingBGMVolume { return "音量解析中" }
+        guard audioLevelAnalysisCompleted,
+              audioLevels.indices.contains(activeIndex),
+              audioNormalizationGains.indices.contains(activeIndex) else {
+            return alignmentMode == .content ? "位置合わせ後に音量解析" : "音量解析待ち"
+        }
+        return VariantAudioLevelAnalyzer.adjustmentText(
+            level: audioLevels[activeIndex],
+            gain: audioNormalizationGains[activeIndex]
+        )
+    }
+
+    var beatSynchronizationStatusText: String? {
+        guard synchronizesSwitchesToBeats else { return nil }
+        if isAnalyzingBeats { return "BGMの拍を解析中" }
+        guard beatAnalysisCompleted else {
+            return alignmentMode == .content ? "位置合わせ後に拍を解析" : "拍解析待ち"
+        }
+        guard detectedBeatCount > 0 else {
+            return "拍を検出できないため通常間隔"
+        }
+        return isNextSwitchBeatAligned
+            ? "拍同期・\(detectedBeatCount)拍"
+            : "次の拍が遠いため通常間隔"
+    }
+
     /// 削除対象に選ばれているもの。並びは画面と同じ（確認ダイアログの一覧と見た目を合わせる）。
     var markedItems: [VideoItem] {
         playable.map(\.item).filter { markedForDeletionIDs.contains($0.id) }
     }
 
-    /// カウントダウンの刻み。表示がなめらかに見える程度に細かく、無駄に起きない程度に粗く。
-    private static let tickSeconds: Double = 0.1
+    /// 通常時は従来の更新頻度を保ち，拍同期中だけ切り替え誤差を小さくする．
+    private static let standardTickSeconds: Double = 0.1
+    private static let beatSynchronizedTickSeconds: Double = 0.025
     /// これ以上ずれたら揃え直す。60fps で 15 フレームぶん＝切り替えたときに気づく大きさ。
     private static let driftThreshold: Double = 0.25
     /// ずれの点検間隔．差分切り替えとは独立して定期確認し，必要な場合だけ揃え直す．
@@ -93,9 +151,15 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private var alignedCommonDuration: TimeInterval?
     private var hasPreparedAlignment = false
     private var alignmentTask: Task<Void, Never>?
+    private var audioNormalizationTask: Task<Void, Never>?
+    private var beatAnalysisTask: Task<Void, Never>?
     private var switchTask: Task<Void, Never>?
     private var isSliderEditing = false
     private var secondsSinceDriftCheck: Double = 0
+    private var audioLevels: [Double?] = []
+    private var audioNormalizationGains: [Float] = []
+    private var detectedBeatTimes: [TimeInterval] = []
+    private var scheduledSwitchTimelineTime: TimeInterval?
 
     init(
         videos: [VideoItem],
@@ -121,6 +185,8 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         self.minInterval = VariantSwitchSettings.minInterval
         self.maxInterval = VariantSwitchSettings.maxInterval
         self.avoidsImmediateRepeat = VariantSwitchSettings.avoidsImmediateRepeat
+        self.normalizesBGMVolume = VariantSwitchSettings.normalizesBGMVolume
+        self.synchronizesSwitchesToBeats = VariantSwitchSettings.synchronizesSwitchesToBeats
 
         wireGroup()
         applyAudio()
@@ -142,6 +208,8 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     // MARK: - 再生
 
     func start() {
+        prepareBGMVolumeNormalization()
+        prepareBeatAnalysis()
         if alignmentMode == .content, !hasPreparedAlignment {
             prepareContentAlignment()
             return
@@ -161,7 +229,7 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         hasReachedEnd = false
         isPlaying = true
         group.play()
-        secondsUntilSwitch = isAutoSwitching ? nextInterval() : 0
+        scheduleNextSwitch()
         startTicking()
     }
 
@@ -201,6 +269,9 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
                 self.wireGroup()
                 self.commonDuration = alignment.commonDuration
                 self.hasPreparedAlignment = true
+                self.applyAudio()
+                self.prepareBGMVolumeNormalization(force: true)
+                self.prepareBeatAnalysis(force: true)
                 self.startPreparedPlayback()
             case .failure(let error):
                 self.alignmentErrorMessage = error.localizedDescription
@@ -242,6 +313,7 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
             if hasReachedEnd {
                 hasReachedEnd = false
                 group.seekAll(toTimelineTime: 0)
+                scheduleNextSwitch(from: 0)
             }
             isPlaying = true
             group.play()
@@ -250,13 +322,16 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
 
     func seek(by seconds: Double) {
         hasReachedEnd = false
+        let expectedTime = min(max(0, commonCurrentTime + seconds), commonDuration)
         group.seekAll(by: seconds)
+        scheduleNextSwitch(from: expectedTime)
     }
 
     /// 数字キーからの割合ジャンプ（0〜1）。
     func seek(toPercentage percentage: Double) {
         hasReachedEnd = false
         group.seekAll(toPercentage: percentage)
+        scheduleNextSwitch(from: commonDuration * min(max(percentage, 0), 1))
     }
 
     func sliderEditingChanged(isEditing: Bool) {
@@ -264,12 +339,15 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         guard !isEditing, commonDuration > 0 else { return }
         hasReachedEnd = false
         group.seekAll(toPercentage: commonCurrentTime / commonDuration)
+        scheduleNextSwitch(from: commonCurrentTime)
     }
 
     private func handlePlayToEnd() {
         hasReachedEnd = true
         isPlaying = false
         secondsUntilSwitch = 0
+        scheduledSwitchTimelineTime = nil
+        isNextSwitchBeatAligned = false
         group.pause()
     }
 
@@ -309,7 +387,7 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private func commitSwitch(to index: Int) {
         activeIndex = index
         applyAudio()
-        secondsUntilSwitch = isAutoSwitching ? nextInterval() : 0
+        scheduleNextSwitch()
     }
 
     /// 聞こえるのは表示中の1本だけ。裏の動画は走らせたままミュートする
@@ -317,9 +395,176 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private func applyAudio() {
         for (index, player) in players.enumerated() {
             let isActive = index == activeIndex
+            let normalizationGain = normalizesBGMVolume
+                && audioNormalizationGains.indices.contains(index)
+                ? audioNormalizationGains[index]
+                : 1
             player.isMuted = !isActive || isMuted
-            player.volume = isActive ? volume : 0
+            player.volume = isActive ? min(max(volume * normalizationGain, 0), 1) : 0
         }
+    }
+
+    // MARK: - BGM音量の補正
+
+    private func handleBGMNormalizationSettingChange() {
+        if normalizesBGMVolume {
+            prepareBGMVolumeNormalization()
+        } else {
+            audioNormalizationTask?.cancel()
+            audioNormalizationTask = nil
+            isAnalyzingBGMVolume = false
+            applyAudio()
+        }
+    }
+
+    private func prepareBGMVolumeNormalization(force: Bool = false) {
+        guard normalizesBGMVolume, !playable.isEmpty else { return }
+        // 一部一致差分は，共通場面の対応表が完成してから同じ場面どうしを測る．
+        guard alignmentMode != .content || hasPreparedAlignment else { return }
+        if !force,
+           audioLevelAnalysisCompleted,
+           audioLevels.count == playable.count,
+           audioNormalizationGains.count == playable.count {
+            applyAudio()
+            return
+        }
+
+        let sources = makeAudioLevelSources()
+        guard sources.count == playable.count else { return }
+        audioNormalizationTask?.cancel()
+        isAnalyzingBGMVolume = true
+        audioLevelAnalysisCompleted = false
+
+        audioNormalizationTask = Task { @MainActor [weak self] in
+            let levels = await VariantAudioLevelAnalyzer.analyze(sources: sources)
+            guard let self, !Task.isCancelled else { return }
+            self.audioLevels = levels
+            self.audioNormalizationGains = VariantAudioLevelAnalyzer
+                .normalizationGains(for: levels)
+            self.isAnalyzingBGMVolume = false
+            self.audioLevelAnalysisCompleted = true
+            self.audioNormalizationTask = nil
+            self.applyAudio()
+        }
+    }
+
+    private func makeAudioLevelSources() -> [VariantAudioLevelSource] {
+        playable.map { playableItem in
+            let sampleCenterTimes: [TimeInterval]?
+            if alignmentMode == .content,
+               let alignedCommonDuration,
+               alignedCommonDuration > 0 {
+                sampleCenterTimes = VariantAudioLevelAnalyzer.samplePositions.map {
+                    playableItem.timelineMapping.videoTime(
+                        forLogicalTime: alignedCommonDuration * $0
+                    )
+                }
+            } else {
+                sampleCenterTimes = nil
+            }
+            return VariantAudioLevelSource(
+                url: playableItem.url,
+                duration: playableItem.item.duration,
+                sampleCenterTimes: sampleCenterTimes
+            )
+        }
+    }
+
+    // MARK: - BGMの拍に合わせた切り替え
+
+    private func handleBeatSynchronizationSettingChange() {
+        if synchronizesSwitchesToBeats {
+            prepareBeatAnalysis()
+        } else {
+            beatAnalysisTask?.cancel()
+            beatAnalysisTask = nil
+            isAnalyzingBeats = false
+        }
+        scheduleNextSwitch()
+    }
+
+    private func prepareBeatAnalysis(force: Bool = false) {
+        guard synchronizesSwitchesToBeats,
+              isAutoSwitching,
+              !playable.isEmpty else { return }
+        // 一部一致差分では，拍時刻を共通タイムラインへ戻すため位置合わせを先に完了させる．
+        guard alignmentMode != .content || hasPreparedAlignment else { return }
+        if !force, beatAnalysisCompleted {
+            scheduleNextSwitch()
+            return
+        }
+
+        let sources = makeBeatAnalysisSources()
+        guard !sources.isEmpty else { return }
+        beatAnalysisTask?.cancel()
+        isAnalyzingBeats = true
+        beatAnalysisCompleted = false
+        detectedBeatCount = 0
+        detectedBeatTimes = []
+
+        beatAnalysisTask = Task { @MainActor [weak self] in
+            let beatTimes = await VariantBeatAnalyzer.analyze(sources: sources)
+            guard let self, !Task.isCancelled else { return }
+            self.detectedBeatTimes = beatTimes
+            self.detectedBeatCount = beatTimes.count
+            self.isAnalyzingBeats = false
+            self.beatAnalysisCompleted = true
+            self.beatAnalysisTask = nil
+            self.scheduleNextSwitch()
+        }
+    }
+
+    private func makeBeatAnalysisSources() -> [VariantBeatAnalysisSource] {
+        let logicalDuration: TimeInterval
+        if alignmentMode == .content, let alignedCommonDuration {
+            logicalDuration = alignedCommonDuration
+        } else {
+            logicalDuration = playable.map(\.item.duration)
+                .filter { $0 > 0 && $0.isFinite }
+                .min() ?? commonDuration
+        }
+        guard logicalDuration > 0 else { return [] }
+
+        return playable.map {
+            VariantBeatAnalysisSource(
+                url: $0.url,
+                duration: $0.item.duration,
+                timelineMapping: $0.timelineMapping,
+                logicalDuration: logicalDuration
+            )
+        }
+    }
+
+    private func scheduleNextSwitch(from requestedCurrentTime: TimeInterval? = nil) {
+        guard isAutoSwitching, variantCount > 1 else {
+            scheduledSwitchTimelineTime = nil
+            secondsUntilSwitch = 0
+            isNextSwitchBeatAligned = false
+            return
+        }
+
+        let currentTime = max(
+            0,
+            requestedCurrentTime ?? group.currentTimelineTime()
+        )
+        let baseInterval = nextInterval()
+        let schedule: VariantBeatSwitchSchedule
+        if synchronizesSwitchesToBeats, !detectedBeatTimes.isEmpty {
+            schedule = VariantBeatSwitchScheduler.schedule(
+                baseInterval: baseInterval,
+                currentTime: currentTime,
+                beatTimes: detectedBeatTimes
+            )
+        } else {
+            schedule = VariantBeatSwitchSchedule(
+                delay: baseInterval,
+                isBeatAligned: false
+            )
+        }
+
+        scheduledSwitchTimelineTime = currentTime + schedule.delay
+        secondsUntilSwitch = schedule.delay
+        isNextSwitchBeatAligned = schedule.isBeatAligned
     }
 
     /// 下限を変える。上限より大きくなったら上限も押し上げる。
@@ -356,17 +601,11 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     private func persistIntervals() {
         VariantSwitchSettings.minInterval = minInterval
         VariantSwitchSettings.maxInterval = maxInterval
-        clampCountdownToRange()
+        scheduleNextSwitch()
     }
 
     private func nextInterval() -> Double {
         maxInterval > minInterval ? Double.random(in: minInterval...maxInterval) : minInterval
-    }
-
-    /// 間隔を狭めたときに、いま走っているカウントダウンだけ長いまま残らないようにする。
-    private func clampCountdownToRange() {
-        guard isAutoSwitching, secondsUntilSwitch > maxInterval else { return }
-        secondsUntilSwitch = maxInterval
     }
 
     // MARK: - 削除
@@ -401,6 +640,18 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         let wasPlaying = isPlaying
         let activeID = variants.indices.contains(activeIndex) ? variants[activeIndex].id : nil
 
+        audioNormalizationTask?.cancel()
+        audioNormalizationTask = nil
+        beatAnalysisTask?.cancel()
+        beatAnalysisTask = nil
+        isAnalyzingBGMVolume = false
+        isAnalyzingBeats = false
+        audioLevelAnalysisCompleted = false
+        beatAnalysisCompleted = false
+        audioLevels = []
+        audioNormalizationGains = []
+        detectedBeatTimes = []
+        detectedBeatCount = 0
         group.cleanup()
         playable = remaining
         variants = remaining.map { Variant(id: $0.item.id, title: $0.item.originalFilename) }
@@ -415,6 +666,9 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         )
         wireGroup()
         applyAudio()
+        prepareBGMVolumeNormalization(force: true)
+        prepareBeatAnalysis(force: true)
+        scheduleNextSwitch(from: resumeAt)
 
         guard !remaining.isEmpty else {
             isPlaying = false
@@ -435,26 +689,36 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
         switchTask?.cancel()
         switchTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(Self.tickSeconds * 1_000_000_000))
+                guard let tickSeconds = self.map({ viewModel in
+                    viewModel.synchronizesSwitchesToBeats
+                        ? Self.beatSynchronizedTickSeconds
+                        : Self.standardTickSeconds
+                }) else { return }
+                try? await Task.sleep(nanoseconds: UInt64(tickSeconds * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
-                self.tick()
+                self.tick(elapsed: tickSeconds)
             }
         }
     }
 
     /// 一時停止中は時計も止める（残り時間が減らない＝再開したところから続く）。
-    private func tick() {
+    private func tick(elapsed: TimeInterval) {
         guard isPlaying else { return }
 
-        secondsSinceDriftCheck += Self.tickSeconds
+        secondsSinceDriftCheck += elapsed
         if secondsSinceDriftCheck >= Self.driftCheckSeconds {
             secondsSinceDriftCheck = 0
             group.resyncIfDrifting(threshold: Self.driftThreshold)
         }
 
         guard isAutoSwitching, variantCount > 1 else { return }
-        secondsUntilSwitch -= Self.tickSeconds
-        if secondsUntilSwitch <= 0 {
+        guard let scheduledSwitchTimelineTime else {
+            scheduleNextSwitch()
+            return
+        }
+        let currentTime = group.currentTimelineTime()
+        secondsUntilSwitch = max(0, scheduledSwitchTimelineTime - currentTime)
+        if currentTime >= scheduledSwitchTimelineTime {
             showRandomVariant()
         }
     }
@@ -462,6 +726,10 @@ final class VariantSwitchPlayerViewModel: ObservableObject {
     func cleanup() {
         alignmentTask?.cancel()
         alignmentTask = nil
+        audioNormalizationTask?.cancel()
+        audioNormalizationTask = nil
+        beatAnalysisTask?.cancel()
+        beatAnalysisTask = nil
         switchTask?.cancel()
         switchTask = nil
         group.cleanup()

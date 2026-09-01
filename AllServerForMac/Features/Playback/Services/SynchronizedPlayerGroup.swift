@@ -336,6 +336,11 @@ final class SynchronizedPlayerGroup {
   }
 
   /// シークバーの監視対象と同じ代表動画を基準にし，全員の微小なずれを持ち越さない．
+  /// 差分切り替えの拍同期など，再生中の共通タイムライン時刻を正確に読む．
+  func currentTimelineTime() -> Double {
+    referenceCurrentTime()
+  }
+
   private func referenceCurrentTime() -> Double {
     if let leadPlayer,
       let index = players.firstIndex(where: { $0 === leadPlayer })

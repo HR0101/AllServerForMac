@@ -5,6 +5,7 @@
 //  Created by 原　颯登 on 2025/10/09.
 //
 
+import AVFoundation
 import Foundation
 import Testing
 @testable import AllServerForMac
@@ -285,6 +286,122 @@ struct AllServerForMacTests {
     #expect(match.score == 0)
   }
 
+  @Test
+  func attenuatesLouderVariantAudioToTheQuietestValidLevel() {
+    let gains = VariantAudioLevelAnalyzer.normalizationGains(
+      for: [-20, -14, -8, nil]
+    )
+
+    #expect(abs(gains[0] - 1) < 0.0001)
+    #expect(abs(gains[1] - 0.501_187) < 0.0001)
+    #expect(abs(gains[2] - 0.251_189) < 0.0001)
+    #expect(abs(gains[3] - 1) < 0.0001)
+  }
+
+  @Test
+  func samplesVariantAudioAtNineEvenlySpacedPositions() {
+    let positions = VariantAudioLevelAnalyzer.samplePositions
+
+    #expect(positions.count == 9)
+    #expect(positions == [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90])
+  }
+
+  @Test
+  func detectsRegularBeatEnergySpikes() {
+    let hopDuration = 0.04
+    var energies = [Double](repeating: 0.02, count: 180)
+    let expectedIndices = Array(stride(from: 20, through: 164, by: 12))
+    for index in expectedIndices {
+      energies[index] = 1
+    }
+
+    let beatTimes = VariantBeatAnalyzer.detectBeatTimes(
+      energyFrames: energies,
+      hopDuration: hopDuration
+    )
+
+    #expect(beatTimes.count == expectedIndices.count)
+    for expectedIndex in expectedIndices {
+      let expectedTime = (Double(expectedIndex) + 0.5) * hopDuration
+      #expect(beatTimes.contains { abs($0 - expectedTime) < 0.001 })
+    }
+  }
+
+  @Test
+  func snapsAutomaticSwitchToNearestBeat() {
+    let schedule = VariantBeatSwitchScheduler.schedule(
+      baseInterval: 3,
+      currentTime: 10,
+      beatTimes: [12.4, 12.9, 13.2, 13.8]
+    )
+
+    #expect(schedule.isBeatAligned)
+    #expect(abs(schedule.delay - 2.9) < 0.0001)
+  }
+
+  @Test
+  func keepsNormalIntervalWhenNoBeatIsNearby() {
+    let schedule = VariantBeatSwitchScheduler.schedule(
+      baseInterval: 3,
+      currentTime: 10,
+      beatTimes: [11, 14]
+    )
+
+    #expect(!schedule.isBeatAligned)
+    #expect(abs(schedule.delay - 3) < 0.0001)
+  }
+
+  @Test
+  func detectsBeatsFromGeneratedLowFrequencyAudio() async throws {
+    let fileManager = FileManager.default
+    let temporaryDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+      "VariantBeatTests-\(UUID().uuidString)"
+    )
+    try fileManager.createDirectory(
+      at: temporaryDirectory,
+      withIntermediateDirectories: true
+    )
+    defer { try? fileManager.removeItem(at: temporaryDirectory) }
+
+    let audioURL = temporaryDirectory.appendingPathComponent("beats.wav")
+    let duration = 4.0
+    try makeBeatTestAudio(url: audioURL, duration: duration)
+    let beatTimes = await VariantBeatAnalyzer.analyze(
+      sources: [
+        VariantBeatAnalysisSource(
+          url: audioURL,
+          duration: duration,
+          timelineMapping: .identity(duration: duration),
+          logicalDuration: duration
+        )
+      ]
+    )
+
+    #expect(beatTimes.count >= 5)
+    #expect(beatTimes.contains { abs($0 - 1.0) < 0.12 })
+    #expect(beatTimes.contains { abs($0 - 2.0) < 0.12 })
+    #expect(beatTimes.contains { abs($0 - 3.0) < 0.12 })
+  }
+
+  @Test
+  func ignoresSilentVariantWhenChoosingAudioTarget() {
+    let gains = VariantAudioLevelAnalyzer.normalizationGains(
+      for: [-60, -14, nil]
+    )
+
+    #expect(gains.allSatisfy { abs($0 - 1) < 0.0001 })
+  }
+
+  @Test
+  func limitsVariantAudioAttenuation() {
+    let gains = VariantAudioLevelAnalyzer.normalizationGains(
+      for: [-50, -5]
+    )
+
+    #expect(abs(gains[0] - 1) < 0.0001)
+    #expect(abs(gains[1] - 0.031_623) < 0.0001)
+  }
+
   private func makeHashSequence(
     count: Int,
     seed: UInt64
@@ -297,5 +414,44 @@ struct AllServerForMacTests {
       value = (value ^ (value >> 27)) &* 0x94D049BB133111EB
       return PerceptualHash(bits: value ^ (value >> 31))
     }
+  }
+
+  private func makeBeatTestAudio(
+    url: URL,
+    duration: TimeInterval
+  ) throws {
+    let sampleRate = 44_100.0
+    let channelCount: AVAudioChannelCount = 1
+    let sampleCount = Int(sampleRate * duration)
+    let format = try #require(
+      AVAudioFormat(
+        standardFormatWithSampleRate: sampleRate,
+        channels: channelCount
+      )
+    )
+    let buffer = try #require(
+      AVAudioPCMBuffer(
+        pcmFormat: format,
+        frameCapacity: AVAudioFrameCount(sampleCount)
+      )
+    )
+    buffer.frameLength = AVAudioFrameCount(sampleCount)
+    let samples = try #require(buffer.floatChannelData?[0])
+
+    for index in 0..<sampleCount {
+      let time = Double(index) / sampleRate
+      let beatPhase = time.truncatingRemainder(dividingBy: 0.5)
+      if beatPhase < 0.08 {
+        samples[index] = Float(sin(2 * Double.pi * 100 * time) * 0.8)
+      } else {
+        samples[index] = 0
+      }
+    }
+
+    let audioFile = try AVAudioFile(
+      forWriting: url,
+      settings: format.settings
+    )
+    try audioFile.write(from: buffer)
   }
 }

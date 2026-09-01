@@ -9,6 +9,8 @@ enum VariantSwitchSettings {
     static let maxIntervalKey = "variantSwitch.maxInterval"
     static let autoSwitchKey = "variantSwitch.autoSwitchEnabled"
     static let avoidRepeatKey = "variantSwitch.avoidsImmediateRepeat"
+    static let normalizeBGMVolumeKey = "variantSwitch.normalizeBGMVolume"
+    static let synchronizeSwitchesToBeatsKey = "variantSwitch.synchronizeSwitchesToBeats"
 
     static let defaultMinInterval: Double = 3
     static let defaultMaxInterval: Double = 6
@@ -39,6 +41,18 @@ enum VariantSwitchSettings {
     static var avoidsImmediateRepeat: Bool {
         get { UserDefaults.standard.object(forKey: avoidRepeatKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: avoidRepeatKey) }
+    }
+
+    /// 差分を切り替えたときの音量差を抑えるか．通常差分と一部一致差分で共通の設定にする．
+    static var normalizesBGMVolume: Bool {
+        get { UserDefaults.standard.object(forKey: normalizeBGMVolumeKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: normalizeBGMVolumeKey) }
+    }
+
+    /// 自動切り替えの予定時刻を，検出したBGMの拍候補へ合わせるか．
+    static var synchronizesSwitchesToBeats: Bool {
+        get { UserDefaults.standard.object(forKey: synchronizeSwitchesToBeatsKey) as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: synchronizeSwitchesToBeatsKey) }
     }
 
     static func clamp(_ value: Double) -> Double {
