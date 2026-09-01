@@ -6,6 +6,7 @@ import Foundation
 import Testing
 @testable import AllServerForMac
 
+@Suite(.serialized)
 struct SceneExtractionTests {
   @Test
   func tutorialCoversCompleteWorkflow() {
