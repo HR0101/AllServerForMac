@@ -44,6 +44,8 @@ final class VideoPlayerViewModel: ObservableObject {
     /// 前回の続きへシークしている最中。この間の再生位置は「まだ移動前の値」なので、
     /// 記録に使うとせっかくの視聴位置を先頭付近で上書きしてしまう。
     private var isRestoringPosition = false
+    /// ループ先頭へシークしている間，末尾側の時刻通知で表示位置を戻さないためのフラグ．
+    private var isRestartingLoop = false
     private let adjacentPreloadRadius = 4
     private let chapterGenerationDelayNanoseconds: UInt64 = 280_000_000
     private let playerTimeObserverInterval: TimeInterval = 0.25
@@ -94,6 +96,8 @@ final class VideoPlayerViewModel: ObservableObject {
         Task { @MainActor in
             let newPlayer = AVPlayer(playerItem: item)
             newPlayer.automaticallyWaitsToMinimizeStalling = false
+            // 終端で映像面を消さず，先頭フレームの準備中も最後のフレームを保持する．
+            newPlayer.actionAtItemEnd = .none
             // didSet は init 中に走らないので、プレイヤー生成時に現在値を当て直す。
             newPlayer.volume = self.volume
             newPlayer.isMuted = self.isMuted
@@ -164,6 +168,7 @@ final class VideoPlayerViewModel: ObservableObject {
         currentTime = 0
         duration = defaultDuration
         isPlaybackPlaying = false
+        isRestartingLoop = false
     }
 
     func seek(by seconds: Double) {
@@ -190,6 +195,7 @@ final class VideoPlayerViewModel: ObservableObject {
             isPlaybackPlaying = true
             refreshNowPlaying()
         } else {
+            isRestartingLoop = false
             player.pause()
             isPlaybackPlaying = false
             commitProgress()
@@ -205,6 +211,7 @@ final class VideoPlayerViewModel: ObservableObject {
 
     func pause() {
         guard let player, player.rate != 0 else { return }
+        isRestartingLoop = false
         player.pause()
         isPlaybackPlaying = false
         commitProgress()
@@ -226,6 +233,7 @@ final class VideoPlayerViewModel: ObservableObject {
 
     private func changeVideo(to newVideo: VideoItem) {
         guard let newItem = playerItem(for: newVideo) else { return }
+        isRestartingLoop = false
         // 切り替える前に、いま観ていた動画の位置を確定させる。
         commitProgress()
         self.currentVideo = newVideo
@@ -371,16 +379,48 @@ final class VideoPlayerViewModel: ObservableObject {
         watchState.publishPendingChanges()
 
         if settings.repeatMode == .one {
-            seek(toSeconds: 0)
-            player?.play()
+            restartCurrentVideoSmoothly()
             return
         }
 
         guard settings.autoPlayNext, let next = nextVideoForAutoPlay() else {
+            player?.pause()
             isPlaybackPlaying = false
             return
         }
+        if next.id == currentVideo.id {
+            restartCurrentVideoSmoothly()
+            return
+        }
         changeVideo(to: next)
+    }
+
+    /// 終端のフレームを表示したまま先頭へ移動し，シーク完了後に再生を再開する．
+    private func restartCurrentVideoSmoothly() {
+        guard let player, let currentItem = player.currentItem else { return }
+        let playbackRate = Float(settings.rate)
+        currentTime = 0
+        isRestartingLoop = true
+        refreshNowPlaying()
+
+        player.seek(
+            to: .zero,
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        ) { [weak self, weak player] finished in
+            Task { @MainActor [weak self, weak player] in
+                guard let self else { return }
+                guard self.isRestartingLoop else { return }
+                self.isRestartingLoop = false
+                guard finished,
+                      let player,
+                      self.player === player,
+                      player.currentItem === currentItem else { return }
+                player.playImmediately(atRate: playbackRate)
+                self.isPlaybackPlaying = true
+                self.refreshNowPlaying()
+            }
+        }
     }
 
     /// 自動再生で次に流す動画。無ければ nil（＝その場で止まる）。
@@ -545,6 +585,7 @@ final class VideoPlayerViewModel: ObservableObject {
         ) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self, !self.isSliderEditing, !self.isRestoringPosition,
+                      !self.isRestartingLoop,
                       time.seconds.isFinite else { return }
                 self.currentTime = min(max(time.seconds, 0), self.duration)
                 // 保管庫側で間引くので、ここは毎回呼んでよい。
@@ -557,6 +598,7 @@ final class VideoPlayerViewModel: ObservableObject {
         guard let player = player else { return }
         // 自分でシークしたなら、もう再開位置へ戻す途中ではない。
         isRestoringPosition = false
+        isRestartingLoop = false
         let effectiveDuration = player.currentItem?.duration.seconds ?? duration
         let upperBound = effectiveDuration.isFinite && effectiveDuration > 0 ? effectiveDuration : duration
         let clampedSeconds = min(max(seconds, 0), max(upperBound, 0))
