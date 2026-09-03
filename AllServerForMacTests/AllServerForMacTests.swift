@@ -12,6 +12,32 @@ import Testing
 
 struct AllServerForMacTests {
   @Test @MainActor
+  func ignoresRandomPlaybackWhileVariantFinderIsOpen() {
+    let videoID = UUID()
+    let video = VideoItem(
+      id: videoID,
+      originalFilename: "random-test.mp4",
+      internalFilename: "random-test.mp4",
+      duration: 10,
+      importDate: Date(),
+      creationDate: nil,
+      fileHash: "random-test"
+    )
+    let coordinator = PlaybackCoordinator()
+    let albumID = UUID()
+
+    coordinator.openVariantFinder(
+      albumID: albumID,
+      itemIDs: [videoID],
+      hostSize: nil
+    )
+    coordinator.playRandom(from: [video])
+
+    #expect(coordinator.mode == nil)
+    #expect(coordinator.variantFinderAlbumID == albumID)
+  }
+
+  @Test @MainActor
   func reportsMissingMoviesDirectoryWithoutCreatingStorage() {
     var createdDirectories: [URL] = []
     let environment = LibraryStorageEnvironment(

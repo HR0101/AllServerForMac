@@ -124,6 +124,9 @@ final class PlaybackCoordinator: ObservableObject {
 
     /// 表示中リストをシャッフルしてランダム再生
     func playRandom(from videos: [VideoItem]) {
+        // 差分一覧はライブラリ上のオーバーレイなので，背後に残ったRキーや
+        // ツールバーの操作で通常プレイヤーを重ねない．
+        guard variantFinderAlbumID == nil else { return }
         let shuffled = videos.filter { $0.mediaType == .video }.shuffled()
         guard let first = shuffled.first else { return }
         isMiniPlayerActive = false
