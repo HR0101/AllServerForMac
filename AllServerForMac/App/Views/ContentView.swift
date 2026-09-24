@@ -256,6 +256,13 @@ struct ContentView: View {
                             onAnalyzeScenes: viewModel.openSceneExtraction
                         )
                             .navigationTitle("お気に入り")
+                    case .continueWatching:
+                        LibraryCategoryView(
+                            kind: .continueWatching,
+                            dataManager: dataManager,
+                            onAnalyzeScenes: viewModel.openSceneExtraction
+                        )
+                            .navigationTitle("続きを見る")
                     case .history:
                         LibraryCategoryView(
                             kind: .history,

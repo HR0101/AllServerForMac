@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 struct LibraryCategoryView: View {
     enum Kind: Hashable {
         case favorites
+        /// 途中でやめた動画だけを並べる。中身は視聴位置の保管庫なので、
+        /// ブラウザ・iPhone で途中まで観たものもここに出る。
+        case continueWatching
         case history
         case trash
     }
@@ -48,6 +51,7 @@ struct LibraryCategoryView: View {
 
     private var isTrash: Bool { kind == .trash }
     private var isHistory: Bool { kind == .history }
+    private var isContinueWatching: Bool { kind == .continueWatching }
 
     @State private var showClearHistoryAlert = false
 
@@ -55,6 +59,8 @@ struct LibraryCategoryView: View {
         switch kind {
         case .favorites:
             return dataManager.favoriteVideos
+        case .continueWatching:
+            return continueWatchingItems
         case .history:
             return historyItems
         case .trash:
@@ -72,11 +78,33 @@ struct LibraryCategoryView: View {
         return watchState.historyOrder.compactMap { itemByID[$0] }
     }
 
+    /// 途中でやめた動画を、最後に再生した順（新しい順）に並べたもの。
+    /// 並びに `historyOrder` を使うのは、視聴位置そのものには前後関係が無いため。
+    /// 履歴から外した動画は並びから消えるので、視聴位置だけが残っているものを末尾に足す。
+    private var continueWatchingItems: [VideoItem] {
+        let itemByID = Dictionary(
+            dataManager.videos.lazy.filter { !$0.isInTrash && $0.mediaType == .video }.map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        var seen = Set<UUID>()
+        var result: [VideoItem] = []
+        for id in watchState.historyOrder {
+            guard let item = itemByID[id],
+                  watchState.resumableSeconds(for: id, duration: item.duration) != nil else { continue }
+            seen.insert(id)
+            result.append(item)
+        }
+        // 履歴を消しても視聴位置は残る（仕様）。その分は順序を決めようがないので後ろへ回す。
+        let orphans = itemByID.values
+            .filter { !seen.contains($0.id) && watchState.resumableSeconds(for: $0.id, duration: $0.duration) != nil }
+            .sorted { $0.originalFilename.localizedStandardCompare($1.originalFilename) == .orderedAscending }
+        return result + orphans
+    }
+
     private var displayedItems: [VideoItem] {
         let filtered = sourceItems.filtered(bySearch: searchText)
-        // 履歴は「再生した順」そのものが中身なので並べ替えない
-        // （名前順に並べ替えた履歴には意味がない）。
-        guard !isHistory else { return filtered }
+        // 履歴と「続きを見る」は、並び（最後に再生した順）そのものが中身なので並べ替えない。
+        guard !isHistory, !isContinueWatching else { return filtered }
         return filtered.sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed, lastPlayed: watchState.lastPlayed) { dataManager.fileMetadata(for: $0) }
     }
     private var selectedVideoItems: [VideoItem] {
@@ -134,7 +162,7 @@ struct LibraryCategoryView: View {
                 }
             }
             Divider()
-            MediaGridControlBar(dataManager: dataManager, showsSortControls: !isHistory)
+            MediaGridControlBar(dataManager: dataManager, showsSortControls: !isHistory && !isContinueWatching)
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
@@ -386,10 +414,7 @@ struct LibraryCategoryView: View {
                                 onAnalyzeScenes(video)
                             } : nil,
                             affectedItems: menuTargets(for: video, in: items),
-                            onRemoveFromHistory: isHistory ? {
-                                watchState.removeHistory(videoIDs: targetIDs(for: video))
-                                selectedVideoIDs.removeAll()
-                            } : nil
+                            onRemoveFromList: listRemoval(for: video)
                         )
                         .id(video.id)
                     }
@@ -751,9 +776,30 @@ struct LibraryCategoryView: View {
         }
     }
 
+    /// 「再生履歴」「続きを見る」から外す右クリック項目。どちらでもない画面では出さない。
+    private func listRemoval(for video: VideoItem) -> (label: String, action: () -> Void)? {
+        if isHistory {
+            return ("履歴から削除", {
+                watchState.removeHistory(videoIDs: targetIDs(for: video))
+                selectedVideoIDs.removeAll()
+            })
+        }
+        if isContinueWatching {
+            // 捨てるのは視聴位置だけ。履歴にも動画そのものにも触らない
+            // （「もう続きは要らない」と「観た記録を消したい」は別の意思表示）。
+            return ("続きを見るから外す", {
+                for id in targetIDs(for: video) { watchState.markFinished(videoID: id) }
+                watchState.publishPendingChanges()
+                selectedVideoIDs.removeAll()
+            })
+        }
+        return nil
+    }
+
     private var categoryScope: PlaybackCoordinator.LibraryScope {
         switch kind {
         case .favorites: return .favorites
+        case .continueWatching: return .continueWatching
         case .history: return .history
         case .trash: return .trash
         }
@@ -771,6 +817,7 @@ struct LibraryCategoryView: View {
     private var emptyStateTitle: String {
         switch kind {
         case .favorites: return "お気に入りはありません"
+        case .continueWatching: return "途中の動画はありません"
         case .history: return "再生履歴はありません"
         case .trash: return "ゴミ箱は空です"
         }
@@ -779,6 +826,7 @@ struct LibraryCategoryView: View {
     private var emptyStateSymbol: String {
         switch kind {
         case .favorites: return "heart"
+        case .continueWatching: return "play.circle"
         case .history: return "clock.arrow.circlepath"
         case .trash: return "trash"
         }
@@ -787,6 +835,7 @@ struct LibraryCategoryView: View {
     private var emptyStateDescription: String {
         switch kind {
         case .favorites: return "グリッドの右クリックメニューからお気に入りに追加できます"
+        case .continueWatching: return "最後まで観ずにやめた動画がここに並びます（ブラウザや iPhone で観た分も含みます）"
         case .history: return "再生した動画がここに新しい順で並びます（ブラウザや iPhone での再生も含みます）"
         case .trash: return "削除した項目はここに移動します"
         }

@@ -15,6 +15,7 @@ final class PlaybackCoordinator: ObservableObject {
     enum LibraryScope: Equatable {
         case album(UUID)
         case favorites
+        case continueWatching
         case history
         case trash
     }

@@ -30,8 +30,9 @@ struct MediaGridItem: View {
     /// 複数選択中に右クリックすると選択全体が対象になるため、
     /// 確認文が「このセル1件」の話に見えないよう、対象の実態をここで受け取る。
     var affectedItems: [VideoItem] = []
-    /// 「再生履歴」アルバムでのみ渡す。nil なら右クリックメニューに項目を出さない。
-    var onRemoveFromHistory: (() -> Void)?
+    /// 「再生履歴」「続きを見る」でだけ渡す、その一覧から外すための項目。
+    /// nil なら右クリックメニューに出さない。
+    var onRemoveFromList: (label: String, action: () -> Void)?
 
     @EnvironmentObject private var watchState: WatchStateStore
 
@@ -186,6 +187,9 @@ struct MediaGridItem: View {
                 }
                 if showRemoveFromAlbum {
                     Button("アルバムから外す") { onRemoveFromAlbum() }
+                }
+                if let onRemoveFromList {
+                    Button(onRemoveFromList.label) { onRemoveFromList.action() }
                 }
                 Divider()
                 Button("削除…", role: .destructive) { showDeleteConfirmation = true }

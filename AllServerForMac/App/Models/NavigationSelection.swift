@@ -4,6 +4,9 @@ import Foundation
 enum NavigationSelection: Hashable {
   case home
   case favorites
+  /// 途中でやめた動画だけを、最後に再生した順に並べる画面。
+  /// ブラウザ UI の「続きを見る」タブと同じ中身（保管庫が `/sync` で共有されているため）。
+  case continueWatching
   case history
   case trash
   case sceneExtraction
