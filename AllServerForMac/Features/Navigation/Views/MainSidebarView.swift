@@ -219,6 +219,7 @@ struct MainSidebarView: View {
                     sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
                 }
                     sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
+                    sidebarNavigationButton(.continueWatching, title: "続きを見る", systemImage: "play.circle.fill", count: continueWatchingCount)
                     sidebarNavigationButton(.history, title: "再生履歴", systemImage: "clock.arrow.circlepath", count: historyCount)
                     sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
                 }
@@ -308,6 +309,17 @@ struct MainSidebarView: View {
         guard !watchState.historyOrder.isEmpty else { return 0 }
         let available = Set(dataManager.videos.lazy.filter { !$0.isInTrash }.map(\.id))
         return watchState.historyOrder.reduce(0) { $0 + (available.contains($1) ? 1 : 0) }
+    }
+
+    /// 「続きを見る」の件数。履歴と違って視聴位置そのものを数えるので、
+    /// 履歴から外したあとも途中の動画はここに残る（一覧の中身と同じ数え方）。
+    private var continueWatchingCount: Int {
+        guard !watchState.progress.isEmpty else { return 0 }
+        return dataManager.videos.reduce(0) { count, item in
+            guard !item.isInTrash, item.mediaType == .video,
+                  watchState.resumableSeconds(for: item.id, duration: item.duration) != nil else { return count }
+            return count + 1
+        }
     }
 
     private func sidebarNavigationButton(_ target: NavigationSelection, title: String, systemImage: String, count: Int? = nil) -> some View {

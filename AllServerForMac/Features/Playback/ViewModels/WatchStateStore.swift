@@ -74,6 +74,18 @@ final class WatchStateStore: ObservableObject {
         return seconds
     }
 
+    /// 「続きを見る」に並べてよいか（＝途中でやめた動画か）。
+    ///
+    /// 判定は `resumeSeconds` と同じだが、見るのは表示用の `progress` の方。
+    /// あちらは再生中に毎秒動く `liveProgress` を見るので、一覧の描画に使うと
+    /// SwiftUI の更新（`@Published` の発火）と足並みが揃わない。
+    func resumableSeconds(for videoID: UUID, duration: TimeInterval) -> Double? {
+        guard let seconds = progress[videoID], seconds.isFinite else { return nil }
+        guard seconds >= minimumResumeSeconds else { return nil }
+        guard duration <= 0 || seconds < duration - finishedTailSeconds else { return nil }
+        return seconds
+    }
+
     /// 視聴済みバーの長さ（0...1）。観ていない動画は 0。
     func watchedFraction(for videoID: UUID, duration: TimeInterval) -> Double {
         guard duration > 0, let seconds = progress[videoID], seconds > 0 else { return 0 }

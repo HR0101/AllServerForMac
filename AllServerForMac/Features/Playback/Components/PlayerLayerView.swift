@@ -41,12 +41,17 @@ final class PlayerLayerHostView: NSView {
 struct PlayerLayerContainerView: NSViewRepresentable {
 
     let player: AVPlayer?
+    /// 映像の収め方。既定は全体が収まる表示。
+    /// レイヤーを作り直さずにここだけ差し替える（作り直すと再生が途切れるうえ、
+    /// `PictureInPictureCoordinator` が掴んでいる `AVPlayerLayer` が別物になってしまう）。
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
     /// レイヤーが出来たときに一度だけ呼ばれる。PiP コントローラーの作成に使う。
     var onLayerReady: ((AVPlayerLayer) -> Void)?
 
     func makeNSView(context: Context) -> PlayerLayerHostView {
         let view = PlayerLayerHostView()
         view.playerLayer.player = player
+        view.playerLayer.videoGravity = videoGravity
         if let onLayerReady {
             // View 生成の最中に呼ぶと SwiftUI の状態更新と重なるため、次のループへ回す。
             let layer = view.playerLayer
@@ -58,6 +63,13 @@ struct PlayerLayerContainerView: NSViewRepresentable {
     func updateNSView(_ nsView: PlayerLayerHostView, context: Context) {
         if nsView.playerLayer.player !== player {
             nsView.playerLayer.player = player
+        }
+        if nsView.playerLayer.videoGravity != videoGravity {
+            // 収め方の変更に暗黙アニメーションが乗ると、切り替えの瞬間に映像が伸び縮みして見える。
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            nsView.playerLayer.videoGravity = videoGravity
+            CATransaction.commit()
         }
     }
 }

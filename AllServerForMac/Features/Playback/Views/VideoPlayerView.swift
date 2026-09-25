@@ -399,6 +399,8 @@ struct VideoPlayerView: View {
     private let playbackControlsHorizontalPadding: CGFloat = 28
     private let playbackControlsBottomPadding: CGFloat = 24
     private let playbackControlButtonWidth: CGFloat = 26
+    /// キー1打ちで動かす音量の幅。20回で無音から最大まで届く。
+    private let volumeStep: Float = 0.05
     private let minimumSliderDuration: Double = 0.1
     private let videoStripScrollThreshold: CGFloat = 2
     private let secondsPerMinute = 60
@@ -449,7 +451,14 @@ struct VideoPlayerView: View {
                 .videoCycleRepeat,
                 .videoRateDown,
                 .videoRateUp,
-                .videoTogglePictureInPicture
+                .videoTogglePictureInPicture,
+                .videoVolumeUp,
+                .videoVolumeDown,
+                .videoToggleMute,
+                .videoToggleFavorite,
+                .videoStepBackward,
+                .videoStepForward,
+                .videoToggleFillScreen
             ],
             extraItems: [
                 ("0〜9", "動画の 0%〜90% の位置へジャンプ"),
@@ -567,7 +576,7 @@ struct VideoPlayerView: View {
     private var miniPlayerView: some View {
         ZStack(alignment: .bottom) {
             Color.black
-            PlayerLayerContainerView(player: viewModel.player)
+            PlayerLayerContainerView(player: viewModel.player, videoGravity: viewModel.videoGravity)
 
             if isMiniControlsVisible {
                 HStack(spacing: 8) {
@@ -640,7 +649,10 @@ struct VideoPlayerView: View {
                 Color.black
                 // AVKit標準コントロールは表示時に動画全体を暗くするため使わず、
                 // 下部に独自のシークバーを重ねる。
-                PlayerLayerContainerView(player: viewModel.player) { layer in
+                PlayerLayerContainerView(
+                    player: viewModel.player,
+                    videoGravity: viewModel.videoGravity
+                ) { layer in
                     pictureInPicture.attach(playerLayer: layer)
                 }
                 .scaleEffect(x: videoZoom.scaleX, y: videoZoom.scaleY, anchor: .topLeading)
@@ -889,6 +901,32 @@ struct VideoPlayerView: View {
             .buttonStyle(.plain)
             .help(settings.repeatMode.title)
             .accessibilityLabel(settings.repeatMode.title)
+
+            Button {
+                viewModel.toggleCurrentVideoFavorite()
+            } label: {
+                Image(systemName: viewModel.isCurrentVideoFavorite ? "heart.fill" : "heart")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: playbackControlButtonWidth)
+                    .foregroundStyle(viewModel.isCurrentVideoFavorite ? Color.accentColor : Color.primary)
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.isCurrentVideoFavorite ? "お気に入りから外す" : "お気に入りに追加")
+            .accessibilityLabel("お気に入り")
+
+            Button {
+                viewModel.toggleFillsScreen()
+            } label: {
+                Image(systemName: viewModel.fillsScreen
+                      ? "arrow.down.right.and.arrow.up.left"
+                      : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: playbackControlButtonWidth)
+                    .foregroundStyle(viewModel.fillsScreen ? Color.accentColor : Color.primary)
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.fillsScreen ? "全体が収まる表示に戻す" : "画面いっぱいに広げる（黒帯を切り落とす）")
+            .accessibilityLabel("画面いっぱい")
 
             if PictureInPictureCoordinator.isSupported {
                 Button {
@@ -1163,6 +1201,31 @@ struct VideoPlayerView: View {
             return .handled
         } else if MediaShortcutSettings.matches(.videoTogglePictureInPicture, press: press) {
             pictureInPicture.toggle()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoVolumeUp, press: press) {
+            viewModel.adjustVolume(by: volumeStep)
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoVolumeDown, press: press) {
+            viewModel.adjustVolume(by: -volumeStep)
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleMute, press: press) {
+            viewModel.toggleMute()
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleFavorite, press: press) {
+            viewModel.toggleCurrentVideoFavorite()
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoStepBackward, press: press) {
+            viewModel.stepFrame(by: -1)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoStepForward, press: press) {
+            viewModel.stepFrame(by: 1)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleFillScreen, press: press) {
+            viewModel.toggleFillsScreen()
             return .handled
         }
 
