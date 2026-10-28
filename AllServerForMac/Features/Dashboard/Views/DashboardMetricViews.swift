@@ -6,23 +6,23 @@ import SwiftUI
 struct DuplicateCheckCountBadge: View {
     let title: String
     let count: Int
-    let tint: Color
 
     var body: some View {
+        // 緑・橙の強い色の面はやめ、中立の面に濃い文字で数字だけを見せる。
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text("\(count)")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(size: 12))
+                .foregroundStyle(NeomorphicTheme.muted)
+            Text(count.formatted())
+                .font(.system(size: 22, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(tint)
+                .foregroundStyle(NeomorphicTheme.ink)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.opacity(0.12))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(NeomorphicTheme.control)
         )
     }
 }

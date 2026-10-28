@@ -26,6 +26,7 @@ struct SimilarMediaView: View {
             footer
         }
         .frame(minWidth: 820, idealWidth: 1020, minHeight: 540, idealHeight: 700)
+        .appSheet()
         .onAppear {
             model.configure { dataManager.fileMetadata(for: $0).size }
             model.scan(items: items, dataManager: dataManager)
@@ -122,7 +123,7 @@ struct SimilarMediaView: View {
         let isKept = group.keepIDs.contains(item.id)
         let isSelected = model.selectedIDs.contains(item.id)
         return VStack(spacing: 4) {
-            MacVideoThumbnailView(videoItem: item, dataManager: dataManager)
+            MacVideoThumbnailView(videoItem: item, dataManager: dataManager, showsPlayGlyph: false)
                 .frame(width: thumbnailSide, height: thumbnailSide)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
@@ -149,7 +150,7 @@ struct SimilarMediaView: View {
             }
                 .font(.system(size: 11))
                 .buttonStyle(.plain)
-                .foregroundStyle(isKept ? Color.secondary : Color.accentColor)
+                .foregroundStyle(isKept ? NeomorphicTheme.muted : NeomorphicTheme.ink)
                 .disabled(isKept)
 
             Text(item.originalFilename)

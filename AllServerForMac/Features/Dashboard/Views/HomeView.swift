@@ -14,6 +14,8 @@ struct HomeView: View {
     @State private var isShowingAccessLog = false
     @State private var isShowingStorageManager = false
     @State private var logFilter: Int = 0 // 0: 全て, 1: 動画本体, 2: サムネ, 3: その他
+    /// ページ見出しの2行目に出す、ライブラリの規模（「動画 1,038本 · 画像 26,529枚 · アルバム 513」）。
+    @State private var librarySummary = ""
 
     init(dataManager: LibraryViewModel, webServerManager: ServerViewModel) {
         self.dataManager = dataManager
@@ -27,7 +29,7 @@ struct HomeView: View {
             NeomorphicHomeBackground()
             ScrollView {
                 VStack(spacing: DS.cardSpacing) {
-                    LibraryPageHeader(title: "ホーム", subtitle: "このMacから，メディアを楽しむための準備を．")
+                    LibraryPageHeader(title: "ホーム", subtitle: librarySummary)
                       .padding(.horizontal, -24)
 
                     // カードごとの高さが異なるため，行の高さを強制するLazyVGridは使わない。
@@ -74,10 +76,26 @@ struct HomeView: View {
         // 作られないため，それまでホームが 0/0 のままになり「今すぐすべてチェック」も押せない．
         // ホームを開いたとき・ライブラリの読み込みが終わったときに一度作っておく．
         .onAppear(perform: refreshDuplicateCheckCountsIfNeeded)
+        .onAppear(perform: refreshLibrarySummary)
         .onChange(of: dataManager.isLibraryLoaded) { refreshDuplicateCheckCountsIfNeeded() }
+        .onChange(of: dataManager.videos) { refreshLibrarySummary() }
+        .onChange(of: dataManager.albums) { refreshLibrarySummary() }
         .sheet(isPresented: $isShowingStorageManager) {
             StorageManagerView(dataManager: dataManager)
         }
+    }
+
+    /// 1回の走査で本数・枚数を数える（ホームは1秒ごとに再描画されるので、body の中では数えない）。
+    private func refreshLibrarySummary() {
+        var videoCount = 0
+        var photoCount = 0
+        for item in dataManager.videos where !item.isInTrash {
+            if item.mediaType == .video { videoCount += 1 } else { photoCount += 1 }
+        }
+        let albumCount = [false, true].reduce(0) {
+            $0 + SidebarViewModel.treeAlbums(from: dataManager.albums, isPhoto: $1).count
+        }
+        librarySummary = "動画 \(videoCount.formatted())本 · 画像 \(photoCount.formatted())枚 · アルバム \(albumCount.formatted())"
     }
 
     // MARK: 重複チェックカード
@@ -94,17 +112,12 @@ struct HomeView: View {
         return VStack(alignment: .leading, spacing: 12) {
             CardHeader(icon: "checkmark.seal.fill", tint: NeomorphicTheme.accent, title: "重複メディアの確認", subtitle: "同じファイルがないかアルバムごとに確認")
 
-            Toggle(isOn: $dataManager.isAutoDuplicateCheckEnabled) {
-                Text("バックグラウンドで自動チェック")
-                    .font(.system(size: 12))
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            SettingToggleRow(title: "バックグラウンドで自動チェック", isOn: $dataManager.isAutoDuplicateCheckEnabled)
             .help("オフにすると，インポート後などにバックグラウンドで自動実行される重複チェックを停止します．アルバム内の「重複チェック」ボタンによる手動実行には影響しません．")
 
             HStack(spacing: 10) {
-                DuplicateCheckCountBadge(title: "チェック済み", count: checkedAlbums.count, tint: .green)
-                DuplicateCheckCountBadge(title: "未チェック", count: uncheckedAlbums.count, tint: .orange)
+                DuplicateCheckCountBadge(title: "チェック済み", count: checkedAlbums.count)
+                DuplicateCheckCountBadge(title: "未チェック", count: uncheckedAlbums.count)
             }
 
             if totalCount == 0 {
@@ -384,12 +397,7 @@ struct HomeView: View {
 
             Divider()
 
-            Toggle(isOn: $webServerManager.autoStopEnabled) {
-                Text("自動停止タイマー")
-                    .font(.system(size: 12))
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            SettingToggleRow(title: "自動停止タイマー", isOn: $webServerManager.autoStopEnabled)
             .disabled(webServerManager.isRunning)
 
             if webServerManager.autoStopEnabled {
@@ -416,12 +424,7 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 12) {
             CardHeader(icon: "calendar.badge.clock", tint: NeomorphicTheme.accent, title: "起動・停止スケジュール", subtitle: "毎日決まった時刻に自動で起動・終了")
 
-            Toggle(isOn: $webServerManager.scheduleEnabled) {
-                Text("毎日決まった時間に起動/停止")
-                    .font(.system(size: 12))
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            SettingToggleRow(title: "毎日決まった時間に起動/停止", isOn: $webServerManager.scheduleEnabled)
 
             if webServerManager.scheduleEnabled {
                 Divider()
@@ -460,12 +463,7 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 12) {
             CardHeader(icon: "lock.shield.fill", tint: NeomorphicTheme.accent, title: "PIN認証", subtitle: "接続する端末に入力する6桁の番号")
 
-            Toggle(isOn: $webServerManager.authEnabled) {
-                Text("PIN認証を必須にする")
-                    .font(.system(size: 12))
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            SettingToggleRow(title: "PIN認証を必須にする", isOn: $webServerManager.authEnabled)
             .help("オンにすると，Web・iOSアプリからのアクセスにPINが必要になります．")
 
             if webServerManager.authEnabled {
@@ -597,17 +595,15 @@ struct HomeView: View {
                 Button("すべて見る") { isShowingAccessLog = true }
                     .font(.system(size: 11, weight: .semibold))
                     .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(NeomorphicTheme.muted)
             }
 
-            Picker("", selection: $logFilter) {
-                Text("すべて").tag(0)
-                Text("動画本体").tag(1)
-                Text("サムネ").tag(2)
-                Text("その他").tag(3)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            FlatSegmentedControl(
+                options: [0, 1, 2, 3],
+                title: { ["すべて", "動画本体", "サムネ", "その他"][$0] },
+                selection: $logFilter,
+                width: 320
+            )
             .padding(.bottom, 4)
 
             let filteredLogs = webServerManager.accessLogs.filter { entry in

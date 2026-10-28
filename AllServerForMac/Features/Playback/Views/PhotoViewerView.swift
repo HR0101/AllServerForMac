@@ -406,7 +406,6 @@ struct PhotoViewerView: View {
                 }
             }
             .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
-            .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 4)
         }
         .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
         .task(id: targetItem?.id) {

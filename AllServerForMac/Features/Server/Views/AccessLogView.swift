@@ -14,28 +14,21 @@ struct AccessLogView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                IconTile(icon: "list.bullet.rectangle.fill", tint: .teal, size: 30)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("アクセスログ").font(.headline)
-                    Text("直近 \(webServerManager.accessLogs.count) 件のリクエスト")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Picker("", selection: $logFilter) {
-                    Text("すべて").tag(0)
-                    Text("動画本体").tag(1)
-                    Text("サムネ").tag(2)
-                    Text("その他").tag(3)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 250)
+                SheetHeader(
+                    icon: "list.bullet.rectangle",
+                    title: "アクセスログ",
+                    subtitle: "直近 \(webServerManager.accessLogs.count) 件のリクエスト"
+                )
+                FlatSegmentedControl(
+                    options: [0, 1, 2, 3],
+                    title: { ["すべて", "動画本体", "サムネ", "その他"][$0] },
+                    selection: $logFilter,
+                    width: 260
+                )
 
                 Button("クリア") { webServerManager.accessLogs.removeAll() }
                     .disabled(webServerManager.accessLogs.isEmpty)
                 Button("閉じる") { dismiss() }
-                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.cancelAction)
             }
             .padding(16)
@@ -73,8 +66,8 @@ struct AccessLogView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.blue.opacity(0.12)))
-                            .foregroundStyle(.blue)
+                            .background(Capsule().fill(NeomorphicTheme.control))
+                            .foregroundStyle(NeomorphicTheme.ink)
                     }
                     .width(64)
                     TableColumn("パス") { entry in
@@ -85,13 +78,15 @@ struct AccessLogView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill((entry.authorized ? Color.green : Color.red).opacity(0.15)))
-                            .foregroundStyle(entry.authorized ? .green : .red)
+                            .background(Capsule().fill((entry.authorized ? NeomorphicTheme.online : Color.red).opacity(0.15)))
+                            .foregroundStyle(entry.authorized ? NeomorphicTheme.online : .red)
                     }
                     .width(48)
                 }
+                .scrollContentBackground(.hidden)
             }
         }
         .frame(width: 680, height: 480)
+        .appSheet()
     }
 }

@@ -27,6 +27,7 @@ struct SketchCleanupView: View {
             footer
         }
         .frame(minWidth: 780, idealWidth: 980, minHeight: 520, idealHeight: 680)
+        .appSheet()
         .onAppear { model.scan(items: items, dataManager: dataManager) }
         .onDisappear { model.cancelScan() }
         .sheet(isPresented: $showDeleteConfirmation) {
@@ -98,7 +99,7 @@ struct SketchCleanupView: View {
     private func candidateCell(_ candidate: SketchCleanupViewModel.Candidate) -> some View {
         let isSelected = model.selectedIDs.contains(candidate.id)
         return VStack(spacing: 5) {
-            MacVideoThumbnailView(videoItem: candidate.item, dataManager: dataManager)
+            MacVideoThumbnailView(videoItem: candidate.item, dataManager: dataManager, showsPlayGlyph: false)
                 .frame(width: thumbnailSide, height: thumbnailSide)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
@@ -146,14 +147,12 @@ struct SketchCleanupView: View {
                 Text("\(Int(model.threshold * 100))%")
                     .font(.caption.monospacedDigit())
                     .frame(width: 38, alignment: .leading)
-                Picker("", selection: $model.kindFilter) {
-                    ForEach(SketchCleanupViewModel.KindFilter.allCases) { filter in
-                        Text(filter.displayName).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 240)
+                FlatSegmentedControl(
+                    options: Array(SketchCleanupViewModel.KindFilter.allCases),
+                    title: { $0.displayName },
+                    selection: $model.kindFilter,
+                    width: 240
+                )
                 Spacer()
             }
 

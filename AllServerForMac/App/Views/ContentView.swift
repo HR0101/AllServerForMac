@@ -7,8 +7,8 @@ struct ContentView: View {
     @ObservedObject private var dataManager: LibraryViewModel
     @ObservedObject private var playbackCoordinator: PlaybackCoordinator
     @ObservedObject private var appSettings: AppSettings
-    /// サイドバーの幅。行の幅（300）に左右の余白（10×2）を足した値で、行は固定幅で組んである。
-    private let sidebarWidth: CGFloat = 320
+    /// サイドバーの幅。行の幅（253）に左右の余白（10×2）とスクロールバーの分（15）を足した値で、行は固定幅で組んである。
+    private let sidebarWidth: CGFloat = 288
     @State private var isSidebarVisible = true
 
     init() {
@@ -164,13 +164,12 @@ struct ContentView: View {
                     : .normal,
                 onClose: playbackCoordinator.closeVariantFinder
             )
-            .background(.regularMaterial)
+            .appSheet()
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                    .strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5)
             )
-            .shadow(color: .black.opacity(0.42), radius: 28, y: 12)
             .id("\(albumID.uuidString)-\(String(describing: playbackCoordinator.variantFinderAlignmentMode))")
         }
     }
@@ -336,6 +335,11 @@ struct ContentView: View {
                 // ツールバーのメニューだけがアクセントの青になり、ボタンの中立色とちぐはぐに見えるので、
                 // 内容側（ツールバー含む）の色味は文字色にそろえる。ホームは自分でアクセントを指定している。
                 .tint(NeomorphicTheme.ink)
+                // ページ見出しと同じ文字がタイトルバーにも出て重複するので、ツールバーのタイトルは外す
+                // （ウィンドウ自体のタイトルは残るので、Mission Control などでは識別できる）。
+                .toolbar(removing: .title)
+                // タイトルを外すと、右寄せだった各画面のボタンが左へ詰まるので、中央に伸びる空きを置いて右側に戻す。
+                .toolbar { principalSpacer }
                 // 標準の分割表示が確保していたツールバーの下の余白を、自前の構成でも同じだけ空ける。
                 .safeAreaInset(edge: .top, spacing: 0) {
                     Color.clear.frame(height: 44)
@@ -370,6 +374,21 @@ struct ContentView: View {
         // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
         // これをしないと一部だけ色が更新されず、白背景に白文字などのちぐはぐが起きる。
         .id(appSettings.neomorphicDarkBase)
+    }
+
+    /// ツールバーの中央に伸びる透明な空き。macOS 26 では部品ごとに丸い背景が付くので、その背景は消す。
+    @ToolbarContentBuilder
+    private var principalSpacer: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(minWidth: 40, maxWidth: .infinity, minHeight: 1)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(minWidth: 40, maxWidth: .infinity, minHeight: 1)
+            }
+        }
     }
 
     private var appMenuContext: AppMenuContext {
@@ -468,7 +487,7 @@ private struct LibraryStorageInitializationErrorView: View {
             }
             .padding(20)
             .frame(maxWidth: 680, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             HStack(spacing: 12) {
                 Button {
