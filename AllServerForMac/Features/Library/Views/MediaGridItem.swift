@@ -133,7 +133,7 @@ struct MediaGridItem: View {
                     if isHovering && !isTrashView {
                         Button(action: onToggleFavorite) {
                             Image(systemName: video.isFavorite ? "heart.fill" : "heart")
-                                .font(.system(size: 13))
+                                .font(.appBody)
                                 .foregroundStyle(.red)
                                 .padding(7)
                                 .contentShape(Rectangle())
@@ -142,7 +142,7 @@ struct MediaGridItem: View {
                         .help(video.isFavorite ? "お気に入りから外す" : "お気に入りに追加")
                     } else if video.isFavorite {
                         Image(systemName: "heart.fill")
-                            .font(.system(size: 13))
+                            .font(.appBody)
                             .foregroundStyle(.red)
                             .padding(7)
                     }
@@ -160,7 +160,7 @@ struct MediaGridItem: View {
 
                     if showImportDate {
                         Text(MediaGridItem.itemFormatter.string(from: video.importDate))
-                            .font(.system(size: 11))
+                            .font(.appMicro)
                             .foregroundStyle(.secondary)
                     }
                 }

@@ -176,7 +176,7 @@ struct LibraryCategoryView: View {
                             .foregroundColor(.white)
                         Text("\(exportCurrent) / \(exportTotal)")
                             .foregroundColor(.white)
-                            .font(.subheadline)
+                            .font(.appBody)
                     }
                     .padding(20)
                     .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -228,7 +228,7 @@ struct LibraryCategoryView: View {
                 if !selectedVideoIDs.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         Text("\(selectedVideoIDs.count)項目を選択中")
-                            .font(.system(size: 11))
+                            .font(.appMicro)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -373,14 +373,14 @@ struct LibraryCategoryView: View {
                     .font(.system(size: 17, weight: .semibold))
                 if let video = splitTargetVideo {
                     Text(video.originalFilename)
-                        .font(.subheadline)
+                        .font(.appBody)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Stepper("分割数: \(splitCount)", value: $splitCount, in: 2...9)
                     .frame(width: 200)
                 Text("動画を\(splitCount)等分して\(splitCount)画面で同時再生します")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     Button("キャンセル") { showSplitSheet = false }

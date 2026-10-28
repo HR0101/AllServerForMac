@@ -46,7 +46,7 @@ struct MediaGridControlBar: View {
           }
         }
       }
-      .font(.system(size: 12))
+      .font(.appCaption)
       .tint(NeomorphicTheme.ink)
       .padding(.horizontal, 20)
       .padding(.vertical, 10)
