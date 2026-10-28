@@ -9,6 +9,87 @@ import Testing
 @Suite(.serialized)
 struct SceneExtractionTests {
   @Test @MainActor
+  func discoveryMixUsesMoodAndSeenFilters() throws {
+    let short = tourVideo(duration: 90)
+    let long = tourVideo(duration: 600)
+    var favorite = tourVideo(duration: 200)
+    favorite.isFavorite = true
+    let all = [short, long, favorite]
+    let shortMix = try PlaybackTourSession.mix(videos: all, mood: .short, seenIDs: [])
+    #expect(shortMix.entries.map(\.video.id) == [short.id])
+    let unseen = try PlaybackTourSession.mix(videos: all, mood: .unseen, seenIDs: [short.id, favorite.id])
+    #expect(unseen.entries.map(\.video.id) == [long.id])
+    let favorites = try PlaybackTourSession.mix(videos: all, mood: .favorites, seenIDs: [])
+    #expect(favorites.entries.map(\.video.id) == [favorite.id])
+    #expect(throws: PlaybackTourError.self) {
+      try PlaybackTourSession.mix(videos: all, mood: .unseen, seenIDs: Set(all.map(\.id)))
+    }
+  }
+
+  @Test @MainActor
+  func timedPlaybackFillsBudgetAndTrimsLastEntry() throws {
+    let video = tourVideo(duration: 7)
+    let session = try PlaybackTourSession.timed(videos: [video], seconds: 20)
+    #expect(session.entries.map { $0.end - $0.start } == [7, 7, 6])
+    #expect(session.entries.reduce(0) { $0 + $1.end - $1.start } == 20)
+    #expect(session.requestedSeconds == 20)
+    #expect(throws: PlaybackTourError.self) { try PlaybackTourSession.timed(videos: [video], seconds: .nan) }
+  }
+
+  @Test @MainActor
+  func highlightsPersistIndependentlyAndClampAtFileEdges() throws {
+    let suite = "Highlights-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let url = URL(fileURLWithPath: "/tmp/highlight.mp4")
+    try HighlightStore.capture(url: url, time: 2, duration: 100, defaults: defaults)
+    try HighlightStore.capture(url: url, time: 2, duration: 100, defaults: defaults)
+    try HighlightStore.capture(url: url, time: 98, duration: 100, defaults: defaults)
+    let stored = try AcceptedSceneStore.load(defaults: defaults, key: HighlightStore.defaultsKey)
+    let scenes = try #require(stored[AcceptedSceneStore.sourceKey(url)])
+    #expect(scenes.count == 2)
+    #expect(scenes[0].startTime == 0 && scenes[0].endTime == 12)
+    #expect(scenes[1].startTime == 88 && scenes[1].endTime == 100)
+    #expect(try AcceptedSceneStore.load(defaults: defaults).isEmpty)
+    let session = try PlaybackTourSession.highlights(videos: [tourVideo(duration: 100, url: url)],
+      urlForVideo: { _ in url }, defaults: defaults)
+    #expect(session.entries.count == 2)
+  }
+
+  @Test @MainActor
+  func channelsContinueWithinAlbumAndWrapOnNavigation() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Channels-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let first = tourVideo(duration: 2, url: url)
+    let second = tourVideo(duration: 2, url: url)
+    let albums = [Album(id: UUID(), name: "A", videoIDs: [first.id, second.id], type: .video),
+      Album(id: UUID(), name: "B", videoIDs: [second.id], type: .video),
+      Album(id: UUID(), name: LibraryViewModel.allVideosAlbumName, videoIDs: [first.id], type: .video)]
+    let built = try PlaybackTourSession.channelSession(albums: albums, videos: [first, second])
+    #expect(built.channels.count == 2)
+    let session = PlaybackTourSession(kind: .channels, entries: [
+      PlaybackTourEntry(id: UUID(), video: first, start: 1.8, end: 2),
+      PlaybackTourEntry(id: UUID(), video: second, start: 0, end: 2)
+    ], channels: built.channels)
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    let model = PlaybackTourViewModel(session: session, dataManager: library)
+    defer { model.cleanup() }
+    model.start()
+    try await waitForLoopPlayback { model.channelEntry != nil && !model.isLoading }
+    #expect(model.index == 0 && !model.isFinished)
+    #expect(model.currentEntry?.video.id == second.id)
+    model.previous()
+    #expect(model.index == 1)
+    model.next()
+    #expect(model.index == 0)
+  }
+
+  @Test @MainActor
   func previewTourClampsShortVideosAndDeduplicates() throws {
     let video = tourVideo(duration: 3)
     let session = try PlaybackTourSession.preview(videos: [video, video], seconds: 15)

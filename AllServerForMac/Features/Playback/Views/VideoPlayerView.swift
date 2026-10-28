@@ -850,6 +850,9 @@ struct VideoPlayerView: View {
             }
             .disabled(!viewModel.canPlayNextVideo)
 
+            StockMomentButton(video: viewModel.currentVideo, time: viewModel.currentTime,
+              duration: viewModel.duration, dataManager: dataManager, compact: true)
+
             Text(formatTime(viewModel.currentTime))
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
                 .foregroundStyle(PlayerChrome.iconMuted)
@@ -1247,11 +1250,37 @@ struct LibraryTourMenu: View {
   let videos: [VideoItem]
   let dataManager: LibraryViewModel
   let beforePlay: () -> Void
+  @EnvironmentObject private var watchState: WatchStateStore
   @EnvironmentObject private var coordinator: PlaybackCoordinator
   @State private var errorMessage: String?
 
   var body: some View {
     Menu {
+      Section("新しい楽しみ方") {
+        Button("マイチャンネル（全動画アルバム）") {
+          start { try PlaybackTourSession.channelSession(albums: dataManager.albums, videos: dataManager.videos) }
+        }
+        Menu("気分でミックス") {
+          ForEach(PlaybackTourSession.Mood.allCases, id: \.rawValue) { mood in
+            Button(mood.rawValue) {
+              start {
+                try PlaybackTourSession.mix(videos: videos, mood: mood,
+                  seenIDs: Set(watchState.historyOrder).union(watchState.progress.keys))
+              }
+            }
+          }
+        }
+        Menu("時間ぴったり再生") {
+          ForEach([5, 10, 15, 30], id: \.self) { minutes in
+            Button("\(minutes)分") {
+              start { try PlaybackTourSession.timed(videos: videos, seconds: Double(minutes * 60)) }
+            }
+          }
+        }
+        Button("ストックした場面を再生") {
+          start { try PlaybackTourSession.highlights(videos: videos, urlForVideo: dataManager.fileURL) }
+        }
+      }
       Section("プレビュー巡回") {
         Button("15秒ずつ試聴") { startPreview(seconds: 15) }
         Button("30秒ずつ試聴") { startPreview(seconds: 30) }
@@ -1264,7 +1293,7 @@ struct LibraryTourMenu: View {
     } label: {
       Label("お楽しみ再生", systemImage: "play.rectangle.on.rectangle")
     }
-    .help("15秒・30秒のプレビュー巡回，または採用シーンのシャッフル再生")
+    .help("チャンネル・気分ミックス・時間指定・ストック・プレビュー巡回・シーン再生")
     .disabled(videos.isEmpty)
     .alert("再生を開始できません", isPresented: Binding(
       get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
@@ -1294,9 +1323,11 @@ struct PlaybackTourView: View {
   @StateObject private var model: PlaybackTourViewModel
   @EnvironmentObject private var coordinator: PlaybackCoordinator
   private let session: PlaybackTourSession
+  private let dataManager: LibraryViewModel
 
   init(session: PlaybackTourSession, dataManager: LibraryViewModel) {
     self.session = session
+    self.dataManager = dataManager
     _model = StateObject(wrappedValue: PlaybackTourViewModel(session: session, dataManager: dataManager))
   }
 
@@ -1304,7 +1335,7 @@ struct PlaybackTourView: View {
     VStack(spacing: 0) {
       HStack(spacing: 16) {
         VStack(alignment: .leading, spacing: 5) {
-          Text(session.title).font(.title3.bold())
+          Text(model.channelName.map { "マイチャンネル · \($0)" } ?? session.title).font(.title3.bold())
           Text(model.currentEntry?.video.originalFilename ?? "")
             .font(.callout).lineLimit(1).truncationMode(.middle)
         }
@@ -1351,18 +1382,18 @@ struct PlaybackTourView: View {
       VStack(spacing: 12) {
         ProgressView(value: model.progress)
         HStack(spacing: 16) {
-          Button("前へ", systemImage: "backward.end") { model.previous() }
-            .keyboardShortcut(.leftArrow, modifiers: [])
-            .disabled(model.index == 0)
+          Button(model.isChannelMode ? "前のCH" : "前へ", systemImage: "backward.end") { model.previous() }
+            .keyboardShortcut(model.isChannelMode ? .upArrow : .leftArrow, modifiers: [])
+            .disabled(!model.isChannelMode && model.index == 0)
           Button(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
             model.togglePlayback()
           }
           .keyboardShortcut(.space, modifiers: [])
           .disabled(model.isLoading || model.isFinished || model.errorMessage != nil)
-          Button("次へ", systemImage: "forward.end") { model.next() }
-            .keyboardShortcut(.rightArrow, modifiers: [])
+          Button(model.isChannelMode ? "次のCH" : "次へ", systemImage: "forward.end") { model.next() }
+            .keyboardShortcut(model.isChannelMode ? .downArrow : .rightArrow, modifiers: [])
             .disabled(model.isFinished)
-          Text("残り\(Int(ceil(model.remaining)))秒").monospacedDigit()
+          Text("残り\(Int(ceil(model.sessionRemaining)))秒").monospacedDigit()
           Spacer()
           Button(model.isMuted ? "消音を解除" : "消音", systemImage: model.isMuted ? "speaker.slash" : "speaker.wave.2") {
             model.isMuted.toggle()
@@ -1376,6 +1407,18 @@ struct PlaybackTourView: View {
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return, modifiers: [])
             .disabled(model.isLoading || model.errorMessage != nil || model.isFinished)
+        }
+        HStack {
+          if let entry = model.currentEntry {
+            StockMomentButton(video: entry.video, time: model.currentTime,
+              duration: entry.video.duration, dataManager: dataManager)
+              .disabled(model.isLoading || model.errorMessage != nil || model.isFinished)
+          }
+          Spacer()
+          if session.kind == .timed {
+            Text("予定：\(Int((session.requestedSeconds ?? 0) / 60))分 · 一時停止・読み込み・手動送りで終了時刻は変わります．")
+              .font(.caption)
+          }
         }
         Text("試聴中は視聴位置・履歴を変更しません．「このまま見る」で通常再生へ切り替わります．")
           .font(.caption).foregroundStyle(.white.opacity(0.75))
@@ -1403,7 +1446,46 @@ struct PlaybackTourView: View {
     let time = model.currentTime
     model.cleanup()
     var seen = Set<UUID>()
-    let videos = session.entries.map(\.video).filter { seen.insert($0.id).inserted }
+    let source = model.isChannelMode ? session.channels[model.index].videos : session.entries.map(\.video)
+    let videos = source.filter { seen.insert($0.id).inserted }
     coordinator.playSingle(playlist: videos, current: entry.video, startAt: time)
+  }
+}
+
+// MARK: - 再生中の前後10秒をワンアクションで保存
+
+struct StockMomentButton: View {
+  let video: VideoItem
+  let time: Double
+  let duration: Double
+  let dataManager: LibraryViewModel
+  var compact = false
+  @State private var notice: String?
+  @State private var errorMessage: String?
+
+  var body: some View {
+    Button {
+      do {
+        guard let url = dataManager.fileURL(for: video) else { throw PlaybackTourError.missingFile }
+        try HighlightStore.capture(url: url, time: time, duration: duration)
+        notice = "前後10秒を保存しました．一覧の「お楽しみ再生 → ストックした場面を再生」から見返せます．"
+      } catch {
+        errorMessage = "場面を保存できませんでした．\(error.localizedDescription)"
+      }
+    } label: {
+      if compact { Image(systemName: "bookmark.badge.plus") }
+      else { Label("場面を保存", systemImage: "bookmark.badge.plus") }
+    }
+    .keyboardShortcut("b", modifiers: [.command])
+    .accessibilityLabel("場面を保存")
+    .help("現在位置の前後10秒をストックします（⌘B）")
+    .popover(isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+      Text(notice ?? "").font(.callout).padding(16).frame(width: 300)
+    }
+    .alert("保存できません", isPresented: Binding(
+      get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+    )) {
+      Button("閉じる", role: .cancel) { errorMessage = nil }
+    } message: { Text(errorMessage ?? "") }
   }
 }

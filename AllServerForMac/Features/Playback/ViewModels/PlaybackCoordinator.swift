@@ -233,12 +233,45 @@ struct PlaybackTourSession: Identifiable, Equatable {
   enum Kind: Equatable {
     case preview
     case scenes
+    case channels
+    case mix(Mood)
+    case timed
+    case highlights
+  }
+  enum Mood: String, CaseIterable {
+    case short = "短く楽しむ"
+    case unseen = "未視聴を発掘"
+    case favorites = "お気に入り中心"
+  }
+  struct Channel: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let videos: [VideoItem]
   }
   let id = UUID()
   let kind: Kind
   let entries: [PlaybackTourEntry]
 
-  var title: String { kind == .preview ? "プレビュー巡回" : "シーンシャッフル" }
+  let channels: [Channel]
+  let requestedSeconds: Double?
+
+  var title: String {
+    switch kind {
+    case .preview: return "プレビュー巡回"
+    case .scenes: return "シーンシャッフル"
+    case .channels: return "マイチャンネル"
+    case .mix(let mood): return mood.rawValue
+    case .timed: return "時間ぴったり再生"
+    case .highlights: return "ストックした場面"
+    }
+  }
+
+  init(kind: Kind, entries: [PlaybackTourEntry], channels: [Channel] = [], requestedSeconds: Double? = nil) {
+    self.kind = kind
+    self.entries = entries
+    self.channels = channels
+    self.requestedSeconds = requestedSeconds
+  }
 
   static func preview(videos: [VideoItem], seconds: Double) throws -> PlaybackTourSession {
     guard seconds.isFinite, seconds > 0 else { throw PlaybackTourError.invalidRange }
@@ -269,6 +302,72 @@ struct PlaybackTourSession: Identifiable, Equatable {
     return PlaybackTourSession(kind: .scenes, entries: entries)
   }
 
+  static func channelSession(albums: [Album], videos: [VideoItem]) throws -> PlaybackTourSession {
+    let byID = Dictionary(eligibleVideos(videos).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let channels = albums.filter {
+      $0.name != LibraryViewModel.allVideosAlbumName && $0.name != LibraryViewModel.allPhotosAlbumName
+    }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.compactMap { album -> Channel? in
+      let items = album.videoIDs.compactMap { byID[$0] }
+      return items.isEmpty ? nil : Channel(id: album.id, name: album.name, videos: items)
+    }
+    let entries = channels.compactMap { channel -> PlaybackTourEntry? in
+      guard let video = channel.videos.randomElement() else { return nil }
+      let start = Double.random(in: 0...max(0, video.duration - min(15, video.duration)))
+      return PlaybackTourEntry(id: UUID(), video: video, start: start, end: video.duration)
+    }
+    guard !entries.isEmpty else { throw PlaybackTourError.noChannels }
+    return PlaybackTourSession(kind: .channels, entries: entries, channels: channels)
+  }
+
+  static func mix(videos: [VideoItem], mood: Mood, seenIDs: Set<UUID>) throws -> PlaybackTourSession {
+    let available = eligibleVideos(videos)
+    let items: [VideoItem]
+    switch mood {
+    case .short: items = available.filter { $0.duration <= 180 }
+    case .unseen: items = available.filter { !seenIDs.contains($0.id) }
+    case .favorites: items = available.filter(\.isFavorite)
+    }
+    guard !items.isEmpty else { throw PlaybackTourError.noMoodMatches }
+    let preview = try preview(videos: items, seconds: mood == .short ? 30 : 60)
+    return PlaybackTourSession(kind: .mix(mood), entries: preview.entries)
+  }
+
+  /// 同じ動画を一巡したら再利用し，最後の区間だけを短くして合計時間を合わせます．
+  static func timed(videos: [VideoItem], seconds: Double) throws -> PlaybackTourSession {
+    let minimumDuration = 0.5
+    let maximumSeconds = 3600.0
+    let items = eligibleVideos(videos).filter { $0.duration >= minimumDuration }.shuffled()
+    guard !items.isEmpty else { throw PlaybackTourError.noVideos }
+    guard seconds.isFinite, seconds > 0, seconds <= maximumSeconds else { throw PlaybackTourError.invalidRange }
+    var entries: [PlaybackTourEntry] = []
+    var remaining = seconds
+    var cursor = 0
+    while remaining > 0.000001 {
+      let video = items[cursor % items.count]
+      let length = min(video.duration, remaining)
+      entries.append(PlaybackTourEntry(id: UUID(), video: video, start: 0, end: length))
+      remaining -= length
+      cursor += 1
+    }
+    return PlaybackTourSession(kind: .timed, entries: entries, requestedSeconds: seconds)
+  }
+
+  static func highlights(videos: [VideoItem], urlForVideo: (VideoItem) -> URL?,
+    defaults: UserDefaults = .standard) throws -> PlaybackTourSession {
+    let stored = try AcceptedSceneStore.load(defaults: defaults, key: HighlightStore.defaultsKey)
+    let entries = eligibleVideos(videos).flatMap { video -> [PlaybackTourEntry] in
+      guard let url = urlForVideo(video) else { return [] }
+      return (stored[AcceptedSceneStore.sourceKey(url)] ?? []).compactMap { scene in
+        let start = max(0, scene.startTime)
+        let end = min(video.duration, scene.endTime)
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        return PlaybackTourEntry(id: UUID(), video: video, start: start, end: end)
+      }
+    }.shuffled()
+    guard !entries.isEmpty else { throw PlaybackTourError.noHighlights }
+    return PlaybackTourSession(kind: .highlights, entries: entries)
+  }
+
   private static func eligibleVideos(_ videos: [VideoItem]) -> [VideoItem] {
     var seen = Set<UUID>()
     return videos.filter {
@@ -280,6 +379,9 @@ struct PlaybackTourSession: Identifiable, Equatable {
 
 enum PlaybackTourError: LocalizedError {
   case noVideos
+  case noChannels
+  case noMoodMatches
+  case noHighlights
   case noScenes
   case invalidRange
   case missingFile
@@ -287,6 +389,9 @@ enum PlaybackTourError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
+    case .noChannels: return "動画を含むアルバムがありません．アルバムに動画を追加してください．"
+    case .noMoodMatches: return "この気分に合う動画がありません．3分以内の動画・未視聴・お気に入りの条件や，表示中の一覧を確認してください．"
+    case .noHighlights: return "ストックした場面がありません．再生中に「場面を保存」を押してください．"
     case .noVideos: return "再生時間が分かる動画がありません．動画を含む一覧から開始してください．"
     case .noScenes: return "採用済みのシーンがありません．動画の「シーン抽出」で区間を採用してから，もう一度開始してください．"
     case .invalidRange: return "有効な再生区間がありません．シーンの開始・終了位置を確認してください．"
