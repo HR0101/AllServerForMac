@@ -4,9 +4,9 @@ import SwiftUI
 // MARK: - デザイントークン
 
 enum DS {
-    static let cardCornerRadius: CGFloat = 8
-    static let cardPadding: CGFloat = 18
-    static let cardSpacing: CGFloat = 18
+    static let cardCornerRadius: CGFloat = 16
+    static let cardPadding: CGFloat = 20
+    static let cardSpacing: CGFloat = 20
     static let cyan = Color(red: 0.18, green: 0.86, blue: 1.0)
     static let violet = Color(red: 0.52, green: 0.42, blue: 1.0)
     static let lime = Color(red: 0.42, green: 1.0, blue: 0.63)
@@ -17,11 +17,8 @@ enum DS {
     static let surfaceRaised = Color(white: 0.028)
 }
 
-/// ネオモーフィズムのベースカラー。設定「外観」のトグルで白ベース⇄黒ベースを切り替える。
-/// 色の値だけを差し替え、レイアウトやシャドウの構造は白ベースと完全に共通のまま保つ。
-/// 単一の真実の source として UserDefaults を直接読むことで、AppSettings を経由できない
-/// 静的な色参照（CommandDeckBackground など）や AppKit 側（NSColor）からも常に同じ値を得る。
-/// トグル時の一貫した再描画は ContentView 側の `.id()` による作り直しで保証している。
+/// ガラス風テーマの色です．既存の外観設定キーを引き継ぎます．
+/// 静的な色参照とAppKitのウィンドウ外観を同じ設定に揃えます．
 enum NeomorphicTheme {
     static let darkBaseDefaultsKey = "appearance.neomorphicDarkBase"
 
@@ -29,43 +26,36 @@ enum NeomorphicTheme {
         UserDefaults.standard.bool(forKey: darkBaseDefaultsKey)
     }
 
+    static let glassBlurOpacity: CGFloat = 0.80
+    static let lightGlassTintOpacity = 0.07
+    static let darkGlassTintOpacity = 0.52
+
     static var background: Color {
         isDarkBase ? Color(red: 0.08, green: 0.085, blue: 0.09) : Color(red: 0.89, green: 0.92, blue: 0.93)
     }
     static var surface: Color {
-        isDarkBase ? Color(red: 0.14, green: 0.15, blue: 0.16) : Color(red: 0.91, green: 0.93, blue: 0.93)
+        isDarkBase ? Color.white.opacity(0.08) : Color.white.opacity(0.45)
     }
     static var ink: Color {
         isDarkBase ? Color(red: 0.90, green: 0.92, blue: 0.93) : Color(red: 0.16, green: 0.18, blue: 0.19)
     }
     static var muted: Color {
-        isDarkBase ? Color(red: 0.60, green: 0.64, blue: 0.66) : Color(red: 0.48, green: 0.52, blue: 0.54)
+        isDarkBase ? Color(red: 0.73, green: 0.77, blue: 0.82) : Color(red: 0.30, green: 0.35, blue: 0.42)
     }
     static var accent: Color {
-        Color(red: 0.14, green: 0.59, blue: 0.66)
+        isDarkBase ? Color(red: 0.38, green: 0.66, blue: 1.0) : Color(red: 0.0, green: 0.38, blue: 0.88)
+    }
+    static var separator: Color {
+      ink.opacity(isDarkBase ? 0.16 : 0.09)
+    }
+    static var selection: Color {
+      accent.opacity(isDarkBase ? 0.25 : 0.12)
+    }
+    static var hover: Color {
+      accent.opacity(0.06)
     }
     static var shadow: Color {
         isDarkBase ? Color(red: 0.0, green: 0.0, blue: 0.0) : Color(red: 0.62, green: 0.67, blue: 0.69)
-    }
-}
-
-struct NeomorphicWavePattern: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let lineCount = 22
-        for index in 0..<lineCount {
-            let progress = CGFloat(index) / CGFloat(max(lineCount - 1, 1))
-            let baseY = rect.minY + rect.height * progress
-            path.move(to: CGPoint(x: rect.minX, y: baseY))
-            for step in 0...64 {
-                let xProgress = CGFloat(step) / 64
-                let x = rect.minX + rect.width * xProgress
-                let wave = sin((xProgress * 2.2 + progress * 0.7) * .pi * 2)
-                let y = baseY + wave * 18
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        return path
     }
 }
 
@@ -75,24 +65,80 @@ struct NeomorphicWavePattern: Shape {
 /// 背景を常時動かすと内容より演出が目立つため，ここは静的に保ちます。
 /// 動きはカードへのホバーやサーバーの稼働状態など，意味のある箇所だけで見せます。
 struct CommandDeckBackground: View {
-    var body: some View {
-        ZStack {
-            NeomorphicTheme.background
+  var body: some View {
+    LinearGradient(
+      colors: [NeomorphicTheme.accent.opacity(0.06), .clear],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
+    .ignoresSafeArea()
+    .allowsHitTesting(false)
+  }
+}
 
-            NeomorphicWavePattern()
-                .stroke(Color.white.opacity(0.48), lineWidth: 1)
-                .frame(width: 540, height: 260)
-                .offset(x: -300, y: -240)
+/// デスクトップの色を取り込むmacOS標準のぼかしです．
+/// OSの「透明度を下げる」にも標準マテリアルが追従します．
+struct GlassWindowBackground: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSVisualEffectView {
+    let view = NSVisualEffectView()
+    view.blendingMode = .behindWindow
+    view.material = .sidebar
+    view.alphaValue = NeomorphicTheme.glassBlurOpacity
+    view.state = .followsWindowActiveState
+    return view
+  }
 
-            NeomorphicWavePattern()
-                .stroke(Color(red: 0.72, green: 0.79, blue: 0.83).opacity(0.38), lineWidth: 1)
-                .frame(width: 700, height: 340)
-                .rotationEffect(.degrees(8))
-                .offset(x: 330, y: 270)
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
+  func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+    nsView.appearance = NSAppearance(named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua)
+  }
+}
+
+/// ホーム・管理画面で共通の，控えめなガラス面です．
+struct GlassCardSurface: View {
+  var isHovering = false
+
+  var body: some View {
+    RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
+      .fill(.thinMaterial)
+      .overlay {
+        RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
+          .strokeBorder(NeomorphicTheme.separator, lineWidth: 1)
+      }
+      .shadow(color: .black.opacity(isHovering ? 0.07 : 0.035), radius: 12, x: 0, y: 4)
+  }
+}
+
+/// どの一覧でも同じ位置と文字組みで，現在地と件数を示します．
+struct LibraryPageHeader: View {
+  let title: String
+  let subtitle: String
+  var count: Int? = nil
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 16) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text(title)
+          .font(.system(size: 26, weight: .bold))
+          .foregroundStyle(NeomorphicTheme.ink)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(title)
+        Text(subtitle)
+          .font(.callout)
+          .foregroundStyle(NeomorphicTheme.muted)
+          .lineLimit(2)
+      }
+      Spacer(minLength: 8)
+      if let count {
+        Text("\(count.formatted())件")
+          .font(.callout.weight(.medium).monospacedDigit())
+          .foregroundStyle(NeomorphicTheme.muted)
+      }
     }
+    .padding(.horizontal, 24)
+    .padding(.vertical, 20)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
 }
 
 // MARK: - カード
@@ -103,16 +149,7 @@ struct CardBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(DS.cardPadding)
-            .background(
-                RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-                    .fill(NeomorphicTheme.surface)
-                    .shadow(color: .white.opacity(0.9), radius: isHovering ? 10 : 7, x: -6, y: -6)
-                    .shadow(color: NeomorphicTheme.shadow.opacity(isHovering ? 0.36 : 0.28), radius: isHovering ? 16 : 11, x: 8, y: 8)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-                    .strokeBorder(.white.opacity(isHovering ? 0.76 : 0.58), lineWidth: 1)
-            )
+            .background(GlassCardSurface(isHovering: isHovering))
             .animation(.easeOut(duration: 0.18), value: isHovering)
             .onHover { isHovering = $0 }
     }
@@ -134,14 +171,14 @@ struct CardHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            IconTile(icon: icon, tint: tint)
+            IconTile(icon: icon, tint: NeomorphicTheme.accent)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(NeomorphicTheme.ink)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .font(.system(size: 12))
                         .foregroundStyle(NeomorphicTheme.muted)
                 }
             }
@@ -156,19 +193,17 @@ struct IconTile: View {
     var size: CGFloat = 26
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(NeomorphicTheme.surface)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(tint.opacity(0.10))
             .frame(width: size, height: size)
-            .shadow(color: .white.opacity(0.9), radius: 3, x: -2, y: -2)
-            .shadow(color: NeomorphicTheme.shadow.opacity(0.24), radius: 5, x: 3, y: 3)
             .overlay(
                 safeSystemImage(named: icon)
                     .font(.system(size: size * 0.5, weight: .semibold))
                     .foregroundStyle(tint)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(.white.opacity(0.64), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(tint.opacity(0.12), lineWidth: 1)
             )
     }
 
@@ -269,7 +304,7 @@ struct ProminentActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .bold, design: .rounded))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 22)
             .padding(.vertical, 9)

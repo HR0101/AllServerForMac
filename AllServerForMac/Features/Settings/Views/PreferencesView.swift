@@ -13,9 +13,9 @@ struct PreferencesView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                IconTile(icon: "gearshape.fill", tint: .gray, size: 38)
+                IconTile(icon: "gearshape", tint: NeomorphicTheme.accent, size: 38)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("詳細設定")
+                    Text("Mac Media Serverの設定")
                         .font(.title3.bold())
                     Text("データの安全性・サーバー保護・パフォーマンスの設定")
                         .font(.caption)
@@ -27,8 +27,8 @@ struct PreferencesView: View {
 
             Form {
                 Section("外観") {
-                    Toggle("ベースカラーをブラックにする", isOn: $appSettings.neomorphicDarkBase)
-                    Text("ネオモーフィズムの基調色を白から黒へ切り替えます。レイアウトは変わりません。")
+                    Toggle("ダークな外観にする", isOn: $appSettings.neomorphicDarkBase)
+                    Text("ブルーを基調に，控えめなガラスと読みやすい文字で統一しています．明るい外観と暗い外観を切り替えられます．")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -115,6 +115,9 @@ struct PreferencesView: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 640)
+        .frame(width: 560, height: 680)
+        .background(.regularMaterial)
+        .tint(NeomorphicTheme.accent)
+        .foregroundStyle(NeomorphicTheme.ink)
     }
 }
