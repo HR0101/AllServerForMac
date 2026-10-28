@@ -25,28 +25,19 @@ struct HomeView: View {
     var body: some View {
         ZStack {
             NeomorphicHomeBackground()
-            ScrollViewReader { scrollProxy in
-              ScrollView {
+            ScrollView {
                 VStack(spacing: DS.cardSpacing) {
                     LibraryPageHeader(title: "ホーム", subtitle: "このMacから，メディアを楽しむための準備を．")
                       .padding(.horizontal, -24)
 
-                    ServerHeroCard(
-                      webServerManager: webServerManager,
-                      showConnectionSettings: {
-                        withAnimation { scrollProxy.scrollTo("connectionSettings", anchor: .top) }
-                      },
-                      showSecuritySettings: {
-                        withAnimation { scrollProxy.scrollTo("securitySettings", anchor: .top) }
-                      },
-                      showAccessLog: { isShowingAccessLog = true }
-                    )
-
                     // カードごとの高さが異なるため，行の高さを強制するLazyVGridは使わない。
                     // 左右のカラムを独立して積むことで，縦長カードの横に空白が残らない。
+                    // 接続に必要な「サーバーの状態」と「PIN認証」を各カラムの先頭に置く
+                    // （以前の「設定の概要」は，すぐ下の設定カードと同じ項目の繰り返しだったので廃止）。
                     HStack(alignment: .top, spacing: DS.cardSpacing) {
                         VStack(spacing: DS.cardSpacing) {
-                            connectionCard.id("connectionSettings")
+                            ServerHeroCard(webServerManager: webServerManager)
+                            connectionCard
                             scheduleCard
                             duplicateCheckCard
                             storageCard
@@ -54,7 +45,7 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity, alignment: .top)
 
                         VStack(spacing: DS.cardSpacing) {
-                            securityCard.id("securitySettings")
+                            securityCard
                             resourcesCard
                             linkedFolderCard
                             if !dataManager.linkedFolderConflicts.isEmpty {
@@ -69,9 +60,10 @@ struct HomeView: View {
                 .padding(.horizontal, 30)
                 .padding(.vertical, 30)
                 .frame(maxWidth: .infinity)
-              }
             }
         }
+        // ウィンドウを開いた直後に最初の入力欄（ポート番号）が自動で選択されないようにする。
+        .background(InitialFirstResponderClearer())
         .tint(NeomorphicTheme.accent)
         .foregroundStyle(NeomorphicTheme.ink)
         .preferredColorScheme(appSettings.neomorphicDarkBase ? .dark : .light)
@@ -143,8 +135,9 @@ struct HomeView: View {
                 Label("今すぐすべてチェック", systemImage: "checkmark.seal.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(NeomorphicTheme.accent)
+            // 補助の操作は塗りつぶさない（青い全幅ボタンが並ぶと、本当の主役である「開始」が埋もれる）。
+            .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
             .disabled(duplicateCheckStatus.isAutoChecking || dataManager.isDuplicateCheckRunning || totalCount == 0)
             .help("自動チェックのオン/オフに関わらず，対象アルバムの重複をまとめて今すぐチェックします．")
 
@@ -173,7 +166,7 @@ struct HomeView: View {
                 linkedFolderScanProgress(status)
             } else {
                 Text("紐づけたフォルダに追加・削除したメディアは，下のボタンを押したときに取り込まれます．")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -198,13 +191,14 @@ struct HomeView: View {
                 Label(status.isScanning ? "更新中…" : "リンクフォルダを更新", systemImage: "arrow.triangle.2.circlepath")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(NeomorphicTheme.accent)
+            // 補助の操作は塗りつぶさない（青い全幅ボタンが並ぶと、本当の主役である「開始」が埋もれる）。
+            .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
             .disabled(status.isScanning || count == 0)
 
             if count == 0 {
                 Text("フォルダを紐づけるには，アルバムを開いてツールバーの「フォルダ紐づけ」を使ってください．")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -236,7 +230,7 @@ struct HomeView: View {
             if let name = status.currentFolderName {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(.cyan)
                     Text(name)
                         .font(.system(size: 11))
@@ -246,7 +240,7 @@ struct HomeView: View {
                     Spacer()
                     if status.processedItemsInCurrentFolder > 0 {
                         Text("\(status.processedItemsInCurrentFolder)件取り込み")
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -293,7 +287,7 @@ struct HomeView: View {
                                     .truncationMode(.middle)
                                     .help(candidate.folderPath)
                                 Text("\(candidate.matchCount)件一致")
-                                    .font(.system(size: 10))
+                                    .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
                             }
 
@@ -305,6 +299,7 @@ struct HomeView: View {
                                 Label("選択", systemImage: "checkmark.circle")
                             }
                             .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
                             .controlSize(.small)
                         }
                         .padding(8)
@@ -352,7 +347,7 @@ struct HomeView: View {
 
                 if albums.count > 5 {
                     Text("ほか\(albums.count - 5)件")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -440,11 +435,11 @@ struct HomeView: View {
                     Label("このスケジュールを適用", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(NeomorphicTheme.accent)
+                .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
 
                 Text("適用時に管理者パスワードの入力を求められます（スリープからの自動起床設定のため）．停止時刻になるとアプリは完全終了します．")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -463,7 +458,7 @@ struct HomeView: View {
     // MARK: セキュリティカード
     private var securityCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "lock.shield.fill", tint: .green, title: "PIN認証", subtitle: "接続する端末に入力する6桁の番号")
+            CardHeader(icon: "lock.shield.fill", tint: NeomorphicTheme.accent, title: "PIN認証", subtitle: "接続する端末に入力する6桁の番号")
 
             Toggle(isOn: $webServerManager.authEnabled) {
                 Text("PIN認証を必須にする")
@@ -478,8 +473,8 @@ struct HomeView: View {
                     HStack(spacing: 8) {
                         CopyableText(
                             text: webServerManager.authPIN,
-                            font: .system(size: 17, weight: .bold, design: .monospaced),
-                            tint: .green
+                            font: .system(size: 20, weight: .semibold, design: .monospaced),
+                            tint: NeomorphicTheme.ink
                         )
                         Button(action: { webServerManager.regeneratePIN() }) {
                             Image(systemName: "arrow.triangle.2.circlepath")
@@ -489,7 +484,7 @@ struct HomeView: View {
                     }
                 }
                 Text("このPINをiPhoneアプリ・ブラウザで入力してください．")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
@@ -507,24 +502,6 @@ struct HomeView: View {
                         .fill(NeomorphicTheme.accent.opacity(0.12))
                 )
             }
-
-            Divider()
-
-            Button(action: { isShowingAccessLog = true }) {
-                HStack {
-                    Label("アクセスログ", systemImage: "list.bullet.rectangle")
-                        .font(.system(size: 12))
-                    Spacer()
-                    Text("\(webServerManager.accessLogs.count)件")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
         }
         .animation(.easeInOut(duration: 0.18), value: webServerManager.authEnabled)
         .dashboardCard()
@@ -536,8 +513,8 @@ struct HomeView: View {
             CardHeader(icon: "gauge.with.dots.needle.50percent", tint: .orange, title: "Macの使用状況", subtitle: "Mac全体のCPU・メモリ使用率")
 
             HStack(spacing: 24) {
-                ResourceGauge(label: "CPU", value: systemMonitor.cpuUsage, tint: NeomorphicTheme.accent)
-                ResourceGauge(label: "メモリ", value: systemMonitor.memoryUsage, tint: .blue)
+                ResourceGauge(label: "CPU", value: systemMonitor.cpuUsage, tint: NeomorphicTheme.ink)
+                ResourceGauge(label: "メモリ", value: systemMonitor.memoryUsage, tint: NeomorphicTheme.ink)
                 Spacer()
             }
 
@@ -606,6 +583,7 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
         }
         .dashboardCard()
     }
@@ -652,21 +630,21 @@ struct HomeView: View {
                     ForEach(filteredLogs.prefix(15)) { entry in
                         HStack(spacing: 8) {
                             Text(entry.date.formatted(.dateTime.hour().minute().second()))
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .frame(width: 58, alignment: .leading)
 
                             Image(systemName: entry.authorized ? "checkmark.circle.fill" : "xmark.octagon.fill")
                                 .foregroundStyle(entry.authorized ? .green : .red)
-                                .font(.system(size: 10))
+                                .font(.system(size: 11))
 
                             Text(entry.method)
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .foregroundStyle(entry.method == "GET" ? .blue : .purple)
                                 .frame(width: 36, alignment: .leading)
 
                             Text(entry.path)
-                                .font(.system(size: 10))
+                                .font(.system(size: 11))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .help(entry.path)
@@ -674,7 +652,7 @@ struct HomeView: View {
                             Spacer(minLength: 5)
 
                             Text(entry.ip)
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                         }
                         .padding(.vertical, 4)

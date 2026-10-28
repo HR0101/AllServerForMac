@@ -11,7 +11,7 @@ struct DuplicateCheckCountBadge: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             Text("\(count)")
                 .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -48,7 +48,7 @@ struct ResourceGauge: View {
             .frame(width: 52, height: 52)
 
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
         }
     }
