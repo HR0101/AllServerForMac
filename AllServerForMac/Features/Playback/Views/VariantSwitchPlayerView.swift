@@ -288,11 +288,8 @@ struct VariantSwitchPlayerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
+        .playerPanel(cornerRadius: 14)
+        .environment(\.colorScheme, .dark)
         .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
         .padding(16)
         .frame(maxWidth: 1200)
@@ -355,7 +352,7 @@ struct VariantSwitchPlayerView: View {
         )
         .overlay(alignment: .bottom) {
             Capsule()
-                .fill(isActive ? Color.accentColor.opacity(0.78) : Color.clear)
+                .fill(isActive ? Color.white.opacity(0.85) : Color.clear)
                 .frame(height: 3)
                 .padding(.horizontal, 10)
                 .offset(y: 3)

@@ -207,11 +207,8 @@ struct MultiVideoPlayerView: View {
         }
         .padding(16)
         .frame(maxWidth: 920)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
+        .playerPanel(cornerRadius: 14)
+        .environment(\.colorScheme, .dark)
         .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -328,11 +325,8 @@ struct MultiVideoPlayerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
+        .playerPanel(cornerRadius: 14)
+        .environment(\.colorScheme, .dark)
         .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
         .padding(16)
         .frame(maxWidth: 1200)
