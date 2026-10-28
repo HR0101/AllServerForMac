@@ -59,27 +59,30 @@ struct MediaGridControlBar: View {
     @ViewBuilder
     private var sortingControls: some View {
       if showsSortControls {
-        HStack(spacing: 6) {
-          Menu {
-            ForEach(SortOrder.allCases) { order in
-              Button(order.rawValue) {
+        // 「短い順」の横に ↓ / ↑ だけのボタンを並べると，矢印が何を指すのか分からない．
+        // 逆順はメニューの中のチェック項目にし，効いているときはラベルに「（逆順）」と出す．
+        Menu {
+          ForEach(SortOrder.allCases) { order in
+            Toggle(order.rawValue, isOn: Binding(
+              get: { appSettings.sortOrder == order },
+              set: { isOn in
+                guard isOn else { return }
                 // ファイル属性を使う並べ替えは，最新の属性を読み直します．
                 if order.needsFileMetadata { dataManager.refreshFileMetadataCache() }
                 appSettings.sortOrder = order
               }
-            }
-          } label: {
-            Label("並び順：\(appSettings.sortOrder.rawValue)", systemImage: "arrow.up.arrow.down")
+            ))
           }
-          .fixedSize()
-          Button {
-            appSettings.sortReversed.toggle()
-          } label: {
-            Image(systemName: appSettings.sortReversed ? "arrow.up" : "arrow.down")
-          }
-          .help(appSettings.sortReversed ? "並び順を元に戻す（逆順中）" : "並び順を上下逆にする")
-          .accessibilityLabel(appSettings.sortReversed ? "逆順を解除" : "並び順を反転")
+          Divider()
+          Toggle("逆順にする", isOn: $appSettings.sortReversed)
+        } label: {
+          Label(
+            "並び順：\(appSettings.sortOrder.rawValue)\(appSettings.sortReversed ? "（逆順）" : "")",
+            systemImage: "arrow.up.arrow.down"
+          )
         }
+        .fixedSize()
+        .help("並び順と，逆順にするかを選びます．")
       }
     }
 
