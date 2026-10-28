@@ -7,9 +7,9 @@ struct ContentView: View {
     @ObservedObject private var dataManager: LibraryViewModel
     @ObservedObject private var playbackCoordinator: PlaybackCoordinator
     @ObservedObject private var appSettings: AppSettings
-    private let sidebarMinWidth: CGFloat = 300
-    private let sidebarIdealWidth: CGFloat = 320
-    private let sidebarMaxWidth: CGFloat = 360
+    /// サイドバーの幅。行の幅（300）に左右の余白（10×2）を足した値で、行は固定幅で組んである。
+    private let sidebarWidth: CGFloat = 320
+    @State private var isSidebarVisible = true
 
     init() {
         let viewModel = AppViewModel()
@@ -39,8 +39,8 @@ struct ContentView: View {
             // 常駐する下地を1枚敷いておく。上端の黒帯対策の要はこの下地とウィンドウ設定であって、
             // ライブラリ画面を出しっぱなしにすることではない。
             if shouldShowLibraryView {
-              GlassWindowBackground()
-                .overlay(appSettings.neomorphicDarkBase ? Color.black.opacity(NeomorphicTheme.darkGlassTintOpacity) : Color.white.opacity(NeomorphicTheme.lightGlassTintOpacity))
+              // デスクトップが透けるガラス地はやめ、単色の下地にする（色の濁りと環境による見た目の差をなくす）。
+              NeomorphicTheme.canvas
                 .id(appSettings.neomorphicDarkBase)
                 .ignoresSafeArea()
             } else {
@@ -72,7 +72,8 @@ struct ContentView: View {
         // ウィンドウのクロム設定はライブラリ画面の有無に関わらず効かせる必要があるため、
         // ライブラリ画面ではなくこの常駐の階層に付ける。
         .toolbar(isToolbarHidden ? .hidden : .automatic, for: .windowToolbar)
-        .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
+        // タイトルバーの帯はサイドバーと同じ色にし、窓の上端でサイドバーと一続きに見せる。
+        .toolbarBackground(NeomorphicTheme.sidebar, for: .windowToolbar)
         .toolbarBackground(
             isToolbarHidden ? .hidden : .visible,
             for: .windowToolbar
@@ -237,20 +238,28 @@ struct ContentView: View {
             // ツールバーの背後まで同じ背景を広げ，フルスクリーン時の色の段差をなくす。
             CommandDeckBackground()
 
-            NavigationSplitView {
-                MainSidebarView(
-                    dataManager: dataManager,
-                    webServerManager: viewModel.webServerManager,
-                    selection: $viewModel.selection,
-                    isShowingPreferences: $viewModel.isShowingPreferences,
-                    isShowingStorageManager: $viewModel.isShowingStorageManager
-                )
-                    .navigationSplitViewColumnWidth(
-                        min: sidebarMinWidth,
-                        ideal: sidebarIdealWidth,
-                        max: sidebarMaxWidth
+            // 標準の NavigationSplitView は macOS 26 でサイドバーが「浮いた角丸のガラス」になり、
+            // 窓の端や上下に余白ができて平らにできない。そこで左カラムを自前で組み、窓の端から端まで
+            // 単色で伸ばす（タイトルバーの帯もサイドバーと同じ色にして、一続きに見せる）。
+            HStack(spacing: 0) {
+                if isSidebarVisible {
+                    MainSidebarView(
+                        dataManager: dataManager,
+                        webServerManager: viewModel.webServerManager,
+                        selection: $viewModel.selection
                     )
-            } detail: {
+                        .frame(width: sidebarWidth)
+                        .frame(maxHeight: .infinity)
+                        .background(NeomorphicTheme.sidebar.ignoresSafeArea())
+                        .overlay(alignment: .trailing) {
+                            Rectangle()
+                                .fill(NeomorphicTheme.separator)
+                                .frame(width: 0.5)
+                                .ignoresSafeArea()
+                        }
+                        .transition(.move(edge: .leading))
+                }
+
                 NavigationStack {
                     switch viewModel.selection {
                     case .home:
@@ -323,6 +332,34 @@ struct ContentView: View {
                     case .none:
                         ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                     }
+                }
+                // ツールバーのメニューだけがアクセントの青になり、ボタンの中立色とちぐはぐに見えるので、
+                // 内容側（ツールバー含む）の色味は文字色にそろえる。ホームは自分でアクセントを指定している。
+                .tint(NeomorphicTheme.ink)
+                // 標準の分割表示が確保していたツールバーの下の余白を、自前の構成でも同じだけ空ける。
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Color.clear.frame(height: 44)
+                }
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .navigation) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { isSidebarVisible.toggle() }
+                    } label: {
+                        Label("サイドバー", systemImage: "sidebar.leading")
+                    }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .help(isSidebarVisible ? "サイドバーを隠す（⌃⌘S）" : "サイドバーを表示（⌃⌘S）")
+
+                    Button { viewModel.isShowingStorageManager = true } label: {
+                        Label("ストレージ管理", systemImage: "internaldrive")
+                    }
+                    .help("ストレージの内訳とクリーンアップ")
+
+                    Button { viewModel.isShowingPreferences = true } label: {
+                        Label("詳細設定", systemImage: "gearshape")
+                    }
+                    .help("データの安全性・サーバー保護・パフォーマンスの設定")
                 }
             }
         }
