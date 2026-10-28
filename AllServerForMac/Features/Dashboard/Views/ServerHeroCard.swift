@@ -16,14 +16,14 @@ struct ServerHeroCard: View {
         Text(webServerManager.isRunning
           ? "同じWi-Fi内の端末から，動画・画像を閲覧できます．"
           : "「開始」を押すと，iPhoneやブラウザから接続できます．")
-          .font(.system(size: 13))
+          .font(.appBody)
           .foregroundStyle(NeomorphicTheme.muted)
           .fixedSize(horizontal: false, vertical: true)
 
         if !webServerManager.statusMessage.isEmpty,
            webServerManager.statusMessage.contains("❌") || webServerManager.statusMessage.contains("⚠️") {
           Label(webServerManager.statusMessage, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(size: 13))
+            .font(.appBody)
             .foregroundStyle(.orange)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -85,7 +85,7 @@ struct ServerHeroCard: View {
     VStack(alignment: .leading, spacing: 14) {
       VStack(alignment: .leading, spacing: 8) {
         Text("ブラウザの接続先")
-          .font(.system(size: 12))
+          .font(.appCaption)
           .foregroundStyle(NeomorphicTheme.muted)
 
         if let url = webServerManager.serverURL {
@@ -112,7 +112,7 @@ struct ServerHeroCard: View {
           .background(NeomorphicTheme.control, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         } else {
           Text("接続先を取得しています…")
-            .font(.system(size: 13))
+            .font(.appBody)
             .foregroundStyle(NeomorphicTheme.muted)
         }
       }
@@ -128,11 +128,11 @@ struct ServerHeroCard: View {
             Text(webServerManager.authEnabled
               ? "カメラで読み取ると，ブラウザで接続先が開きます．開いたら「PIN認証」の6桁のPINを入力します．"
               : "カメラで読み取ると，ブラウザで接続先が開きます．（PIN認証は無効です）")
-              .font(.system(size: 12))
+              .font(.appCaption)
               .foregroundStyle(NeomorphicTheme.muted)
               .fixedSize(horizontal: false, vertical: true)
             Text("iPhoneアプリは，このMacを自動で見つけます．")
-              .font(.system(size: 12))
+              .font(.appCaption)
               .foregroundStyle(NeomorphicTheme.muted)
               .fixedSize(horizontal: false, vertical: true)
           }
@@ -153,7 +153,7 @@ struct ServerHeroCard: View {
         ? "「PIN認証」に表示される6桁のPINを入力します．"
         : "PIN認証は無効です．同じWi-Fi内の端末はPINなしで接続できます．")
       Text("接続先のURLは，サーバー開始後にここへ表示されます．")
-        .font(.system(size: 12))
+        .font(.appCaption)
         .foregroundStyle(NeomorphicTheme.muted)
         .padding(.top, 2)
     }
@@ -168,7 +168,7 @@ struct ServerHeroCard: View {
         .frame(width: 20, height: 20)
         .background(Circle().fill(NeomorphicTheme.control))
       Text(text)
-        .font(.system(size: 13))
+        .font(.appBody)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
