@@ -48,6 +48,7 @@ struct MainSidebarView: View {
     // dataManager.videos / .albums が実際に変化したときだけ refreshSidebarCaches() で更新する。
     private let sidebarContentPadding: CGFloat = 10
     private let sidebarTopPadding: CGFloat = 12
+    private let sidebarToolbarInset: CGFloat = 54
     private let sidebarRowHeight: CGFloat = 32
     /// 表紙と2行目（要約）つきの行の高さ。
     private let sidebarDetailRowHeight: CGFloat = 46
@@ -77,7 +78,6 @@ struct MainSidebarView: View {
         ZStack {
             NeomorphicTheme.sidebar.ignoresSafeArea()
             VStack(spacing: 0) {
-              productIdentity
               albumSearchControls
               Divider().padding(.horizontal, sidebarContentPadding)
               sidebarList
@@ -202,32 +202,6 @@ struct MainSidebarView: View {
         }
     }
 
-    private var productIdentity: some View {
-      HStack(spacing: 11) {
-        Image(systemName: "play.rectangle.fill")
-          .font(.system(size: 21, weight: .semibold))
-          .foregroundStyle(.white)
-          .frame(width: 42, height: 42)
-          .background(NeomorphicTheme.accent.gradient, in: RoundedRectangle(cornerRadius: 12))
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Mac Media Server")
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(NeomorphicTheme.ink)
-          Text("あなたのメディアを，このMacから")
-            .font(.system(size: 11))
-            .foregroundStyle(NeomorphicTheme.muted)
-        }
-        Spacer(minLength: 0)
-      }
-      .frame(width: sidebarRowWidth)
-      .padding(.horizontal, sidebarContentPadding)
-      .frame(width: sidebarColumnWidth, alignment: .leading)
-      // 窓の上端まで伸びる面なので、信号機ボタンとツールバーの帯の下から始める。
-      .padding(.top, 54)
-      .padding(.bottom, 8)
-      .accessibilityElement(children: .combine)
-    }
-
     /// スクロールしても検索の入口が隠れないように固定します．
     private var albumSearchControls: some View {
       VStack(spacing: 10) {
@@ -269,7 +243,8 @@ struct MainSidebarView: View {
       .frame(width: sidebarRowWidth)
       .padding(.horizontal, sidebarContentPadding)
       .frame(width: sidebarColumnWidth, alignment: .leading)
-      .padding(.top, 12)
+      // タイトルバーの下から検索欄を始めます．
+      .padding(.top, sidebarToolbarInset)
       .padding(.bottom, 12)
     }
 
