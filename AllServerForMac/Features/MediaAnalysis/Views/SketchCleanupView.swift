@@ -50,7 +50,7 @@ struct SketchCleanupView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Label("ラフ画・線画の抽出", systemImage: "scribble.variable")
-                .font(.headline)
+                .font(.appHeadline)
             Spacer()
             Button("閉じる") { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -67,7 +67,7 @@ struct SketchCleanupView: View {
                     .progressViewStyle(.linear)
                     .frame(width: 260)
                 Text("判定中… \(model.scannedCount) / \(model.totalCount)")
-                    .font(.subheadline)
+                    .font(.appBody)
                     .foregroundStyle(.secondary)
                 Button("中止") { model.cancelScan() }
             }
@@ -116,7 +116,7 @@ struct SketchCleanupView: View {
                 }
                 .overlay(alignment: .bottomTrailing) {
                     Text("\(candidate.judgement.kind.displayName) \(Int(candidate.judgement.score * 100))%")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.appMicro.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
@@ -126,7 +126,7 @@ struct SketchCleanupView: View {
                 .opacity(isSelected ? 1 : 0.55)
 
             Text(candidate.item.originalFilename)
-                .font(.system(size: 11))
+                .font(.appMicro)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: thumbnailSide)
@@ -141,11 +141,11 @@ struct SketchCleanupView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Text("きびしさ")
-                    .font(.caption)
+                    .font(.appCaption)
                 Slider(value: $model.threshold, in: 0.3...0.95)
                     .frame(width: 200)
                 Text("\(Int(model.threshold * 100))%")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .frame(width: 38, alignment: .leading)
                 FlatSegmentedControl(
                     options: Array(SketchCleanupViewModel.KindFilter.allCases),
@@ -158,10 +158,10 @@ struct SketchCleanupView: View {
 
             HStack(spacing: 10) {
                 Text("\(model.visibleCandidates.count)件が該当 / \(model.selectedIDs.count)件を選択中")
-                    .font(.subheadline)
+                    .font(.appBody)
                 if model.unreadableCount > 0 {
                     Text("読み取れなかった画像: \(model.unreadableCount)件")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
