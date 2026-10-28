@@ -115,7 +115,7 @@ struct SplitVideoPlayerView: View {
     private var header: some View {
         HStack {
             Text("\(filename)  —  \(splitCount)分割再生")
-                .font(.caption)
+                .font(.appCaption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
@@ -124,7 +124,7 @@ struct SplitVideoPlayerView: View {
                 let start = viewModel.totalDuration / Double(splitCount) * Double(i)
                 let end = start + viewModel.totalDuration / Double(splitCount)
                 Text("\(formatTime(start))–\(formatTime(end))")
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.appMicro.monospacedDigit())
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(PlayerChrome.hover)

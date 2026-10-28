@@ -43,7 +43,7 @@ struct SlideshowPlayerView: View {
                 )
             case .error(let message):
                 VStack(spacing: 10) {
-                    Image(systemName: "xmark.octagon.fill").font(.largeTitle).foregroundStyle(.red)
+                    Image(systemName: "xmark.octagon.fill").font(.appLargeTitle).foregroundStyle(.red)
                     Text(message).foregroundStyle(.white).padding()
                     Button("閉じる") { coordinator.close() }
                 }
@@ -59,10 +59,10 @@ struct SlideshowPlayerView: View {
                     .font(.system(size: 40))
                     .foregroundStyle(.white)
                 Text("スライドショー")
-                    .font(.title2.weight(.semibold))
+                    .font(.appTitle.weight(.semibold))
                     .foregroundStyle(.white)
                 Text("\(videos.count)本の動画から各クリップを切り出して連続再生します")
-                    .font(.callout)
+                    .font(.appBody)
                     .foregroundStyle(.white.opacity(0.7))
             }
 
@@ -117,7 +117,7 @@ private struct SlideshowChapterRow: View {
             .cornerRadius(4)
             .clipped()
 
-            Text(chapter.title).font(.caption).lineLimit(2)
+            Text(chapter.title).font(.appCaption).lineLimit(2)
         }
         .padding(.vertical, 4)
         .task(id: chapter.id) { await generateThumbnail() }

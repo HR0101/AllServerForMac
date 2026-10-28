@@ -242,7 +242,7 @@ struct PhotoViewerView: View {
 
             if visiblePhotos.count > 1, let idx = currentIndex {
                 Text("\(idx + 1) / \(visiblePhotos.count)")
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.7))
             }
@@ -252,7 +252,7 @@ struct PhotoViewerView: View {
             if visiblePhotos.count > 1 {
                 Button { isMangaMode.toggle() } label: {
                     Text(isMangaMode ? "漫画モード" : "通常モード")
-                        .font(.system(size: 12))
+                        .font(.appCaption)
                         .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -442,7 +442,7 @@ struct PhotoViewerView: View {
             .overlay(alignment: .topTrailing) {
                 if isCurrent {
                     Text("現在")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.appMicro.weight(.semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -452,7 +452,7 @@ struct PhotoViewerView: View {
             }
 
             Text(photo.originalFilename)
-                .font(.system(size: 10))
+                .font(.appMicro)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(.white.opacity(0.82))
