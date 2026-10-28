@@ -45,7 +45,7 @@ struct StorageManagerView: View {
                         .font(.system(size: 13, weight: .semibold))
                     Spacer()
                     Text(viewModel.formatBytes(viewModel.usage.appTotalSize))
-                        .font(.title3.bold())
+                        .font(.appTitle.bold())
                         .monospacedDigit()
                         .foregroundStyle(
                             viewModel.usage.appTotalSize > 10_000_000_000
@@ -60,7 +60,7 @@ struct StorageManagerView: View {
                 VStack(spacing: 8) {
                     ProgressView()
                     Text(viewModel.optimizationMessage)
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 130)
@@ -74,7 +74,7 @@ struct StorageManagerView: View {
                     .controlSize(.large)
 
                     Text("Mac上の元ファイルが削除されて「見つかりません」になったデータを一括整理します．")
-                        .font(.system(size: 12))
+                        .font(.appCaption)
                         .foregroundStyle(NeomorphicTheme.muted)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -87,7 +87,7 @@ struct StorageManagerView: View {
                     .controlSize(.large)
 
                     Text("タイトルが違っても内容が完全に一致する動画を自動で整理します．")
-                        .font(.system(size: 12))
+                        .font(.appCaption)
                         .foregroundStyle(NeomorphicTheme.muted)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -180,7 +180,7 @@ struct StorageManagerView: View {
                 .fill(color)
                 .frame(width: 8, height: 8)
             Text(label)
-                .font(.system(size: 13))
+                .font(.appBody)
             Spacer()
             Text(viewModel.formatBytes(size))
                 .font(.system(size: 13, weight: .semibold))

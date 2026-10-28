@@ -30,9 +30,9 @@ struct PreferencesView: View {
                 IconTile(icon: "gearshape", tint: NeomorphicTheme.muted, size: 38)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Mac Media Serverの設定")
-                        .font(.title3.bold())
+                        .font(.appTitle.bold())
                     Text("接続・データの安全性・サーバー保護・パフォーマンスの設定")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -82,7 +82,7 @@ struct PreferencesView: View {
                             }
                             if webServerManager.isRunning {
                                 Text("ポート番号と自動停止は，サーバーを停止すると変更できます．")
-                                    .font(.caption)
+                                    .font(.appCaption)
                                     .foregroundStyle(.secondary)
                             }
 
@@ -104,7 +104,7 @@ struct PreferencesView: View {
                                 }
                             } else {
                                 Text("認証が無効です．同じWi-Fi内の誰でもアクセスできます．")
-                                    .font(.caption)
+                                    .font(.appCaption)
                                     .foregroundStyle(.orange)
                             }
                         }
@@ -113,12 +113,12 @@ struct PreferencesView: View {
                         Section("外観") {
                             Toggle("ダークな外観にする", isOn: $appSettings.neomorphicDarkBase)
                             Text("ブルーを基調に，控えめなガラスと読みやすい文字で統一しています．明るい外観と暗い外観を切り替えられます．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
 
                             Toggle("サイドバーのアルバムに表紙と詳細を表示", isOn: $appSettings.sidebarShowsAlbumDetails)
                             Text("オフにすると，従来の名前と件数だけの行に戻ります．アルバムが非常に多いときに行を詰めたい場合に使います．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
                         }
                         .id(SettingsSection.appearance)
@@ -126,7 +126,7 @@ struct PreferencesView: View {
                         Section("データの安全") {
                             Toggle("インポート時にファイルをアプリ内へコピー", isOn: $dataManager.importCopiesFiles)
                             Text("オンにすると，元のフォルダを消してもサーバー内に実体が残ります（ディスク容量を消費）．オフ（既定）は元の場所を参照するだけで，元ファイルを消すと再生できなくなります．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
 
                             Picker("ゴミ箱の自動削除", selection: $dataManager.trashAutoDeleteDays) {
@@ -135,12 +135,12 @@ struct PreferencesView: View {
                                 Text("90日後").tag(90)
                             }
                             Text("ゴミ箱に入れてから指定日数が経過した項目を，起動時に完全削除します．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
 
                             Toggle("起動時にリンク切れメディアを自動整理", isOn: $dataManager.autoCleanupMissingFilesEnabled)
                             Text("元ファイルが見つからない項目を起動時に自動削除します．外付けドライブのメディアを参照している場合はオフのままにしてください（未接続時に誤って消えます）．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
                         }
                         .id(SettingsSection.data)
@@ -148,12 +148,12 @@ struct PreferencesView: View {
                         Section("サーバー保護") {
                             Toggle("認証オフでも削除操作にはPINを要求", isOn: $webServerManager.requirePINForDeletion)
                             Text("PIN認証をオフにしていても，完全削除・アルバム削除・サーバー停止のAPIにはPINを要求します．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
 
                             TextField("サーバー表示名（空欄でコンピュータ名）", text: $webServerManager.serverDisplayName)
                             Text("iOSアプリやブラウザに表示される名前です．変更はサーバーの再起動後に反映されます．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
 
                             Picker("アップロード上限", selection: $webServerManager.maxUploadGB) {
@@ -162,7 +162,7 @@ struct PreferencesView: View {
                                 }
                             }
                             Text("受信中のファイルは丸ごとメモリに読み込まれるため，搭載メモリ（\(Self.physicalMemoryGB) GB）の半分までしか選べません．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
                         }
                         .id(SettingsSection.server)
@@ -195,7 +195,7 @@ struct PreferencesView: View {
                         Section("エクスポート") {
                             Toggle("アルバムの階層構造を再現して書き出す", isOn: $dataManager.exportPreservesAlbumStructure)
                             Text("オフにすると，すべてのファイルを選んだフォルダ直下にフラットに書き出します．")
-                                .font(.caption)
+                                .font(.appCaption)
                                 .foregroundStyle(.secondary)
                         }
                         .id(SettingsSection.export)
@@ -237,7 +237,7 @@ struct PreferencesView: View {
                         }
                     } label: {
                         Text(section.rawValue)
-                            .font(.system(size: 12))
+                            .font(.appCaption)
                             .foregroundStyle(NeomorphicTheme.ink)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
