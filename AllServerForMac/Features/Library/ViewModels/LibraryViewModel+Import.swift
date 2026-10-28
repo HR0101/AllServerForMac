@@ -221,7 +221,7 @@ extension LibraryViewModel {
         saveData()
 
         if failedCount > 0 {
-            print("⚠️ [IMPORT] \(failedCount)件のメディアをインポートできませんでした。")
+            print("⚠️ [IMPORT] \(failedCount)件のメディアをインポートできませんでした．")
         }
     }
 

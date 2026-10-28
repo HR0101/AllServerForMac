@@ -299,12 +299,12 @@ final class WebSyncStore: @unchecked Sendable {
             let stamp = Int(Date().timeIntervalSince1970)
             let corruptedURL = rootURL.appendingPathComponent("websync.corrupted-\(stamp).json")
             try? data.write(to: corruptedURL, options: .atomic)
-            print("⚠️ [SYNC] websync.json が破損していたため \(corruptedURL.lastPathComponent) へ退避しました。")
+            print("⚠️ [SYNC] websync.json が破損していたため \(corruptedURL.lastPathComponent) へ退避しました．")
 
             if let backup = try? Data(contentsOf: backupURL),
                let decoded = try? JSONDecoder().decode(SyncDoc.self, from: backup) {
                 doc = decoded
-                print("♻️ [SYNC] websync.backup.json から復旧しました。")
+                print("♻️ [SYNC] websync.backup.json から復旧しました．")
                 return
             }
             doc = SyncDoc()

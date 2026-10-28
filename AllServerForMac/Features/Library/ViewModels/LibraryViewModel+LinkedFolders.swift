@@ -554,7 +554,7 @@ extension LibraryViewModel {
         guard !linkedFolderScanStatus.isScanning else { return }
         let linkedAlbums = albums.filter { $0.linkedFolderPath != nil || $0.linkedFolderBookmarkData != nil }
         guard !linkedAlbums.isEmpty else {
-            linkedFolderScanStatus.statusMessage = "リンクされたフォルダはありません。"
+            linkedFolderScanStatus.statusMessage = "リンクされたフォルダはありません．"
             return
         }
 
@@ -596,11 +596,11 @@ extension LibraryViewModel {
         linkedFolderScanStatus.currentFolderName = nil
         linkedFolderScanStatus.processedItemsInCurrentFolder = 0
         if wasCancelled {
-            linkedFolderScanStatus.statusMessage = "リンクフォルダの更新を中止しました。"
+            linkedFolderScanStatus.statusMessage = "リンクフォルダの更新を中止しました．"
         } else {
             linkedFolderScanStatus.statusMessage = imported > 0
-                ? "\(linkedAlbums.count)件のフォルダを更新し、\(imported)件の新しいメディアを取り込みました。"
-                : "\(linkedAlbums.count)件のフォルダを更新しました（新規メディアはありません）。"
+                ? "\(linkedAlbums.count)件のフォルダを更新し，\(imported)件の新しいメディアを取り込みました．"
+                : "\(linkedAlbums.count)件のフォルダを更新しました（新規メディアはありません）．"
         }
     }
 

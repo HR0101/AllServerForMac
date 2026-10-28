@@ -77,7 +77,7 @@ struct SimilarMediaView: View {
             ContentUnavailableView(
                 "似ているメディアはありません",
                 systemImage: "checkmark.circle",
-                description: Text("「似ている度合い」をゆるめると候補が増えます。")
+                description: Text("「似ている度合い」をゆるめると候補が増えます．")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

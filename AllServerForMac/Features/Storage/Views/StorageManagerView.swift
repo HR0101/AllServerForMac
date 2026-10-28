@@ -79,7 +79,7 @@ struct StorageManagerView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
 
-                    Text("Mac上の元ファイルが削除されて「見つかりません」になったデータを一括整理します。")
+                    Text("Mac上の元ファイルが削除されて「見つかりません」になったデータを一括整理します．")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
 
@@ -90,7 +90,7 @@ struct StorageManagerView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
 
-                    Text("タイトルが違っても内容が完全に一致する動画を自動で整理します。")
+                    Text("タイトルが違っても内容が完全に一致する動画を自動で整理します．")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
 

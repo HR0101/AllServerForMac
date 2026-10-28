@@ -89,7 +89,7 @@ extension LibraryViewModel {
         if let container = try? JSONDecoder().decode(DataContainer.self, from: data) {
             let isNewerSchema = (container.schemaVersion ?? 0) > librarySchemaVersion
             if isNewerSchema {
-                print("⚠️ [LOAD] library.json はこのバージョンより新しい形式（v\(container.schemaVersion ?? 0)）です。バックアップの更新をスキップします。")
+                print("⚠️ [LOAD] library.json はこのバージョンより新しい形式（v\(container.schemaVersion ?? 0)）です．バックアップの更新をスキップします．")
             }
 
             let shouldSkipBackup = isNewerSchema

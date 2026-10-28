@@ -185,7 +185,7 @@ struct MultiVideoPlayerView: View {
                 Button("全部鳴らす") { viewModel.unmuteAllTiles() }
                     .help("すべてのミュートを解除")
                 Button("定位を配置どおりに") { viewModel.resetPansToLayout() }
-                    .help("左右の振り分けを、いまのタイル配置から決まる既定値へ戻す")
+                    .help("左右の振り分けを，いまのタイル配置から決まる既定値へ戻す")
                 Button {
                     withAnimation(.easeOut(duration: 0.18)) { isAudioConsoleVisible = false }
                 } label: {

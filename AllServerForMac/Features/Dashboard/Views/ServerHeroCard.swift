@@ -10,10 +10,13 @@ struct ServerHeroCard: View {
 
   var body: some View {
     ViewThatFits(in: .horizontal) {
+      // 下に続くホームの2カラム（左右とも均等幅）と縦のラインを揃えるため，こちらも均等に割る．
+      // 高さも揃えて，短い方のカードの下に空白が残らないようにする．
       HStack(alignment: .top, spacing: DS.cardSpacing) {
-        serverStatusCard.frame(width: 470)
-        settingsSummaryCard.frame(minWidth: 300, maxWidth: .infinity)
+        serverStatusCard.frame(minWidth: 380, maxWidth: .infinity)
+        settingsSummaryCard.frame(minWidth: 380, maxWidth: .infinity)
       }
+      .fixedSize(horizontal: false, vertical: true)
       VStack(spacing: DS.cardSpacing) {
         serverStatusCard
         settingsSummaryCard
@@ -79,7 +82,7 @@ struct ServerHeroCard: View {
         .font(.callout)
         .fixedSize(horizontal: false, vertical: true)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
   }
 
@@ -98,6 +101,7 @@ struct ServerHeroCard: View {
         summaryButton("アクセスログ", value: "直近\(webServerManager.accessLogs.count)件のリクエスト",
           detail: "接続端末からの通信履歴を開く", icon: "list.bullet.rectangle", action: showAccessLog)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
   }
 
