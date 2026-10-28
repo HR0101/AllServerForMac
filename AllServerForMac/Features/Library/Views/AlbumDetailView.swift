@@ -114,6 +114,13 @@ struct AlbumDetailView: View {
         let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
 
         return VStack(spacing: 0) {
+            LibraryPageHeader(
+              title: album.name == LibraryViewModel.allVideosAlbumName ? "すべての動画"
+                : album.name == LibraryViewModel.allPhotosAlbumName ? "すべての画像"
+                : album.name.components(separatedBy: "/").last ?? album.name,
+              subtitle: canRemoveItemsFromCurrentAlbum ? "アルバム · \(album.name)" : "ライブラリに登録したメディア",
+              count: items.count
+            )
             ZStack {
                 // 背景タップで選択解除（カードタップ時は内側のジェスチャーが優先される）
                 Color.clear
@@ -752,12 +759,15 @@ struct AlbumDetailView: View {
     }
 
     private var noResultsState: some View {
-        ContentUnavailableView(
-            "該当する項目がありません",
-            systemImage: "magnifyingglass",
-            description: Text("「\(searchText)」に一致するタイトルは見つかりませんでした")
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      ContentUnavailableView {
+        Label("該当する項目がありません", systemImage: "magnifyingglass")
+      } description: {
+        Text("「\(searchText)」に一致するタイトルは見つかりませんでした．")
+      } actions: {
+        Button("検索を解除") { searchText = "" }
+          .buttonStyle(.borderedProminent)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyState: some View {
