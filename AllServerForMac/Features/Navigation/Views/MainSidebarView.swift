@@ -62,11 +62,11 @@ struct MainSidebarView: View {
     // `.overlay(alignment:)`、GeometryReader での実測、DisclosureGroup など、
     // 「利用可能な幅いっぱいに広げる」系のAPIを使うと、このビルド環境ではなぜか
     // 行の中身（アイコン・文字）が描画位置ごと画面外に飛んでしまう現象があった。
-    // そのため、ContentView 側で決めているサイドバー列の幅（320pt）に
+    // そのため、ContentView 側で決めているサイドバー列の幅（288pt）に
     // 合わせた固定値を `.frame(width:)` に渡すことで回避している。
     // 行の幅は、列の幅から左右の余白（10）とスクロールバーの分（15）を引いた値にしてある。
-    private let sidebarColumnWidth: CGFloat = 320
-    private let sidebarRowWidth: CGFloat = 285
+    private let sidebarColumnWidth: CGFloat = 288
+    private let sidebarRowWidth: CGFloat = 253
 
     /// 展開中のフォルダ（動画/画像ツリーで独立させるため dropKey と同じキーを使う）。
     /// DisclosureGroup 標準の「＞」は当たり判定が小さいため、タイトルをクリックしても
@@ -1056,26 +1056,29 @@ struct MainSidebarView: View {
 
     private var addAlbumSheet: some View {
         VStack(spacing: 18) {
-            IconTile(icon: "rectangle.stack.badge.plus", tint: .accentColor, size: 44)
+            Image(systemName: "rectangle.stack.badge.plus")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(NeomorphicTheme.muted)
                 .padding(.top, 6)
 
             VStack(spacing: 4) {
                 Text("新規アルバム")
-                    .font(.headline)
+                    .font(.system(size: 17, weight: .semibold))
                 Text("名前とタイプを選んで作成します")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(NeomorphicTheme.muted)
             }
 
             TextField("アルバム名", text: $newAlbumName)
                 .textFieldStyle(.roundedBorder)
 
-            Picker("タイプ", selection: $newAlbumType) {
-                Label("動画", systemImage: "film").tag(AlbumType.video)
-                Label("画像", systemImage: "photo").tag(AlbumType.photo)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            FlatSegmentedControl(
+                options: [AlbumType.video, AlbumType.photo],
+                title: { $0 == .video ? "動画" : "画像" },
+                selection: $newAlbumType,
+                width: 272
+            )
+            .accessibilityLabel("タイプ")
 
             HStack {
                 Button("キャンセル") {
@@ -1110,6 +1113,7 @@ struct MainSidebarView: View {
         }
         .padding(24)
         .frame(width: 320)
+        .appSheet()
     }
 
     /// フォルダを選んで、そのフォルダ名のアルバムを作成しつつ中身を一括インポートする。

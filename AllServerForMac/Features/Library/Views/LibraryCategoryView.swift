@@ -178,9 +178,10 @@ struct LibraryCategoryView: View {
                             .foregroundColor(.white)
                             .font(.subheadline)
                     }
-                    .padding()
-                    .background(.thickMaterial)
-                    .cornerRadius(12)
+                    .padding(20)
+                    .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5))
+                    .environment(\.colorScheme, NeomorphicTheme.isDarkBase ? .dark : .light)
                 }
             }
             Divider()
@@ -369,7 +370,7 @@ struct LibraryCategoryView: View {
         .sheet(isPresented: $showSplitSheet) {
             VStack(spacing: 20) {
                 Text("分割再生")
-                    .font(.headline)
+                    .font(.system(size: 17, weight: .semibold))
                 if let video = splitTargetVideo {
                     Text(video.originalFilename)
                         .font(.subheadline)
@@ -396,6 +397,7 @@ struct LibraryCategoryView: View {
             }
             .padding(30)
             .frame(minWidth: 320)
+            .appSheet()
         }
         // 他の画面に移動したら、ここで表示していたサムネイルはメモリから解放する。
         .onDisappear {

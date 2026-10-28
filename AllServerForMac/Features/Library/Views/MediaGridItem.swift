@@ -102,8 +102,7 @@ struct MediaGridItem: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 44, height: 44)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .environment(\.colorScheme, .dark)
+                            .background(Color.black.opacity(0.55), in: Circle())
                             .allowsHitTesting(false)
                     }
                 }
