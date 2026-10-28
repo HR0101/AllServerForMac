@@ -86,11 +86,11 @@ struct VariantVideoView: View {
                     ? "rectangle.on.rectangle.angled"
                     : "link.badge.plus"
             )
-                .font(.headline)
+                .font(.appHeadline)
             Text(model.searchMode == .normal
                  ? "尺が揃っていて，絵だけが違うものを束にします"
                  : "尺を問わず，一部に同じ場面が続く動画を探します")
-                .font(.caption)
+                .font(.appCaption)
                 .foregroundStyle(.secondary)
             Spacer()
             Picker(
@@ -131,10 +131,10 @@ struct VariantVideoView: View {
                     .progressViewStyle(.linear)
                     .frame(width: 260)
                 Text(progressDescription)
-                    .font(.subheadline)
+                    .font(.appBody)
                     .foregroundStyle(.secondary)
                 Text(progressDetailDescription)
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 Button("中止") { model.cancelScan() }
             }
@@ -157,11 +157,11 @@ struct VariantVideoView: View {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
                         Text(compactProgressDescription)
-                            .font(.caption)
+                            .font(.appCaption)
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("中止") { model.cancelScan() }
-                            .font(.caption)
+                            .font(.appCaption)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -186,11 +186,11 @@ struct VariantVideoView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(groupTitle(group))
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
                 Button("すべて選ぶ") { model.selectAll(inGroupAt: index) }
-                    .font(.caption)
+                    .font(.appCaption)
                     .buttonStyle(.plain)
                     .foregroundStyle(NeomorphicTheme.ink)
                     .disabled(selectedCount == group.items.count)
@@ -198,14 +198,14 @@ struct VariantVideoView: View {
 
             if let stats = group.stats {
                 Text(evidenceText(stats))
-                    .font(.caption2.monospacedDigit())
+                    .font(.appMicro.monospacedDigit())
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .help("絵の差はフレームどうしのハミング距離（小さいほど似ている），名前の近さは 0〜1．名前の近さはしきい値を上下させる補助に使っています")
             } else if let score = group.partialMatchScore {
                 Text(String(format: "一部一致の絵の差 %.1f ・ 小さいほど近い", score))
-                    .font(.caption2.monospacedDigit())
+                    .font(.appMicro.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
 
@@ -264,7 +264,7 @@ struct VariantVideoView: View {
                 .onTapGesture { model.toggle(item.id, inGroupAt: groupIndex) }
 
             Text(item.originalFilename)
-                .font(.system(size: 11))
+                .font(.appMicro)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .truncationMode(.middle)
@@ -281,19 +281,19 @@ struct VariantVideoView: View {
             } else {
                 HStack(spacing: 10) {
                     Text("最小尺差")
-                        .font(.caption)
+                        .font(.appCaption)
                     Stepper(
                         value: $model.minimumPartialDurationDifference,
                         in: 1...120,
                         step: 1
                     ) {
                         Text("\(Int(model.minimumPartialDurationDifference))秒以上")
-                            .font(.caption.monospacedDigit())
+                            .font(.appCaption.monospacedDigit())
                             .frame(width: 66, alignment: .leading)
                     }
                     .disabled(model.isScanning)
                     Text("通常差分と重ならず，この尺差以上ある動画ペアだけを表示します")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -301,20 +301,20 @@ struct VariantVideoView: View {
 
             HStack(spacing: 10) {
                 Text("サムネイル")
-                    .font(.caption)
+                    .font(.appCaption)
                 Slider(value: $thumbnailSide, in: 110...320, step: 2)
                     .frame(width: 150)
                 Text("\(Int(thumbnailSide))px")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .frame(width: 46, alignment: .leading)
 
                 Text(model.searchMode == .normal
                      ? "\(model.groups.count)グループ / \(model.totalGroupedCount)本"
                      : "\(model.groups.count)組の強制差分候補")
-                    .font(.subheadline)
+                    .font(.appBody)
                 if model.unreadableCount > 0 {
                     Text("フレームを読めなかった項目: \(model.unreadableCount)件")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -328,33 +328,33 @@ struct VariantVideoView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Text("尺の許容差")
-                    .font(.caption)
+                    .font(.appCaption)
                 Slider(value: $model.durationTolerance, in: 0...2, step: 0.05)
                     .frame(width: 150)
                 Text(String(format: "±%.2f秒", model.durationTolerance))
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .frame(width: 62, alignment: .leading)
 
                 Text("似ている度合い")
-                    .font(.caption)
+                    .font(.appCaption)
                 Slider(value: $model.maxAverageDistance, in: 2...20, step: 1)
                     .frame(width: 150)
                 Text("±\(Int(model.maxAverageDistance))")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .frame(width: 34, alignment: .leading)
                 Spacer()
             }
 
             HStack(spacing: 10) {
                 Text("タイトルの効き")
-                    .font(.caption)
+                    .font(.appCaption)
                 Slider(value: $model.titleInfluence, in: 0...8, step: 1)
                     .frame(width: 150)
                 Text("±\(Int(model.titleInfluence))")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .frame(width: 34, alignment: .leading)
                 Text(titleInfluenceHint)
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 Spacer()
             }

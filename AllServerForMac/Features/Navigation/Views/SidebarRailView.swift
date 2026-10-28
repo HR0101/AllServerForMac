@@ -212,7 +212,7 @@ private struct RailButton: View {
         .overlay(alignment: .topTrailing) {
             if let count, count > 0 {
                 Text(Self.compact(count))
-                    .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                    .font(.appMicro.weight(.semibold).monospacedDigit())
                     .foregroundStyle(isActive ? NeomorphicTheme.ink : NeomorphicTheme.muted)
                     .padding(.horizontal, 4.5)
                     .frame(minWidth: 16, minHeight: 15)

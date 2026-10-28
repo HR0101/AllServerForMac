@@ -11,7 +11,7 @@ struct DuplicateCheckCountBadge: View {
         // 緑・橙の強い色の面はやめ、中立の面に濃い文字で数字だけを見せる。
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12))
+                .font(.appCaption)
                 .foregroundStyle(NeomorphicTheme.muted)
             Text(count.formatted())
                 .font(.system(size: 22, weight: .semibold))

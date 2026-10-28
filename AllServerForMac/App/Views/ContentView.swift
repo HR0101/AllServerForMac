@@ -482,7 +482,7 @@ private struct LibraryStorageInitializationErrorView: View {
 
             VStack(spacing: 8) {
                 Text("ライブラリ保存先を準備できませんでした")
-                    .font(.title2.bold())
+                    .font(.appTitle.bold())
                 Text("データを保護するため，ライブラリの読み込みとサーバー起動を停止しています．")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -522,7 +522,7 @@ private struct LibraryStorageInitializationErrorView: View {
     private func errorRow(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.appCaption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value)
                 .textSelection(.enabled)

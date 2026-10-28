@@ -21,7 +21,7 @@ private struct ChapterRow: View {
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .cornerRadius(4)
                 Text(chapter.timeString)
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
             }
             .contentShape(Rectangle())
         }
@@ -97,7 +97,7 @@ private struct PlaybackVideoThumbnailButton: View {
                 )
 
                 Text(displayName)
-                    .font(.caption.weight(.semibold))
+                    .font(.appCaption.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
@@ -128,7 +128,7 @@ private struct PlaybackVideoThumbnailButton: View {
                 ZStack {
                     Rectangle().fill(.black.opacity(0.35))
                     Image(systemName: "film")
-                        .font(.title3)
+                        .font(.appTitle)
                         .foregroundStyle(.white.opacity(0.48))
                 }
             }
@@ -169,7 +169,7 @@ private struct UpNextVideoRow: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                     Text(durationString)
-                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .font(.appMicro.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
@@ -178,7 +178,7 @@ private struct UpNextVideoRow: View {
                 }
 
                 Text(displayName)
-                    .font(.footnote.weight(.medium))
+                    .font(.appBody.weight(.medium))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -749,7 +749,7 @@ struct VideoPlayerView: View {
     private var upNextPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("同じアルバムの動画")
-                .font(.callout.weight(.semibold))
+                .font(.appBody.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.82))
                 .padding(.horizontal, 16)
                 .padding(.top, 22)
@@ -758,7 +758,7 @@ struct VideoPlayerView: View {
             if viewModel.otherVideos.isEmpty {
                 Spacer()
                 Text("他に動画がありません")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -1021,7 +1021,7 @@ struct VideoPlayerView: View {
             )
 
             Text(formatTime(hoveredSeconds ?? 0))
-                .font(.caption2.monospacedDigit().weight(.semibold))
+                .font(.appMicro.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.white)
         }
         .padding(5)
@@ -1335,9 +1335,9 @@ struct PlaybackTourView: View {
     VStack(spacing: 0) {
       HStack(spacing: 16) {
         VStack(alignment: .leading, spacing: 5) {
-          Text(model.channelName.map { "マイチャンネル · \($0)" } ?? session.title).font(.title3.bold())
+          Text(model.channelName.map { "マイチャンネル · \($0)" } ?? session.title).font(.appTitle.bold())
           Text(model.currentEntry?.video.originalFilename ?? "")
-            .font(.callout).lineLimit(1).truncationMode(.middle)
+            .font(.appBody).lineLimit(1).truncationMode(.middle)
         }
         Spacer()
         Text("\(model.index + 1) / \(session.entries.count)").monospacedDigit()
@@ -1354,7 +1354,7 @@ struct PlaybackTourView: View {
         }
         if let error = model.errorMessage {
           VStack(spacing: 16) {
-            Text("この項目を再生できません").font(.title2.bold())
+            Text("この項目を再生できません").font(.appTitle.bold())
             Text(error).multilineTextAlignment(.center)
             HStack {
               Button("再試行") { model.retry() }
@@ -1366,7 +1366,7 @@ struct PlaybackTourView: View {
         }
         if model.isFinished {
           VStack(spacing: 16) {
-            Text("一巡しました").font(.largeTitle.bold())
+            Text("一巡しました").font(.appLargeTitle.bold())
             Text("\(session.entries.count)件の区間の巡回が終了しました．")
             HStack {
               Button("もう一度巡回") { model.restart() }
@@ -1417,11 +1417,11 @@ struct PlaybackTourView: View {
           Spacer()
           if session.kind == .timed {
             Text("予定：\(Int((session.requestedSeconds ?? 0) / 60))分 · 一時停止・読み込み・手動送りで終了時刻は変わります．")
-              .font(.caption)
+              .font(.appCaption)
           }
         }
         Text("試聴中は視聴位置・履歴を変更しません．「このまま見る」で通常再生へ切り替わります．")
-          .font(.caption).foregroundStyle(.white.opacity(0.75))
+          .font(.appCaption).foregroundStyle(.white.opacity(0.75))
       }
       .padding(20)
     }
@@ -1480,7 +1480,7 @@ struct StockMomentButton: View {
     .accessibilityLabel("場面を保存")
     .help("現在位置の前後10秒をストックします（⌘B）")
     .popover(isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
-      Text(notice ?? "").font(.callout).padding(16).frame(width: 300)
+      Text(notice ?? "").font(.appBody).padding(16).frame(width: 300)
     }
     .alert("保存できません", isPresented: Binding(
       get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }

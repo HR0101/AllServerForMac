@@ -92,7 +92,7 @@ struct MediaDeletionConfirmationSheet: View {
       }
 
       Text("下のサムネイルが削除対象です．アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．")
-        .font(.system(size: 13))
+        .font(.appBody)
         .foregroundStyle(NeomorphicTheme.muted)
 
       Divider()
@@ -115,7 +115,7 @@ struct MediaDeletionConfirmationSheet: View {
               }
 
               Text(item.originalFilename)
-                .font(.system(size: 12))
+                .font(.appCaption)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)

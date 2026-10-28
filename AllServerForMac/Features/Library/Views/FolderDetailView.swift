@@ -444,7 +444,7 @@ struct FolderEntryTile: View {
                 }
                 .overlay(alignment: .topTrailing) {
                     Text("\(entry.count)")
-                        .font(.caption2.weight(.semibold))
+                        .font(.appMicro.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
@@ -461,7 +461,7 @@ struct FolderEntryTile: View {
                         .truncationMode(.middle)
                     if showDetail {
                         Text(entry.summary.detailText(isFolder: entry.isFolder))
-                            .font(.system(size: 11))
+                            .font(.appMicro)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)

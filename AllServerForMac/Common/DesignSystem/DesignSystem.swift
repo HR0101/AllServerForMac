@@ -1,6 +1,28 @@
 import AppKit
 import SwiftUI
 
+// MARK: - 文字サイズの階層
+
+/// アプリ全体の文字サイズの段階。システム標準の `.caption`（macOS では 10pt）は小さすぎて読みにくいので使わず、
+/// 画面ごとにばらついていた指定を、次の 6 段階にそろえる。強弱は太さ（.weight）で足す。
+///
+/// | 名前          | pt | 用途                                   |
+/// |---------------|----|----------------------------------------|
+/// | appMicro      | 11 | バッジ・単位・時刻などの補足           |
+/// | appCaption    | 12 | 説明文・2 行目・ラベル                 |
+/// | appBody       | 13 | 本文・行・ボタン                       |
+/// | appHeadline   | 15 | カードの見出し                         |
+/// | appTitle      | 17 | シート・パネルの見出し                 |
+/// | appLargeTitle | 26 | ページの見出し（LibraryPageHeader）    |
+extension Font {
+    static let appMicro = Font.system(size: 11)
+    static let appCaption = Font.system(size: 12)
+    static let appBody = Font.system(size: 13)
+    static let appHeadline = Font.system(size: 15, weight: .semibold)
+    static let appTitle = Font.system(size: 17, weight: .semibold)
+    static let appLargeTitle = Font.system(size: 26, weight: .bold)
+}
+
 // MARK: - デザイントークン
 
 enum DS {
@@ -185,14 +207,14 @@ struct LibraryPageHeader: View {
           .truncationMode(.middle)
           .help(title)
         Text(subtitle)
-          .font(.callout)
+          .font(.appBody)
           .foregroundStyle(NeomorphicTheme.muted)
           .lineLimit(2)
       }
       Spacer(minLength: 8)
       if let count {
         Text("\(count.formatted())件")
-          .font(.callout.weight(.medium).monospacedDigit())
+          .font(.appBody.weight(.medium).monospacedDigit())
           .foregroundStyle(NeomorphicTheme.muted)
       }
     }

@@ -122,7 +122,7 @@ struct HomeView: View {
 
             if totalCount == 0 {
                 Text("対象アルバムはありません．")
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 12)
@@ -132,13 +132,13 @@ struct HomeView: View {
                         .progressViewStyle(.linear)
                         .tint(NeomorphicTheme.accent)
                     Text(duplicateCheckStatus.statusMessage)
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
             } else {
                 Text(duplicateCheckStatus.statusMessage)
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(.secondary)
             }
 
@@ -179,17 +179,17 @@ struct HomeView: View {
                 linkedFolderScanProgress(status)
             } else {
                 Text("紐づけたフォルダに追加・削除したメディアは，下のボタンを押したときに取り込まれます．")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if count > 0 && !status.statusMessage.isEmpty {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 11))
+                            .font(.appMicro)
                             .foregroundStyle(.green)
                         Text(status.statusMessage)
-                            .font(.system(size: 11))
+                            .font(.appMicro)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -211,7 +211,7 @@ struct HomeView: View {
 
             if count == 0 {
                 Text("フォルダを紐づけるには，アルバムを開いてツールバーの「フォルダ紐づけ」を使ってください．")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -243,10 +243,10 @@ struct HomeView: View {
             if let name = status.currentFolderName {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundStyle(.cyan)
                     Text(name)
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -282,7 +282,7 @@ struct HomeView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "rectangle.stack.fill")
                             .foregroundStyle(.yellow)
-                            .font(.system(size: 12))
+                            .font(.appCaption)
                         Text(conflict.albumName)
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
@@ -294,13 +294,13 @@ struct HomeView: View {
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(candidate.folderPath)
-                                    .font(.system(size: 11))
+                                    .font(.appMicro)
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                     .help(candidate.folderPath)
                                 Text("\(candidate.matchCount)件一致")
-                                    .font(.system(size: 11))
+                                    .font(.appMicro)
                                     .foregroundStyle(.secondary)
                             }
 
@@ -342,13 +342,13 @@ struct HomeView: View {
 
             if albums.isEmpty {
                 Text(emptyMessage)
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(.tertiary)
             } else {
                 ForEach(albums.prefix(5)) { album in
                     HStack(spacing: 8) {
                         Text(album.name)
-                            .font(.system(size: 12))
+                            .font(.appCaption)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
@@ -360,7 +360,7 @@ struct HomeView: View {
 
                 if albums.count > 5 {
                     Text("ほか\(albums.count - 5)件")
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -391,7 +391,7 @@ struct HomeView: View {
 
             if webServerManager.isRunning {
               Text("接続・自動停止の設定は，サーバーを停止すると変更できます．")
-                .font(.caption)
+                .font(.appCaption)
                 .foregroundStyle(NeomorphicTheme.muted)
             }
 
@@ -409,7 +409,7 @@ struct HomeView: View {
                             .multilineTextAlignment(.trailing)
                             .disabled(webServerManager.isRunning)
                         Text("分")
-                            .font(.system(size: 12))
+                            .font(.appCaption)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -430,9 +430,9 @@ struct HomeView: View {
                 Divider()
 
                 DatePicker("起動時刻", selection: $webServerManager.scheduleStartTime, displayedComponents: .hourAndMinute)
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                 DatePicker("停止時刻", selection: $webServerManager.scheduleStopTime, displayedComponents: .hourAndMinute)
-                    .font(.system(size: 12))
+                    .font(.appCaption)
 
                 Button(action: { webServerManager.applySchedule() }) {
                     Label("このスケジュールを適用", systemImage: "checkmark.circle")
@@ -442,13 +442,13 @@ struct HomeView: View {
             .tint(NeomorphicTheme.ink)
 
                 Text("適用時に管理者パスワードの入力を求められます（スリープからの自動起床設定のため）．停止時刻になるとアプリは完全終了します．")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if !webServerManager.scheduleStatusMessage.isEmpty {
                     Text(webServerManager.scheduleStatusMessage)
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -482,14 +482,14 @@ struct HomeView: View {
                     }
                 }
                 Text("このPINをiPhoneアプリ・ブラウザで入力してください．")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                     Text("認証が無効です．同じWi-Fi内の誰でもアクセスできます．")
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -552,7 +552,7 @@ struct HomeView: View {
             .frame(height: 90)
 
             Text("CPU使用率の推移（0〜100％）")
-              .font(.caption)
+              .font(.appCaption)
               .foregroundStyle(NeomorphicTheme.muted)
         }
         .dashboardCard()
@@ -617,7 +617,7 @@ struct HomeView: View {
 
             if filteredLogs.isEmpty {
                 Text("まだアクセスがありません")
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 20)
@@ -632,7 +632,7 @@ struct HomeView: View {
 
                             Image(systemName: entry.authorized ? "checkmark.circle.fill" : "xmark.octagon.fill")
                                 .foregroundStyle(entry.authorized ? .green : .red)
-                                .font(.system(size: 11))
+                                .font(.appMicro)
 
                             Text(entry.method)
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -640,7 +640,7 @@ struct HomeView: View {
                                 .frame(width: 36, alignment: .leading)
 
                             Text(entry.path)
-                                .font(.system(size: 11))
+                                .font(.appMicro)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .help(entry.path)

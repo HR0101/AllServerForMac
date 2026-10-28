@@ -180,7 +180,7 @@ struct MultiVideoPlayerView: View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
                 Label("音声ミキサー", systemImage: "slider.horizontal.3")
-                    .font(.headline)
+                    .font(.appHeadline)
                 Spacer()
                 Button("全部鳴らす") { viewModel.unmuteAllTiles() }
                     .help("すべてのミュートを解除")
@@ -190,7 +190,7 @@ struct MultiVideoPlayerView: View {
                     withAnimation(.easeOut(duration: 0.18)) { isAudioConsoleVisible = false }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
+                        .font(.appTitle)
                         .symbolRenderingMode(.hierarchical)
                 }
                 .buttonStyle(.plain)
@@ -224,7 +224,7 @@ struct MultiVideoPlayerView: View {
                         .frame(width: 20, height: 20)
                         .background(Circle().fill(.white.opacity(0.18)))
                     Text(tile.title)
-                        .font(.caption)
+                        .font(.appCaption)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
@@ -241,7 +241,7 @@ struct MultiVideoPlayerView: View {
                     Button {
                         viewModel.soloTile(at: index)
                     } label: {
-                        Text("SOLO").font(.system(size: 9, weight: .bold))
+                        Text("SOLO").font(.appMicro.weight(.bold))
                     }
                     .buttonStyle(.plain)
                     .help("これだけ鳴らす（他を全部ミュート）")
@@ -267,7 +267,7 @@ struct MultiVideoPlayerView: View {
 
                 HStack(spacing: 6) {
                     Text("L")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.appMicro.weight(.bold))
                         .foregroundStyle(.secondary)
                     Slider(
                         value: Binding(
@@ -282,7 +282,7 @@ struct MultiVideoPlayerView: View {
                     .controlSize(.mini)
                     .disabled(tile.isMuted)
                     Text("R")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.appMicro.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
             }

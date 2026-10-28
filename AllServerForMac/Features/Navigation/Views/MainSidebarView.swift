@@ -100,7 +100,7 @@ struct MainSidebarView: View {
                         .tint(NeomorphicTheme.accent)
                     Text("エクスポート中... \(sidebarExportCurrent) / \(sidebarExportTotal)")
                         .foregroundColor(NeomorphicTheme.ink)
-                        .font(.caption)
+                        .font(.appCaption)
                 }
                 .padding()
                 .background(
@@ -283,15 +283,15 @@ struct MainSidebarView: View {
 
                     if !normalizedAlbumQuery.isEmpty {
                       Text("\(matchingAlbums.count)件のアルバム · Enterで先頭を開く")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(NeomorphicTheme.muted)
                         .padding(.leading, sidebarRowLeadingPadding)
                       if matchingAlbums.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                           Text("一致するアルバムはありません")
-                            .font(.callout.weight(.semibold))
+                            .font(.appBody.weight(.semibold))
                           Text("名前やフォルダ名を変えて検索してください．")
-                            .font(.caption)
+                            .font(.appCaption)
                             .foregroundStyle(NeomorphicTheme.muted)
                           Button("検索と絞り込みを解除") {
                             albumSearchText = ""
@@ -312,7 +312,7 @@ struct MainSidebarView: View {
                           // （最上位のアルバムでは名前の繰り返しになる）。
                           if !appSettings.sidebarShowsAlbumDetails || album.name.contains("/") {
                             Text(album.name)
-                              .font(.caption2)
+                              .font(.appMicro)
                               .foregroundStyle(NeomorphicTheme.muted)
                               .lineLimit(1)
                               .truncationMode(.middle)
@@ -462,7 +462,7 @@ struct MainSidebarView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(summary?.detailText(isFolder: isFolder) ?? " ")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .foregroundStyle(NeomorphicTheme.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -994,7 +994,7 @@ struct MainSidebarView: View {
                 Text("新規アルバム")
                     .font(.system(size: 17, weight: .semibold))
                 Text("名前とタイプを選んで作成します")
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                     .foregroundStyle(NeomorphicTheme.muted)
             }
 

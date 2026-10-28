@@ -209,9 +209,9 @@ struct SceneExtractionTutorialView: View {
     HStack(spacing: 16) {
       VStack(alignment: .leading, spacing: 3) {
         Text("シーン抽出の使い方")
-          .font(.system(size: 20, weight: .semibold))
+          .font(.appTitle)
         Text("操作手順と用語の意味をいつでも確認できます．")
-          .font(.system(size: 12))
+          .font(.appCaption)
           .foregroundStyle(NeomorphicTheme.muted)
       }
 
@@ -256,7 +256,7 @@ struct SceneExtractionTutorialView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(NeomorphicTheme.muted)
               Text(step.title)
-                .font(.system(size: 24, weight: .semibold))
+                .font(.appLargeTitle)
               Text(step.summary)
                 .font(.system(size: 15))
                 .foregroundStyle(NeomorphicTheme.muted)
@@ -273,16 +273,16 @@ struct SceneExtractionTutorialView: View {
               }
             }
           }
-          .font(.system(size: 14))
+          .font(.appBody)
 
           HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lightbulb")
               .foregroundStyle(NeomorphicTheme.caution)
             VStack(alignment: .leading, spacing: 3) {
               Text("ヒント")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.appBody.weight(.semibold))
               Text(step.tip)
-                .font(.system(size: 13))
+                .font(.appBody)
                 .foregroundStyle(NeomorphicTheme.muted)
             }
           }
@@ -306,7 +306,7 @@ struct SceneExtractionTutorialView: View {
         } label: {
           VStack(spacing: 5) {
             Text("\(step.id)")
-              .font(.caption.bold())
+              .font(.appCaption.bold())
               .frame(width: 28, height: 28)
               // いまの手順は白い丸に暗い数字（再生ボタンと同じ表し方）、ほかは薄い面。
               .background(
@@ -315,7 +315,7 @@ struct SceneExtractionTutorialView: View {
               )
               .foregroundStyle(index == selectedStepIndex ? NeomorphicTheme.canvas : NeomorphicTheme.muted)
             Text(step.title)
-              .font(.system(size: 11))
+              .font(.appMicro)
               .foregroundStyle(index == selectedStepIndex ? NeomorphicTheme.ink : NeomorphicTheme.muted)
               .lineLimit(1)
           }
@@ -411,7 +411,7 @@ struct SceneExtractionTutorialView: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
         Text(glossaryTerm.term)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.appBody.weight(.semibold))
         Text(glossaryTerm.category.rawValue)
           .font(.system(size: 11, weight: .medium))
           .foregroundStyle(NeomorphicTheme.muted)
@@ -421,14 +421,14 @@ struct SceneExtractionTutorialView: View {
         Spacer()
         if let relatedSetting = glossaryTerm.relatedSetting {
           Label(relatedSetting, systemImage: "slider.horizontal.3")
-            .font(.system(size: 12))
+            .font(.appCaption)
             .foregroundStyle(NeomorphicTheme.muted)
         }
       }
       Text(glossaryTerm.shortDefinition)
-        .font(.system(size: 14, weight: .medium))
+        .font(.appBody.weight(.medium))
       Text(glossaryTerm.detail)
-        .font(.system(size: 13))
+        .font(.appBody)
         .foregroundStyle(NeomorphicTheme.muted)
     }
     .padding(14)

@@ -7,7 +7,7 @@ struct MediaShortcutSettingsSection: View {
         Section("ショートカットキー") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("一覧")
-                    .font(.caption.bold())
+                    .font(.appCaption.bold())
                     .foregroundStyle(.secondary)
                 ForEach(MediaShortcutAction.libraryActions) { action in
                     MediaShortcutAssignmentRow(action: action)
@@ -16,7 +16,7 @@ struct MediaShortcutSettingsSection: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("動画")
-                    .font(.caption.bold())
+                    .font(.appCaption.bold())
                     .foregroundStyle(.secondary)
                 ForEach(MediaShortcutAction.videoActions) { action in
                     MediaShortcutAssignmentRow(action: action)
@@ -25,7 +25,7 @@ struct MediaShortcutSettingsSection: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("差分切り替え再生")
-                    .font(.caption.bold())
+                    .font(.appCaption.bold())
                     .foregroundStyle(.secondary)
                 ForEach(MediaShortcutAction.variantActions) { action in
                     MediaShortcutAssignmentRow(action: action)
@@ -34,7 +34,7 @@ struct MediaShortcutSettingsSection: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("画像")
-                    .font(.caption.bold())
+                    .font(.appCaption.bold())
                     .foregroundStyle(.secondary)
                 ForEach(MediaShortcutAction.photoActions) { action in
                     MediaShortcutAssignmentRow(action: action)
@@ -43,7 +43,7 @@ struct MediaShortcutSettingsSection: View {
 
             if hasDuplicateAssignments {
                 Label("同じキーが複数の操作に割り当てられています．画面ごとの先に判定された操作が優先されます．", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.orange)
             }
 
@@ -82,7 +82,7 @@ private struct MediaShortcutAssignmentRow: View {
                 ForEach(keys) { key in
                     HStack(spacing: 4) {
                         Text(key.displayName)
-                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                            .font(.system(size: 12, design: .monospaced).weight(.semibold))
                         Button {
                             MediaShortcutSettings.removeKey(key, for: action)
                         } label: {
@@ -105,7 +105,7 @@ private struct MediaShortcutAssignmentRow: View {
                 }
             } label: {
                 Label(isCapturing ? "キーを押してください" : "キーを追加", systemImage: isCapturing ? "keyboard" : "plus.circle")
-                    .font(.caption)
+                    .font(.appCaption)
             }
             .buttonStyle(.borderless)
             .help(isCapturing ? "登録したいキーを押してください．Escでキャンセルします．" : "キーを押して追加")

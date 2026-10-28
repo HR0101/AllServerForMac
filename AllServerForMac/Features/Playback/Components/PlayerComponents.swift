@@ -269,7 +269,7 @@ struct ShortcutHelpPanel: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                                 .gridColumnAlignment(.trailing)
                             Text(item.action)
-                                .font(.system(size: 13))
+                                .font(.appBody)
                                 .foregroundStyle(PlayerChrome.icon)
                         }
                     }

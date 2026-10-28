@@ -142,7 +142,7 @@ struct AlbumOverviewView: View {
                 }
             }
         }
-        .font(.system(size: 12))
+        .font(.appCaption)
         .padding(.horizontal, 24)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)

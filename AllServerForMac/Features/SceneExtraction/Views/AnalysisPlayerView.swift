@@ -77,7 +77,7 @@ struct AnalysisPlayerView: View {
           systemImage: viewModel.isPlaying ? "pause.fill" : "play.fill"
         )
         .labelStyle(.iconOnly)
-        .font(.title3)
+        .font(.appTitle)
       }
       .keyboardShortcut(.space, modifiers: [])
 

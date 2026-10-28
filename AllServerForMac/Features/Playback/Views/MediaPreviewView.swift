@@ -67,7 +67,7 @@ struct MediaPreviewView: View {
 
             if item.mediaType == .video, item.duration > 0 {
                 Text(formatDuration(item.duration))
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -79,7 +79,7 @@ struct MediaPreviewView: View {
                     isMangaMode.toggle()
                 }) {
                     Text(isMangaMode ? "漫画モード" : "通常モード")
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                         .foregroundColor(.primary)
                 }
                 .buttonStyle(.plain)
@@ -89,7 +89,7 @@ struct MediaPreviewView: View {
                 .cornerRadius(4)
 
                 Text("\(currentIndex! + 1) / \(items.count)")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -99,7 +99,7 @@ struct MediaPreviewView: View {
                     openFullScreenPhoto()
                 } label: {
                     Label("全画面表示", systemImage: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 11))
+                        .font(.appMicro)
                 }
                 .buttonStyle(.borderless)
             }
@@ -110,7 +110,7 @@ struct MediaPreviewView: View {
                 }
             } label: {
                 Label("外部プレイヤーで開く", systemImage: "arrow.up.forward.app")
-                    .font(.system(size: 11))
+                    .font(.appMicro)
             }
             .buttonStyle(.borderless)
 
