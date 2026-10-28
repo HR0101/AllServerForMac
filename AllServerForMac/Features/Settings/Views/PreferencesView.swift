@@ -27,7 +27,7 @@ struct PreferencesView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                IconTile(icon: "gearshape", tint: NeomorphicTheme.accent, size: 38)
+                IconTile(icon: "gearshape", tint: NeomorphicTheme.muted, size: 38)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Mac Media Serverの設定")
                         .font(.title3.bold())
@@ -219,7 +219,8 @@ struct PreferencesView: View {
         // シートを開くと AppKit が先頭の入力欄（ポート番号）を自動で選択し，うっかり打鍵しただけで
         // 値が書き換わる。SwiftUI の FocusState では止められないので，開いた直後に選択を外す。
         .background(InitialFirstResponderClearer())
-        .background(.regularMaterial)
+        // 半透明にするとデスクトップの色が透けて緑や青に濁るので、アプリ本体と同じ単色の下地にする。
+        .background(NeomorphicTheme.canvas)
         .tint(NeomorphicTheme.accent)
         .foregroundStyle(NeomorphicTheme.ink)
     }
@@ -230,32 +231,23 @@ struct PreferencesView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(SettingsSection.allCases) { section in
-                    Button(section.rawValue) {
+                    Button {
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo(section, anchor: .top)
                         }
+                    } label: {
+                        Text(section.rawValue)
+                            .font(.system(size: 12))
+                            .foregroundStyle(NeomorphicTheme.ink)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(NeomorphicTheme.control))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20)
         }
         .padding(.bottom, 8)
-    }
-}
-
-/// 置かれたウィンドウの最初の入力欄の自動選択を，表示直後に一度だけ外す。
-private struct InitialFirstResponderClearer: NSViewRepresentable {
-    func makeNSView(context: Context) -> ClearerView { ClearerView() }
-    func updateNSView(_ nsView: ClearerView, context: Context) {}
-
-    final class ClearerView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window else { return }
-            // AppKit が初期の first responder を決めるのはウィンドウが key になった後なので，次のループで外す。
-            DispatchQueue.main.async { window.makeFirstResponder(nil) }
-        }
     }
 }

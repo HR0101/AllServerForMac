@@ -147,13 +147,13 @@ struct SimilarMediaView: View {
             Button(item.mediaType == .photo ? "これを残す" : "この音声版を残す") {
                 model.setKeep(item.id, inGroupAt: groupIndex)
             }
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .buttonStyle(.plain)
                 .foregroundStyle(isKept ? Color.secondary : Color.accentColor)
                 .disabled(isKept)
 
             Text(item.originalFilename)
-                .font(.system(size: 9))
+                .font(.system(size: 11))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: thumbnailSide)
@@ -173,7 +173,7 @@ struct SimilarMediaView: View {
                         Text(String(format: "映像 %.1f Mbps", details.videoBitrate / 1_000_000))
                     }
                 }
-                .font(.system(size: 9).monospacedDigit())
+                .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: thumbnailSide)
             }
@@ -203,7 +203,7 @@ struct SimilarMediaView: View {
 
     private func metadataBadge(_ title: String, systemImage: String, color: Color) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.system(size: 9, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(color)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)

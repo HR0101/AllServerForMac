@@ -263,7 +263,7 @@ struct VariantVideoView: View {
                 .onTapGesture { model.toggle(item.id, inGroupAt: groupIndex) }
 
             Text(item.originalFilename)
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .truncationMode(.middle)

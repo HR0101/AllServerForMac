@@ -66,6 +66,20 @@ struct AlbumSummary {
         return summary
     }
 
+    /// 画面に出ているメディアの並び（検索で絞った結果など）から作る要約。ページ見出しの2行目に使う。
+    static func of(items: [VideoItem]) -> AlbumSummary {
+        var summary = AlbumSummary()
+        for item in items {
+            if item.mediaType == .video {
+                summary.videoCount += 1
+                summary.totalDuration += item.duration
+            } else {
+                summary.photoCount += 1
+            }
+        }
+        return summary
+    }
+
     /// フォルダ／アルバムのノード1件ぶん（配下をすべて含む）。
     static func of(node: SidebarAlbumNode, itemByID: [UUID: VideoItem]) -> AlbumSummary {
         var summary = AlbumSummary()

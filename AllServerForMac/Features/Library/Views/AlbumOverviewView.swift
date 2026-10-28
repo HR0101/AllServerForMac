@@ -149,12 +149,13 @@ struct AlbumOverviewView: View {
     }
 
     private var kindPicker: some View {
-        Picker("種類", selection: $kind) {
-            ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 190)
+        FlatSegmentedControl(
+            options: Kind.allCases,
+            title: { $0.rawValue },
+            selection: $kind,
+            width: 190
+        )
+        .accessibilityLabel("種類")
     }
 
     private var flatToggle: some View {

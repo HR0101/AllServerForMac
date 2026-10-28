@@ -62,7 +62,7 @@ final class AppSettings: ObservableObject {
         // 既存の「タイトルを表示」がオフなら，従来は日付も非表示だったため，
         // 新しい日付設定がまだ保存されていない場合は同じ状態を引き継ぐ。
         self.showImportDates = d.object(forKey: Keys.showImportDates) as? Bool ?? savedShowTitles
-        self.neomorphicDarkBase = d.bool(forKey: Keys.neomorphicDarkBase)
+        self.neomorphicDarkBase = d.object(forKey: Keys.neomorphicDarkBase) as? Bool ?? true
         self.sidebarShowsAlbumDetails = d.object(forKey: Keys.sidebarShowsAlbumDetails) as? Bool ?? true
     }
 }
