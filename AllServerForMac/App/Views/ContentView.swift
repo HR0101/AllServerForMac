@@ -241,6 +241,24 @@ struct ContentView: View {
             // 窓の端や上下に余白ができて平らにできない。そこで左カラムを自前で組み、窓の端から端まで
             // 単色で伸ばす（タイトルバーの帯もサイドバーと同じ色にして、一続きに見せる）。
             HStack(spacing: 0) {
+                // 左端のアイコンのレール。サイドバーを隠しても残り、主要な行き先と設定へいつでも移れる。
+                SidebarRailView(
+                    dataManager: dataManager,
+                    watchState: viewModel.watchState,
+                    selection: $viewModel.selection,
+                    allVideosAlbumID: dataManager.albums.first { $0.name == LibraryViewModel.allVideosAlbumName }?.id,
+                    allPhotosAlbumID: dataManager.albums.first { $0.name == LibraryViewModel.allPhotosAlbumName }?.id,
+                    onShowStorage: { viewModel.isShowingStorageManager = true },
+                    onShowPreferences: { viewModel.isShowingPreferences = true }
+                )
+                .background(NeomorphicTheme.rail.ignoresSafeArea())
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(NeomorphicTheme.separator)
+                        .frame(width: 0.5)
+                        .ignoresSafeArea()
+                }
+
                 if isSidebarVisible {
                     MainSidebarView(
                         dataManager: dataManager,
@@ -355,15 +373,6 @@ struct ContentView: View {
                     .keyboardShortcut("s", modifiers: [.command, .control])
                     .help(isSidebarVisible ? "サイドバーを隠す（⌃⌘S）" : "サイドバーを表示（⌃⌘S）")
 
-                    Button { viewModel.isShowingStorageManager = true } label: {
-                        Label("ストレージ管理", systemImage: "internaldrive")
-                    }
-                    .help("ストレージの内訳とクリーンアップ")
-
-                    Button { viewModel.isShowingPreferences = true } label: {
-                        Label("詳細設定", systemImage: "gearshape")
-                    }
-                    .help("データの安全性・サーバー保護・パフォーマンスの設定")
                 }
             }
         }

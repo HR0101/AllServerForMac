@@ -301,24 +301,6 @@ struct MainSidebarView: View {
     private var sidebarList: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 10) {
-                sidebarNavigationButton(.home, title: "ホーム", systemImage: "house")
-
-                VStack(alignment: .leading, spacing: 5) {
-                    sidebarSectionTitle("ライブラリ")
-
-                if let allVideos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allVideosAlbumName }) {
-                    sidebarNavigationButton(.album(allVideos.id), title: "すべての動画", systemImage: "film.stack", count: nonTrashedCount(in: allVideos))
-                }
-                if let allPhotos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allPhotosAlbumName }) {
-                    sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
-                }
-                    sidebarNavigationButton(.albums, title: "アルバム一覧", systemImage: "square.grid.2x2", count: viewModel.albumCount)
-                    sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart", count: dataManager.favoriteVideos.count)
-                    sidebarNavigationButton(.continueWatching, title: "続きを見る", systemImage: "play.circle", count: continueWatchingCount)
-                    sidebarNavigationButton(.history, title: "再生履歴", systemImage: "clock.arrow.circlepath", count: historyCount)
-                    sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash", count: dataManager.trashedVideos.count)
-                }
-
                 // 表紙つきの行は数百件になりうるので、画面に入った行だけ作る（表紙の読み込みも遅延される）。
                 // 幅は他の行と同じ固定値にそろえる（貪欲な幅のままだと、行が左に寄って検索欄とずれる）。
                 LazyVStack(alignment: .leading, spacing: 5) {
@@ -447,34 +429,6 @@ struct MainSidebarView: View {
         } message: {
             Text("ドロップした\(pendingSidebarFileURLs.count)件のファイルを，新しく作るアルバムに取り込みます．")
         }
-    }
-
-    /// 再生履歴の件数。履歴には削除済み・ゴミ箱行きの ID も残るので、
-    /// 実際に一覧へ出るものだけを数える（お気に入り・ゴミ箱のバッジと同じ数え方に合わせる）。
-    private var historyCount: Int {
-        guard !watchState.historyOrder.isEmpty else { return 0 }
-        let available = Set(dataManager.videos.lazy.filter { !$0.isInTrash }.map(\.id))
-        return watchState.historyOrder.reduce(0) { $0 + (available.contains($1) ? 1 : 0) }
-    }
-
-    /// 「続きを見る」の件数。履歴と違って視聴位置そのものを数えるので、
-    /// 履歴から外したあとも途中の動画はここに残る（一覧の中身と同じ数え方）。
-    private var continueWatchingCount: Int {
-        guard !watchState.progress.isEmpty else { return 0 }
-        return dataManager.videos.reduce(0) { count, item in
-            guard !item.isInTrash, item.mediaType == .video,
-                  watchState.resumableSeconds(for: item.id, duration: item.duration) != nil else { return count }
-            return count + 1
-        }
-    }
-
-    private func sidebarNavigationButton(_ target: NavigationSelection, title: String, systemImage: String, count: Int? = nil) -> some View {
-        Button {
-            selection = target
-        } label: {
-            sidebarRowLabel(title, systemImage: systemImage, count: count, isActive: selection == target)
-        }
-        .buttonStyle(.plain)
     }
 
     private func sidebarRowLabel(_ title: String, systemImage: String, count: Int? = nil, isActive: Bool = false, isExpanded: Bool? = nil) -> some View {

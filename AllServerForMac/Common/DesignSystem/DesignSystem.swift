@@ -30,6 +30,10 @@ enum NeomorphicTheme {
     static var sidebar: Color {
         isDarkBase ? Color(white: 0.150) : Color(white: 0.925)
     }
+    /// サイドバーの左に並ぶアイコンのレール。サイドバーより一段暗くして、2列を重ねて見せる。
+    static var rail: Color {
+        isDarkBase ? Color(white: 0.125) : Color(white: 0.895)
+    }
     static var card: Color {
         isDarkBase ? Color(white: 0.150) : Color.white
     }
