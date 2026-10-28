@@ -180,17 +180,17 @@ struct MultiVideoPlayerView: View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
                 Label("音声ミキサー", systemImage: "slider.horizontal.3")
-                    .font(.headline)
+                    .font(.appHeadline)
                 Spacer()
                 Button("全部鳴らす") { viewModel.unmuteAllTiles() }
                     .help("すべてのミュートを解除")
                 Button("定位を配置どおりに") { viewModel.resetPansToLayout() }
-                    .help("左右の振り分けを、いまのタイル配置から決まる既定値へ戻す")
+                    .help("左右の振り分けを，いまのタイル配置から決まる既定値へ戻す")
                 Button {
                     withAnimation(.easeOut(duration: 0.18)) { isAudioConsoleVisible = false }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
+                        .font(.appTitle)
                         .symbolRenderingMode(.hierarchical)
                 }
                 .buttonStyle(.plain)
@@ -207,12 +207,8 @@ struct MultiVideoPlayerView: View {
         }
         .padding(16)
         .frame(maxWidth: 920)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
+        .playerPanel(cornerRadius: 14)
+        .environment(\.colorScheme, .dark)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
@@ -228,7 +224,7 @@ struct MultiVideoPlayerView: View {
                         .frame(width: 20, height: 20)
                         .background(Circle().fill(.white.opacity(0.18)))
                     Text(tile.title)
-                        .font(.caption)
+                        .font(.appCaption)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
@@ -245,7 +241,7 @@ struct MultiVideoPlayerView: View {
                     Button {
                         viewModel.soloTile(at: index)
                     } label: {
-                        Text("SOLO").font(.system(size: 9, weight: .bold))
+                        Text("SOLO").font(.appMicro.weight(.bold))
                     }
                     .buttonStyle(.plain)
                     .help("これだけ鳴らす（他を全部ミュート）")
@@ -271,7 +267,7 @@ struct MultiVideoPlayerView: View {
 
                 HStack(spacing: 6) {
                     Text("L")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.appMicro.weight(.bold))
                         .foregroundStyle(.secondary)
                     Slider(
                         value: Binding(
@@ -286,7 +282,7 @@ struct MultiVideoPlayerView: View {
                     .controlSize(.mini)
                     .disabled(tile.isMuted)
                     Text("R")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.appMicro.weight(.bold))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -307,33 +303,31 @@ struct MultiVideoPlayerView: View {
 
     private var controls: some View {
         HStack {
-            Button {
+            // 通常再生と同じ、白い丸の再生/一時停止ボタン。
+            PlayerPlayButton(
+                isPlaying: viewModel.isPlaying,
+                help: viewModel.isPlaying ? "一時停止（Space）" : "再生（Space）"
+            ) {
                 togglePlayPause()
-            } label: {
-                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16))
-                    .frame(width: 20)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.isPlaying ? "一時停止（Space）" : "再生（Space）")
-            .accessibilityLabel(viewModel.isPlaying ? "一時停止" : "再生")
 
             Text(formatTime(viewModel.commonCurrentTime))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .trailing)
             Slider(value: $viewModel.commonCurrentTime, in: 0...max(viewModel.commonDuration, 0.1)) { isEditing in
                 viewModel.commonSliderEditingChanged(isEditing: isEditing)
             }
+            .tint(.white.opacity(0.92))
             Text(formatTime(viewModel.commonDuration))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .leading)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+        .playerPanel(cornerRadius: 14)
+        .environment(\.colorScheme, .dark)
         .padding(16)
         .frame(maxWidth: 1200)
     }

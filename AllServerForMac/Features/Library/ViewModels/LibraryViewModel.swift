@@ -354,7 +354,7 @@ class LibraryViewModel: ObservableObject {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.messageText = "AllServerForMac は既に起動しています"
-                alert.informativeText = "別のインスタンス（例: Xcodeからの実行と通常起動）が同じライブラリを開いています。データの二重書き込みによる消失を防ぐため、このインスタンスは終了します。"
+                alert.informativeText = "別のインスタンス（例: Xcodeからの実行と通常起動）が同じライブラリを開いています．データの二重書き込みによる消失を防ぐため，このインスタンスは終了します．"
                 alert.alertStyle = .warning
                 alert.runModal()
                 NSApplication.shared.terminate(nil)

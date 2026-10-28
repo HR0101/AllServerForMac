@@ -4,9 +4,21 @@ import UniformTypeIdentifiers
 
 /// サムネイル一覧の余白。密度を高めつつ，選択枠とホバー状態を見分けられる最小限の間隔を保つ。
 enum MediaGridLayout {
-    static let spacing: CGFloat = 3
-    static let itemInset: CGFloat = 1
-    static let contentInset: CGFloat = 5
+    static let spacing: CGFloat = 10
+    static let itemInset: CGFloat = 4
+    static let contentInset: CGFloat = 16
+    /// これより細いタイルは名前も再生時間も読めないので、列を減らして幅を確保する。
+    static let minTileWidth: CGFloat = 120
+
+    /// 実際に並べる列数。設定の列数を上限に、ウィンドウが狭いときは入る分だけに減らす。
+    /// 幅がまだ測れていない（0）ときは設定値をそのまま使う。
+    static func columnCount(requested: Double, availableWidth: CGFloat) -> Int {
+        let requested = max(2, Int(requested))
+        let usable = availableWidth - contentInset * 2
+        guard usable > 0 else { return requested }
+        let fitting = Int((usable + spacing) / (minTileWidth + spacing))
+        return max(2, min(requested, fitting))
+    }
 }
 
 /// 一覧グリッドの矢印キー移動。アルバム詳細とお気に入り/ゴミ箱の両方、
@@ -72,16 +84,16 @@ struct MediaDeletionConfirmationSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(spacing: 10) {
         Label("削除方法を選んでください", systemImage: "trash")
-          .font(.title3.weight(.semibold))
+          .font(.system(size: 17, weight: .semibold))
         Spacer()
-        Text("\(items.count)件を選択中")
-          .font(.subheadline.monospacedDigit())
-          .foregroundStyle(.secondary)
+        Text("\(items.count.formatted())件を選択中")
+          .font(.system(size: 13).monospacedDigit())
+          .foregroundStyle(NeomorphicTheme.muted)
       }
 
       Text("下のサムネイルが削除対象です．アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .font(.appBody)
+        .foregroundStyle(NeomorphicTheme.muted)
 
       Divider()
 
@@ -91,7 +103,8 @@ struct MediaDeletionConfirmationSheet: View {
             VStack(alignment: .leading, spacing: 6) {
               MacVideoThumbnailView(
                 videoItem: item,
-                dataManager: dataManager
+                dataManager: dataManager,
+                showsPlayGlyph: false
               )
               .overlay(alignment: .topTrailing) {
                 Image(systemName: "checkmark.circle.fill")
@@ -102,7 +115,7 @@ struct MediaDeletionConfirmationSheet: View {
               }
 
               Text(item.originalFilename)
-                .font(.caption)
+                .font(.appCaption)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -136,14 +149,17 @@ struct MediaDeletionConfirmationSheet: View {
         Button("完全に削除", role: .destructive) {
           perform(onDeleteCompletely)
         }
+        .tint(Color(red: 1.0, green: 0.27, blue: 0.23))
 
         Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
           perform(onMoveToSystemTrash)
         }
+        .tint(Color(red: 1.0, green: 0.27, blue: 0.23))
       }
     }
     .padding(20)
     .frame(width: Self.sheetWidth)
+    .appSheet()
   }
 
   private func perform(_ action: () -> Void) {

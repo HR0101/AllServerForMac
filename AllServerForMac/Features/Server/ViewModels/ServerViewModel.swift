@@ -87,7 +87,21 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
         didSet { UserDefaults.standard.set(serverDisplayName, forKey: "serverDisplayName") }
     }
 
-    /// アップロード受け入れの上限（GB）。ディスク枯渇の防止用。
+    /// 設定画面で選べるアップロード上限（GB）。Swifter はリクエスト本体をすべてメモリに読み込んでから
+    /// ハンドラを呼ぶため，搭載メモリを超える上限はメモリ枯渇を招くだけで意味がない。
+    /// 搭載メモリの半分を超える選択肢は出さない（最低でも 1 GB は残す）。
+    static let uploadLimitOptionsGB: [Int] = {
+        let halfMemoryGB = Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) / 2
+        let options = [1, 2, 4, 8, 16, 32].filter { $0 <= halfMemoryGB }
+        return options.isEmpty ? [1] : options
+    }()
+
+    /// 保存値や旧既定値（20 GB）が選択肢にないときは，それ以下で最大の選択肢に丸める。
+    static func clampedUploadLimitGB(_ value: Int) -> Int {
+        uploadLimitOptionsGB.last(where: { $0 <= value }) ?? uploadLimitOptionsGB[0]
+    }
+
+    /// アップロード受け入れの上限（GB）。ディスク枯渇とメモリ枯渇の防止用。
     @Published var maxUploadGB: Int = 20 {
         didSet {
             maxUploadBytesCache = maxUploadGB * 1_073_741_824
@@ -154,7 +168,9 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
         let requirePINForDeletionValue = UserDefaults.standard.object(forKey: "requirePINForDeletion") as? Bool ?? true
         self.requirePINForDeletion = requirePINForDeletionValue
         self.serverDisplayName = UserDefaults.standard.string(forKey: "serverDisplayName") ?? ""
-        let savedMaxUploadGB = UserDefaults.standard.object(forKey: "maxUploadGB") as? Int ?? 20
+        let savedMaxUploadGB = Self.clampedUploadLimitGB(
+            UserDefaults.standard.object(forKey: "maxUploadGB") as? Int ?? 20
+        )
         self.maxUploadGB = savedMaxUploadGB
 
         // didSet は init 中に発火しないため、キャッシュと永続化を手動で行う
@@ -353,7 +369,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.statusMessage = "❌ 起動失敗: ポート \(portToUse) は既に使用されている可能性があります。"
+                    self.statusMessage = "❌ 起動失敗: ポート \(portToUse) は既に使用されている可能性があります．"
                 }
             }
         }
@@ -443,7 +459,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     func removeSchedule() {
         removeLaunchAgent()
         cancelWake()
-        DispatchQueue.main.async { self.scheduleStatusMessage = "スケジュールを解除しました。" }
+        DispatchQueue.main.async { self.scheduleStatusMessage = "スケジュールを解除しました．" }
     }
 
     private func installLaunchAgent() {
@@ -468,7 +484,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
             reloadLaunchAgent()
             let timeStr = String(format: "%02d:%02d", hour, minute)
             DispatchQueue.main.async {
-                self.scheduleStatusMessage = "✅ 毎日 \(timeStr) に自動起動するよう登録しました。"
+                self.scheduleStatusMessage = "✅ 毎日 \(timeStr) に自動起動するよう登録しました．"
             }
         } catch {
             DispatchQueue.main.async {
@@ -499,7 +515,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
         runAdminShell("/usr/bin/pmset repeat wakeorpoweron MTWRFSU \(timeStr)") { ok in
             DispatchQueue.main.async {
                 if !ok {
-                    self.scheduleStatusMessage = "⚠️ 自動起動は登録しましたが、スリープ起床(pmset)の設定がキャンセル/失敗しました。"
+                    self.scheduleStatusMessage = "⚠️ 自動起動は登録しましたが，スリープ起床(pmset)の設定がキャンセル/失敗しました．"
                 }
             }
         }
@@ -556,7 +572,7 @@ class ServerViewModel: NSObject, ObservableObject, NetServiceDelegate {
     /// これを実装しないと、サーバーは動いているのに iOS から一切発見できない状態が
     /// 何のエラー表示もなく続いてしまう。
     func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
-        self.statusMessage = "⚠️ サーバーは起動していますが、ネットワーク公開（Bonjour）に失敗しました。iOSから自動発見できません。"
+        self.statusMessage = "⚠️ サーバーは起動していますが，ネットワーク公開（Bonjour）に失敗しました．iOSから自動発見できません．"
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {

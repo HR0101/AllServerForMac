@@ -242,7 +242,7 @@ struct PhotoViewerView: View {
 
             if visiblePhotos.count > 1, let idx = currentIndex {
                 Text("\(idx + 1) / \(visiblePhotos.count)")
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.7))
             }
@@ -252,12 +252,13 @@ struct PhotoViewerView: View {
             if visiblePhotos.count > 1 {
                 Button { isMangaMode.toggle() } label: {
                     Text(isMangaMode ? "漫画モード" : "通常モード")
-                        .font(.system(size: 12))
-                        .foregroundColor(isMangaMode ? .accentColor : .white)
+                        .font(.appCaption)
+                        .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.12))
-                        .cornerRadius(4)
+                        // 入っているモードは面を一段明るくして示す（色は付けない）。
+                        .background(isMangaMode ? PlayerChrome.chip : PlayerChrome.hover)
+                        .cornerRadius(5)
                 }
                 .buttonStyle(.plain)
             }
@@ -405,7 +406,6 @@ struct PhotoViewerView: View {
                 }
             }
             .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
-            .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 4)
         }
         .frame(width: filmstripPreviewWidth, height: filmstripPreviewHeight)
         .task(id: targetItem?.id) {
@@ -437,22 +437,22 @@ struct PhotoViewerView: View {
             .frame(width: filmstripThumbSize, height: filmstripThumbSize)
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isCurrent ? Color.accentColor : .white.opacity(0.15), lineWidth: isCurrent ? 2.5 : 1)
+                    .strokeBorder(isCurrent ? Color.white.opacity(0.9) : .white.opacity(0.15), lineWidth: isCurrent ? 2 : 0.5)
             )
             .overlay(alignment: .topTrailing) {
                 if isCurrent {
                     Text("現在")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.appMicro.weight(.semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Color.white.opacity(0.9), in: Capsule())
                         .padding(6)
                 }
             }
 
             Text(photo.originalFilename)
-                .font(.system(size: 10))
+                .font(.appMicro)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(.white.opacity(0.82))

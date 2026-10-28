@@ -8,6 +8,406 @@ import Testing
 
 @Suite(.serialized)
 struct SceneExtractionTests {
+  @Test @MainActor
+  func discoveryMixUsesMoodAndSeenFilters() throws {
+    let short = tourVideo(duration: 90)
+    let long = tourVideo(duration: 600)
+    var favorite = tourVideo(duration: 200)
+    favorite.isFavorite = true
+    let all = [short, long, favorite]
+    let shortMix = try PlaybackTourSession.mix(videos: all, mood: .short, seenIDs: [])
+    #expect(shortMix.entries.map(\.video.id) == [short.id])
+    let unseen = try PlaybackTourSession.mix(videos: all, mood: .unseen, seenIDs: [short.id, favorite.id])
+    #expect(unseen.entries.map(\.video.id) == [long.id])
+    let favorites = try PlaybackTourSession.mix(videos: all, mood: .favorites, seenIDs: [])
+    #expect(favorites.entries.map(\.video.id) == [favorite.id])
+    #expect(throws: PlaybackTourError.self) {
+      try PlaybackTourSession.mix(videos: all, mood: .unseen, seenIDs: Set(all.map(\.id)))
+    }
+  }
+
+  @Test @MainActor
+  func timedPlaybackFillsBudgetAndTrimsLastEntry() throws {
+    let video = tourVideo(duration: 7)
+    let session = try PlaybackTourSession.timed(videos: [video], seconds: 20)
+    #expect(session.entries.map { $0.end - $0.start } == [7, 7, 6])
+    #expect(session.entries.reduce(0) { $0 + $1.end - $1.start } == 20)
+    #expect(session.requestedSeconds == 20)
+    #expect(throws: PlaybackTourError.self) { try PlaybackTourSession.timed(videos: [video], seconds: .nan) }
+  }
+
+  @Test @MainActor
+  func highlightsPersistIndependentlyAndClampAtFileEdges() throws {
+    let suite = "Highlights-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let url = URL(fileURLWithPath: "/tmp/highlight.mp4")
+    try HighlightStore.capture(url: url, time: 2, duration: 100, defaults: defaults)
+    try HighlightStore.capture(url: url, time: 2, duration: 100, defaults: defaults)
+    try HighlightStore.capture(url: url, time: 98, duration: 100, defaults: defaults)
+    let stored = try AcceptedSceneStore.load(defaults: defaults, key: HighlightStore.defaultsKey)
+    let scenes = try #require(stored[AcceptedSceneStore.sourceKey(url)])
+    #expect(scenes.count == 2)
+    #expect(scenes[0].startTime == 0 && scenes[0].endTime == 12)
+    #expect(scenes[1].startTime == 88 && scenes[1].endTime == 100)
+    #expect(try AcceptedSceneStore.load(defaults: defaults).isEmpty)
+    let session = try PlaybackTourSession.highlights(videos: [tourVideo(duration: 100, url: url)],
+      urlForVideo: { _ in url }, defaults: defaults)
+    #expect(session.entries.count == 2)
+  }
+
+  @Test @MainActor
+  func channelsContinueWithinAlbumAndWrapOnNavigation() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Channels-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let first = tourVideo(duration: 2, url: url)
+    let second = tourVideo(duration: 2, url: url)
+    let albums = [Album(id: UUID(), name: "A", videoIDs: [first.id, second.id], type: .video),
+      Album(id: UUID(), name: "B", videoIDs: [second.id], type: .video),
+      Album(id: UUID(), name: LibraryViewModel.allVideosAlbumName, videoIDs: [first.id], type: .video)]
+    let built = try PlaybackTourSession.channelSession(albums: albums, videos: [first, second])
+    #expect(built.channels.count == 2)
+    let session = PlaybackTourSession(kind: .channels, entries: [
+      PlaybackTourEntry(id: UUID(), video: first, start: 1.8, end: 2),
+      PlaybackTourEntry(id: UUID(), video: second, start: 0, end: 2)
+    ], channels: built.channels)
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    let model = PlaybackTourViewModel(session: session, dataManager: library)
+    defer { model.cleanup() }
+    model.start()
+    try await waitForLoopPlayback { model.channelEntry != nil && !model.isLoading }
+    #expect(model.index == 0 && !model.isFinished)
+    #expect(model.currentEntry?.video.id == second.id)
+    model.previous()
+    #expect(model.index == 1)
+    model.next()
+    #expect(model.index == 0)
+  }
+
+  @Test @MainActor
+  func previewTourClampsShortVideosAndDeduplicates() throws {
+    let video = tourVideo(duration: 3)
+    let session = try PlaybackTourSession.preview(videos: [video, video], seconds: 15)
+    #expect(session.entries.count == 1)
+    #expect(session.entries[0].start == 0)
+    #expect(session.entries[0].end == 3)
+    let long = tourVideo(duration: 120)
+    let tour = try PlaybackTourSession.preview(videos: [long], seconds: 30)
+    #expect(tour.entries[0].start >= 0)
+    #expect(tour.entries[0].end <= 120)
+    #expect(abs(tour.entries[0].end - tour.entries[0].start - 30) < 0.001)
+    #expect(throws: PlaybackTourError.self) {
+      try PlaybackTourSession.preview(videos: [], seconds: 15)
+    }
+  }
+
+  @Test @MainActor
+  func acceptedScenesPersistClampAndProtectCorruptData() throws {
+    let suite = "SceneTourTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let url = URL(fileURLWithPath: "/tmp/scene-tour-test.mp4")
+    let video = tourVideo(duration: 10, url: url)
+    let accepted = CandidateSegment(startTime: 2, endTime: 20, peakTime: 3,
+      score: 1, audioScore: 0, visualScore: 0, transitionScore: 0,
+      reason: [], userLabel: .accepted)
+    var rejected = accepted
+    rejected.userLabel = .rejected
+    try AcceptedSceneStore.save(url: url, candidates: [accepted, rejected], defaults: defaults)
+    #expect(try AcceptedSceneStore.load(defaults: defaults)[AcceptedSceneStore.sourceKey(url)]?.count == 1)
+    let session = try PlaybackTourSession.scenes(videos: [video], urlForVideo: { _ in url }, defaults: defaults)
+    #expect(session.entries.count == 1)
+    #expect(session.entries[0].start == 2)
+    #expect(session.entries[0].end == 10)
+    try AcceptedSceneStore.save(url: url, candidates: [], defaults: defaults)
+    #expect(throws: PlaybackTourError.self) {
+      try PlaybackTourSession.scenes(videos: [video], urlForVideo: { _ in url }, defaults: defaults)
+    }
+    let corrupted = Data("invalid-json".utf8)
+    defaults.set(corrupted, forKey: AcceptedSceneStore.defaultsKey)
+    #expect(throws: (any Error).self) {
+      try AcceptedSceneStore.save(url: url, candidates: [accepted], defaults: defaults)
+    }
+    #expect(defaults.data(forKey: AcceptedSceneStore.defaultsKey) == corrupted)
+  }
+
+  @Test @MainActor
+  func tourAdvancesAtRangeEndAndStopsAfterOnePass() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TourPlayback-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let video = tourVideo(duration: 2, url: url)
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let session = PlaybackTourSession(kind: .scenes, entries: [
+      PlaybackTourEntry(id: UUID(), video: video, start: 0.2, end: 0.5),
+      PlaybackTourEntry(id: UUID(), video: video, start: 0.7, end: 1.0)
+    ])
+    let model = PlaybackTourViewModel(session: session, dataManager: library)
+    defer { model.cleanup() }
+    model.start()
+    try await waitForLoopPlayback { model.index == 1 && !model.isLoading }
+    #expect(model.currentTime >= 0.7)
+    try await waitForLoopPlayback { model.isFinished }
+    #expect(model.player.rate == 0)
+    #expect(model.errorMessage == nil)
+    #expect(model.index == 1)
+  }
+
+  @Test @MainActor
+  func tourPauseAndMissingFileRemainControllable() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TourPause-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let video = tourVideo(duration: 2, url: url)
+    let missing = tourVideo(duration: 2, url: directory.appendingPathComponent("missing.mp4"))
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    let session = PlaybackTourSession(kind: .preview, entries: [
+      PlaybackTourEntry(id: UUID(), video: missing, start: 0, end: 1),
+      PlaybackTourEntry(id: UUID(), video: video, start: 0.2, end: 1.5)
+    ])
+    let model = PlaybackTourViewModel(session: session, dataManager: library)
+    defer { model.cleanup() }
+    model.start()
+    try await waitForLoopPlayback { model.errorMessage != nil }
+    model.next()
+    try await waitForLoopPlayback { model.isPlaying && !model.isLoading }
+    model.togglePlayback()
+    try await waitForLoopPlayback { !model.isPlaying }
+    let time = model.player.currentTime().seconds
+    try await Task.sleep(for: .milliseconds(400))
+    #expect(abs(model.player.currentTime().seconds - time) < 0.05)
+    #expect(!model.isFinished)
+    model.togglePlayback()
+    try await waitForLoopPlayback { model.isFinished }
+  }
+
+  @Test @MainActor
+  func tourHandoffStartsAtPreviewPositionInsteadOfSavedResume() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TourHandoff-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let video = tourVideo(duration: 60, url: url)
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let watchState = WatchStateStore(store: WebSyncStore(rootURL: directory, persistenceEnabled: false))
+    watchState.recordProgress(videoID: video.id, seconds: 20, duration: 60, force: true)
+    let keys = ["playback.repeatMode", "playback.autoPlayNext"]
+    let original = keys.map { UserDefaults.standard.object(forKey: $0) }
+    defer {
+      for (key, value) in zip(keys, original) {
+        if let value { UserDefaults.standard.set(value, forKey: key) }
+        else { UserDefaults.standard.removeObject(forKey: key) }
+      }
+    }
+    let settings = PlaybackSettings()
+    settings.repeatMode = .off
+    settings.autoPlayNext = false
+    let model = VideoPlayerViewModel(videos: [video], currentVideo: video, dataManager: library,
+      watchState: watchState, settings: settings, initialStartTime: 0.4)
+    defer { model.cleanup() }
+    model.setupPlayer()
+    try await waitForLoopPlayback { model.player?.rate ?? 0 > 0 }
+    let time = try #require(model.player?.currentTime().seconds)
+    #expect(time >= 0.39 && time < 1.5)
+  }
+
+  @MainActor
+  private func tourVideo(duration: Double, url: URL = URL(fileURLWithPath: "/tmp/tour.mp4")) -> VideoItem {
+    VideoItem(id: UUID(), originalFilename: url.lastPathComponent, internalFilename: "",
+      duration: duration, importDate: Date(), creationDate: nil, fileHash: "",
+      externalFilePath: url.path)
+  }
+
+  @Test
+  func loopBlackFrameAnalysisKeepsInternalBlackFrames() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopBlackFrameTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("black-edges.mp4")
+    let brightness: [UInt8] = Array(repeating: 0, count: 6)
+      + Array(repeating: 80, count: 12)
+      + Array(repeating: 0, count: 6)
+      + Array(repeating: 80, count: 12)
+      + Array(repeating: 0, count: 6)
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: brightness)
+
+    let range = try #require(try await LoopBlackFrameAnalyzer().analyze(
+      asset: AVURLAsset(url: sourceURL)
+    ))
+    let framePrecision = 0.001
+    #expect(abs(range.start.seconds - 0.2) < framePrecision)
+    #expect(abs(range.end.seconds - 1.2) < framePrecision)
+    #expect(CMTimeRangeContainsTime(range, time: CMTime(seconds: 0.7, preferredTimescale: 600)))
+  }
+
+  @Test
+  func loopBlackFrameAnalysisScansLongTrailingBlackAndKeepsDarkContent() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopLongBlackFrameTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("long-black-tail.mp4")
+    let brightness: [UInt8] = Array(repeating: 0, count: 6)
+      + Array(repeating: 16, count: 12)
+      + Array(repeating: 0, count: 90)
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: brightness)
+
+    let range = try #require(try await LoopBlackFrameAnalyzer().analyze(
+      asset: AVURLAsset(url: sourceURL)
+    ))
+    let framePrecision = 0.001
+    #expect(abs(range.start.seconds - 0.2) < framePrecision)
+    #expect(abs(range.end.seconds - 0.6) < framePrecision)
+  }
+
+  @Test
+  func loopBlackFrameAnalysisDoesNotTrimEntirelyBlackVideo() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopEntirelyBlackTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("black.mp4")
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: Array(repeating: 0, count: 12))
+
+    let range = try await LoopBlackFrameAnalyzer().analyze(asset: AVURLAsset(url: sourceURL))
+    #expect(range == nil)
+  }
+
+  @Test
+  func loopBlackFrameAnalysisKeepsVideoWithBlackBars() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopBlackBarTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("letterboxed.mp4")
+    try await makeSyntheticVideo(
+      at: sourceURL, frameBrightness: Array(repeating: 64, count: 12), hasBlackBars: true
+    )
+
+    let range = try #require(try await LoopBlackFrameAnalyzer().analyze(
+      asset: AVURLAsset(url: sourceURL)
+    ))
+    #expect(range.start == .zero)
+    #expect(abs(range.end.seconds - 0.4) < 0.001)
+  }
+
+  @Test(arguments: [PlaybackRepeatMode.one, .all]) @MainActor
+  func localLoopSkipsBlackEdgesAndRestoresFullRangeWhenDisabled(mode: PlaybackRepeatMode) async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LocalBlackEdgePlaybackTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("black-edges.mp4")
+    let brightness: [UInt8] = Array(repeating: 0, count: 6)
+      + Array(repeating: 80, count: 30)
+      + Array(repeating: 0, count: 6)
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: brightness)
+
+    let defaults = UserDefaults.standard
+    let keys = ["playback.repeatMode", "playback.autoPlayNext", "playback.rate"]
+    let savedValues = keys.map { defaults.object(forKey: $0) }
+    defer {
+      for (key, value) in zip(keys, savedValues) {
+        if let value { defaults.set(value, forKey: key) }
+        else { defaults.removeObject(forKey: key) }
+      }
+    }
+    let settings = PlaybackSettings()
+    settings.repeatMode = .off
+    settings.autoPlayNext = false
+    settings.rate = 1
+    let video = VideoItem(
+      id: UUID(), originalFilename: sourceURL.lastPathComponent, internalFilename: "",
+      duration: 1.4, importDate: Date(), creationDate: nil, fileHash: "",
+      externalFilePath: sourceURL.path
+    )
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let model = VideoPlayerViewModel(
+      videos: [video], currentVideo: video, dataManager: library,
+      watchState: WatchStateStore(store: WebSyncStore(
+        rootURL: temporaryDirectory, persistenceEnabled: false
+      )), settings: settings
+    )
+    defer { model.cleanup() }
+    model.setupPlayer()
+    try await waitForLoopPlayback { model.player?.rate ?? 0 > 0 }
+    let queue = try #require(model.player as? AVQueuePlayer)
+    model.pause()
+    #expect(!model.isAnalyzingLoopEdges)
+    #expect(model.loopAnalysisNotice == nil)
+    #expect(queue.items().count == 1)
+    #expect(queue.currentItem?.forwardPlaybackEndTime.isValid == false)
+
+    settings.autoPlayNext = mode == .all
+    settings.repeatMode = mode
+    try await waitForLoopPlayback {
+      model.loopAnalysisNotice?.contains("スキップ") == true && !model.isAnalyzingLoopEdges
+    }
+    try await waitForLoopPlayback {
+      queue.items().count == 3 && queue.items().allSatisfy { $0.currentTime().seconds >= 0.199 }
+    }
+    #expect(queue.rate == 0)
+    for item in queue.items() {
+      #expect(abs(item.forwardPlaybackEndTime.seconds - 1.2) < 0.001)
+    }
+
+    model.play()
+    for _ in 0..<3 {
+      let previousItem = try #require(queue.currentItem)
+      try await waitForLoopPlayback { queue.currentItem != nil && queue.currentItem !== previousItem }
+      let seconds = try #require(queue.currentItem?.currentTime().seconds)
+      #expect(seconds >= 0.199 && seconds < 1.2)
+      #expect(queue.rate == 1)
+    }
+    model.pause()
+    settings.repeatMode = .off
+    try await waitForLoopPlayback {
+      queue.items().count == 1 && queue.currentItem?.forwardPlaybackEndTime.isValid == false
+    }
+    model.seek(toSeconds: 0)
+    try await waitForLoopPlayback { queue.currentTime().seconds < 0.001 }
+    #expect(model.loopAnalysisNotice == nil)
+
+    // 再度有効にしたときも，保存済みの解析結果で冒頭を飛ばします．
+    settings.repeatMode = mode
+    try await waitForLoopPlayback { queue.currentTime().seconds >= 0.199 }
+    #expect(!model.isAnalyzingLoopEdges)
+    #expect(queue.rate == 0)
+  }
+
+  @MainActor
+  private func waitForLoopPlayback(_ condition: () -> Bool) async throws {
+    let timeoutSeconds: TimeInterval = 5
+    let pollNanoseconds: UInt64 = 10_000_000
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while !condition(), Date() < deadline {
+      try await Task.sleep(nanoseconds: pollNanoseconds)
+    }
+    try #require(condition(), "ループの黒画面スキップが制限時間内に準備できませんでした")
+  }
+
   @Test
   func tutorialCoversCompleteWorkflow() {
     let steps = SceneExtractionTutorialContent.steps
@@ -325,11 +725,13 @@ struct SceneExtractionTests {
     )
   }
 
-  private func makeSyntheticVideo(at url: URL) async throws {
+  private func makeSyntheticVideo(
+    at url: URL, frameBrightness: [UInt8]? = nil, hasBlackBars: Bool = false
+  ) async throws {
     let width = 160
     let height = 90
     let framesPerSecond: Int32 = 30
-    let frameCount = 60
+    let frameCount = frameBrightness?.count ?? 60
     let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
     let input = AVAssetWriterInput(
       mediaType: .video,
@@ -373,9 +775,15 @@ struct SceneExtractionTests {
       if let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) {
         memset(
           baseAddress,
-          Int32(frameIndex % 255),
+          Int32(frameBrightness?[frameIndex] ?? UInt8(frameIndex % 255)),
           CVPixelBufferGetDataSize(pixelBuffer)
         )
+        if hasBlackBars {
+          let barHeight = height / 3
+          let rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer)
+          memset(baseAddress, 0, barHeight * rowBytes)
+          memset(baseAddress.advanced(by: (height - barHeight) * rowBytes), 0, barHeight * rowBytes)
+        }
       }
       CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
       let presentationTime = CMTime(value: CMTimeValue(frameIndex), timescale: framesPerSecond)

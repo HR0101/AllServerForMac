@@ -7,9 +7,9 @@ struct ContentView: View {
     @ObservedObject private var dataManager: LibraryViewModel
     @ObservedObject private var playbackCoordinator: PlaybackCoordinator
     @ObservedObject private var appSettings: AppSettings
-    private let sidebarMinWidth: CGFloat = 300
-    private let sidebarIdealWidth: CGFloat = 320
-    private let sidebarMaxWidth: CGFloat = 360
+    /// サイドバーの幅。行の幅（253）に左右の余白（10×2）とスクロールバーの分（15）を足した値で、行は固定幅で組んである。
+    private let sidebarWidth: CGFloat = 288
+    @State private var isSidebarVisible = true
 
     init() {
         let viewModel = AppViewModel()
@@ -38,8 +38,14 @@ struct ContentView: View {
             // ライブラリ画面を外した瞬間に素の（＝黒い）ウィンドウ背景が覗かないよう、
             // 常駐する下地を1枚敷いておく。上端の黒帯対策の要はこの下地とウィンドウ設定であって、
             // ライブラリ画面を出しっぱなしにすることではない。
-            NeomorphicTheme.background
+            if shouldShowLibraryView {
+              // デスクトップが透けるガラス地はやめ、単色の下地にする（色の濁りと環境による見た目の差をなくす）。
+              NeomorphicTheme.canvas
+                .id(appSettings.neomorphicDarkBase)
                 .ignoresSafeArea()
+            } else {
+              Color.black.ignoresSafeArea()
+            }
 
             if let error = dataManager.storageInitializationError {
                 LibraryStorageInitializationErrorView(error: error)
@@ -66,7 +72,8 @@ struct ContentView: View {
         // ウィンドウのクロム設定はライブラリ画面の有無に関わらず効かせる必要があるため、
         // ライブラリ画面ではなくこの常駐の階層に付ける。
         .toolbar(isToolbarHidden ? .hidden : .automatic, for: .windowToolbar)
-        .toolbarBackground(NeomorphicTheme.background, for: .windowToolbar)
+        // タイトルバーの帯はサイドバーと同じ色にし、窓の上端でサイドバーと一続きに見せる。
+        .toolbarBackground(NeomorphicTheme.sidebar, for: .windowToolbar)
         .toolbarBackground(
             isToolbarHidden ? .hidden : .visible,
             for: .windowToolbar
@@ -157,13 +164,12 @@ struct ContentView: View {
                     : .normal,
                 onClose: playbackCoordinator.closeVariantFinder
             )
-            .background(.regularMaterial)
+            .appSheet()
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                    .strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5)
             )
-            .shadow(color: .black.opacity(0.42), radius: 28, y: 12)
             .id("\(albumID.uuidString)-\(String(describing: playbackCoordinator.variantFinderAlignmentMode))")
         }
     }
@@ -190,9 +196,13 @@ struct ContentView: View {
                 currentVideo: current,
                 dataManager: dataManager,
                 watchState: viewModel.watchState,
-                settings: viewModel.playbackSettings
+                settings: viewModel.playbackSettings,
+                initialStartTime: playbackCoordinator.singleStartTime
             )
                 .id(current.id)
+        case .tour(let session):
+            PlaybackTourView(session: session, dataManager: dataManager)
+                .id(session.id)
         case .multi(let videos):
             MultiVideoPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
@@ -227,20 +237,46 @@ struct ContentView: View {
             // ツールバーの背後まで同じ背景を広げ，フルスクリーン時の色の段差をなくす。
             CommandDeckBackground()
 
-            NavigationSplitView {
-                MainSidebarView(
+            // 標準の NavigationSplitView は macOS 26 でサイドバーが「浮いた角丸のガラス」になり、
+            // 窓の端や上下に余白ができて平らにできない。そこで左カラムを自前で組み、窓の端から端まで
+            // 単色で伸ばす（タイトルバーの帯もサイドバーと同じ色にして、一続きに見せる）。
+            HStack(spacing: 0) {
+                // 左端のアイコンのレール。サイドバーを隠しても残り、主要な行き先と設定へいつでも移れる。
+                SidebarRailView(
                     dataManager: dataManager,
-                    webServerManager: viewModel.webServerManager,
+                    watchState: viewModel.watchState,
                     selection: $viewModel.selection,
-                    isShowingPreferences: $viewModel.isShowingPreferences,
-                    isShowingStorageManager: $viewModel.isShowingStorageManager
+                    allVideosAlbumID: dataManager.albums.first { $0.name == LibraryViewModel.allVideosAlbumName }?.id,
+                    allPhotosAlbumID: dataManager.albums.first { $0.name == LibraryViewModel.allPhotosAlbumName }?.id,
+                    onShowStorage: { viewModel.isShowingStorageManager = true },
+                    onShowPreferences: { viewModel.isShowingPreferences = true }
                 )
-                    .navigationSplitViewColumnWidth(
-                        min: sidebarMinWidth,
-                        ideal: sidebarIdealWidth,
-                        max: sidebarMaxWidth
+                .background(NeomorphicTheme.rail.ignoresSafeArea())
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(NeomorphicTheme.separator)
+                        .frame(width: 0.5)
+                        .ignoresSafeArea()
+                }
+
+                if isSidebarVisible {
+                    MainSidebarView(
+                        dataManager: dataManager,
+                        webServerManager: viewModel.webServerManager,
+                        selection: $viewModel.selection
                     )
-            } detail: {
+                        .frame(width: sidebarWidth)
+                        .frame(maxHeight: .infinity)
+                        .background(NeomorphicTheme.sidebar.ignoresSafeArea())
+                        .overlay(alignment: .trailing) {
+                            Rectangle()
+                                .fill(NeomorphicTheme.separator)
+                                .frame(width: 0.5)
+                                .ignoresSafeArea()
+                        }
+                        .transition(.move(edge: .leading))
+                }
+
                 NavigationStack {
                     switch viewModel.selection {
                     case .home:
@@ -256,6 +292,13 @@ struct ContentView: View {
                             onAnalyzeScenes: viewModel.openSceneExtraction
                         )
                             .navigationTitle("お気に入り")
+                    case .continueWatching:
+                        LibraryCategoryView(
+                            kind: .continueWatching,
+                            dataManager: dataManager,
+                            onAnalyzeScenes: viewModel.openSceneExtraction
+                        )
+                            .navigationTitle("続きを見る")
                     case .history:
                         LibraryCategoryView(
                             kind: .history,
@@ -275,6 +318,12 @@ struct ContentView: View {
                             viewModel: viewModel.sceneExtraction,
                             onClose: viewModel.closeSceneExtraction
                         )
+                    case .albums:
+                        AlbumOverviewView(
+                            dataManager: dataManager,
+                            selection: $viewModel.selection
+                        )
+                            .navigationTitle("アルバム一覧")
                     case .album(let albumID):
                         if let album = dataManager.albums.first(
                             where: { $0.id == albumID }
@@ -284,7 +333,7 @@ struct ContentView: View {
                                 dataManager: dataManager,
                                 onAnalyzeScenes: viewModel.openSceneExtraction
                             )
-                                .navigationTitle(album.name)
+                                .navigationTitle(album.displayTitle)
                         } else {
                             ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
                         }
@@ -301,6 +350,30 @@ struct ContentView: View {
                         ContentUnavailableView("サイドバーから項目を選択してください", systemImage: "sidebar.left")
                     }
                 }
+                // ツールバーのメニューだけがアクセントの青になり、ボタンの中立色とちぐはぐに見えるので、
+                // 内容側（ツールバー含む）の色味は文字色にそろえる。ホームは自分でアクセントを指定している。
+                .tint(NeomorphicTheme.ink)
+                // ページ見出しと同じ文字がタイトルバーにも出て重複するので、ツールバーのタイトルは外す
+                // （ウィンドウ自体のタイトルは残るので、Mission Control などでは識別できる）。
+                .toolbar(removing: .title)
+                // タイトルを外すと、右寄せだった各画面のボタンが左へ詰まるので、中央に伸びる空きを置いて右側に戻す。
+                .toolbar { principalSpacer }
+                // 標準の分割表示が確保していたツールバーの下の余白を、自前の構成でも同じだけ空ける。
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Color.clear.frame(height: 44)
+                }
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .navigation) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { isSidebarVisible.toggle() }
+                    } label: {
+                        Label("サイドバー", systemImage: "sidebar.leading")
+                    }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .help(isSidebarVisible ? "サイドバーを隠す（⌃⌘S）" : "サイドバーを表示（⌃⌘S）")
+
+                }
             }
         }
         // tint / preferredColorScheme / toolbarBackground / WindowChromeConfigurator は
@@ -310,6 +383,21 @@ struct ContentView: View {
         // カード・サイドバー等）を確実に描き直すため、ライブラリ画面ごと作り直す。
         // これをしないと一部だけ色が更新されず、白背景に白文字などのちぐはぐが起きる。
         .id(appSettings.neomorphicDarkBase)
+    }
+
+    /// ツールバーの中央に伸びる透明な空き。macOS 26 では部品ごとに丸い背景が付くので、その背景は消す。
+    @ToolbarContentBuilder
+    private var principalSpacer: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(minWidth: 40, maxWidth: .infinity, minHeight: 1)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(minWidth: 40, maxWidth: .infinity, minHeight: 1)
+            }
+        }
     }
 
     private var appMenuContext: AppMenuContext {
@@ -394,7 +482,7 @@ private struct LibraryStorageInitializationErrorView: View {
 
             VStack(spacing: 8) {
                 Text("ライブラリ保存先を準備できませんでした")
-                    .font(.title2.bold())
+                    .font(.appTitle.bold())
                 Text("データを保護するため，ライブラリの読み込みとサーバー起動を停止しています．")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -408,7 +496,7 @@ private struct LibraryStorageInitializationErrorView: View {
             }
             .padding(20)
             .frame(maxWidth: 680, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             HStack(spacing: 12) {
                 Button {
@@ -434,7 +522,7 @@ private struct LibraryStorageInitializationErrorView: View {
     private func errorRow(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.appCaption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value)
                 .textSelection(.enabled)

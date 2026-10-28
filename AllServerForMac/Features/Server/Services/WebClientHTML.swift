@@ -12,8 +12,8 @@ enum WebClientHTML {
       "start_url": "/#home",
       "scope": "/",
       "display": "standalone",
-      "background_color": "#0D0D14",
-      "theme_color": "#0D0D14",
+      "background_color": "#1B1B1B",
+      "theme_color": "#1B1B1B",
       "icons": [
         { "src": "/pwa-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
       ]
@@ -26,7 +26,7 @@ enum WebClientHTML {
     <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#0D0D14">
+    <meta name="theme-color" content="#1B1B1B">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Media Server">
@@ -35,15 +35,18 @@ enum WebClientHTML {
     <title>Mac Media Server</title>
     <style>
     :root {
-        --bg: #0D0D14;
-        --bg-1: #12121C;
-        --bg-2: #1A1A28;
+        /* 配色は Mac アプリ本体（黒基調）と同じ。色味のない中立のグレーだけで面を作り、
+           青（--accent）は主要ボタン・選択のチェック・進捗のような「操作の目印」にだけ使う。 */
+        --bg: #1B1B1B;      /* 内容側の下地 */
+        --bg-1: #262626;    /* サイドバー・上部バー・カードの面 */
+        --bg-2: #313131;    /* 面の上の入力欄・ホバー */
         --line: rgba(255,255,255,0.08);
-        --accent: #D9BA73;
-        --accent-soft: rgba(217,186,115,0.15);
-        --text: #FFFFFF;
-        --text-2: rgba(255,255,255,0.62);
+        --accent: #5499FF;
+        --accent-soft: rgba(84,153,255,0.18);
+        --text: #EDEDED;
+        --text-2: #9E9E9E;
         --text-3: rgba(255,255,255,0.38);
+        --select: rgba(255,255,255,0.11);   /* 選択中の行・ボタンの面（色は付けない） */
         --rail: 240px;
         --top: 56px;
         --tabbar: 56px;
@@ -65,13 +68,13 @@ enum WebClientHTML {
     .masthead {
         position: fixed; top: 0; left: 0; right: 0; height: var(--top); z-index: 60;
         display: flex; align-items: center; gap: 8px; padding: 0 12px;
-        background: rgba(13,13,20,0.92); backdrop-filter: blur(14px);
+        background: var(--bg-1);
         border-bottom: 1px solid var(--line);
     }
     .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; letter-spacing: 0.3px; }
     .brand-mark {
         width: 28px; height: 20px; border-radius: 6px; background: var(--accent);
-        display: grid; place-items: center; color: #000;
+        display: grid; place-items: center; color: #fff;
     }
     .brand-mark svg { width: 12px; height: 12px; }
     .brand-text { font-size: 16px; color: var(--text); white-space: nowrap; }
@@ -82,7 +85,7 @@ enum WebClientHTML {
         background: var(--bg-1); border: 1px solid var(--line);
         border-radius: 999px; padding: 0 14px; height: 38px; color: var(--text-3);
     }
-    .search-box:focus-within { border-color: var(--accent); color: var(--accent); }
+    .search-box:focus-within { border-color: var(--accent); color: var(--text); }
     .search-box input {
         flex: 1; background: transparent; border: none; outline: none;
         color: var(--text); font-size: 14px; min-width: 0;
@@ -96,7 +99,7 @@ enum WebClientHTML {
     .icon-btn.spinning svg { animation: spin 0.8s linear infinite; }
 
     /* ============ ナビゲーション ============ */
-    .nav { position: fixed; z-index: 55; background: var(--bg); }
+    .nav { position: fixed; z-index: 55; background: var(--bg-1); }
     .nav-item {
         display: flex; align-items: center; border: none; background: transparent;
         color: var(--text-2); cursor: pointer; width: 100%;
@@ -112,8 +115,8 @@ enum WebClientHTML {
         }
         .nav-item { gap: 20px; padding: 0 14px; height: 44px; border-radius: 10px; font-size: 14.5px; font-weight: 500; }
         .nav-item:hover { background: rgba(255,255,255,0.07); }
-        .nav-item.active { background: rgba(255,255,255,0.11); font-weight: 700; }
-        .nav-item.active .nav-ico { color: var(--accent); }
+        .nav-item.active { background: var(--select); font-weight: 700; }
+        .nav-item.active .nav-ico { color: var(--text); }
         .nav-foot { margin-top: 14px; padding: 14px 14px 0; border-top: 1px solid var(--line); color: var(--text-3); font-size: 11.5px; line-height: 1.7; }
         .content { margin-left: var(--rail); padding-top: var(--top); min-height: 100vh; }
         .mobile-only { display: none !important; }
@@ -133,10 +136,10 @@ enum WebClientHTML {
             height: calc(var(--tabbar) + var(--safe-b));
             padding-bottom: var(--safe-b);
             border-top: 1px solid var(--line);
-            background: rgba(13,13,20,0.96); backdrop-filter: blur(14px);
+            background: var(--bg-1);
         }
         .nav-item { flex: 1; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; font-weight: 600; }
-        .nav-item.active { color: var(--accent); }
+        .nav-item.active { color: var(--text); }
         .nav-foot { display: none; }
         .content { padding-top: var(--top); padding-bottom: calc(var(--tabbar) + var(--safe-b)); min-height: 100dvh; }
         .desktop-only { display: none !important; }
@@ -152,19 +155,19 @@ enum WebClientHTML {
     .state-box { display: grid; place-items: center; gap: 14px; padding: 80px 20px; color: var(--text-2); text-align: center; }
     .spinner { width: 34px; height: 34px; border: 3px solid rgba(255,255,255,0.14); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .thumb-fallback { background: repeating-linear-gradient(45deg, #14141f, #14141f 10px, #191926 10px, #191926 20px); }
+    .thumb-fallback { background: repeating-linear-gradient(45deg, #1f1f1f, #1f1f1f 10px, #242424 10px, #242424 20px); }
     .pill {
         border: 1px solid var(--line); background: var(--bg-1); color: var(--text);
         border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
         display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
     }
     .pill:hover { background: var(--bg-2); }
-    .pill.accent { background: var(--accent); color: #000; border-color: transparent; }
+    .pill.accent { background: var(--accent); color: #fff; border-color: transparent; }
     .badge-dur {
         position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,0.78); color: #fff;
         font-size: 11px; font-weight: 700; padding: 1px 5px; border-radius: 4px; letter-spacing: 0.3px;
     }
-    .badge-photo { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.7); color: var(--accent); font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+    .badge-photo { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.7); color: var(--text); font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
 
     /* キーボード操作のフォーカス表示（カードは div + role=button なので自前で出す） */
     [data-action]:focus-visible, .icon-btn:focus-visible, .pill:focus-visible, .select:focus-visible {
@@ -174,17 +177,17 @@ enum WebClientHTML {
     /* お気に入りのハート（サムネの左上） */
     .fav-badge {
         position: absolute; top: 6px; left: 6px; width: 24px; height: 24px; border-radius: 50%;
-        background: rgba(0,0,0,0.6); display: grid; place-items: center; color: #FF5A8A; backdrop-filter: blur(4px);
+        background: rgba(0,0,0,0.6); display: grid; place-items: center; color: #FF453A; backdrop-filter: blur(4px);
     }
     .fav-badge svg { width: 14px; height: 14px; fill: currentColor; }
-    .pill.fav-on { color: #FF5A8A; border-color: rgba(255,90,138,0.5); background: rgba(255,90,138,0.12); }
-    .pill.on { background: var(--accent); color: #000; border-color: transparent; }
+    .pill.fav-on { color: #FF453A; border-color: rgba(255,69,58,0.5); background: rgba(255,69,58,0.12); }
+    .pill.on { background: rgba(255,255,255,0.16); color: var(--text); border-color: transparent; }
 
     /* 複数選択 */
     .sel-check {
         position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%;
         border: 2px solid rgba(255,255,255,0.85); background: rgba(0,0,0,0.45); z-index: 2;
-        display: grid; place-items: center; color: #000;
+        display: grid; place-items: center; color: #fff;
     }
     .sel-check svg { width: 14px; height: 14px; fill: currentColor; opacity: 0; }
     .media-card.selected .sel-check { background: var(--accent); border-color: var(--accent); }
@@ -193,16 +196,16 @@ enum WebClientHTML {
     .bulk-bar {
         display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
         padding: 12px 14px; margin-bottom: 16px; border-radius: 14px;
-        background: var(--bg-1); border: 1px solid var(--accent-soft);
+        background: var(--bg-1); border: 1px solid var(--line);
     }
     .bulk-bar.hidden { display: none; }
-    .bulk-count { font-size: 13px; font-weight: 700; color: var(--accent); }
+    .bulk-count { font-size: 13px; font-weight: 700; color: var(--text); }
 
     /* アップロード */
     .upload-bar {
         display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
         padding: 12px 14px; margin-bottom: 16px; border-radius: 14px;
-        background: var(--bg-1); border: 1px solid var(--accent-soft);
+        background: var(--bg-1); border: 1px solid var(--line);
     }
     .upload-bar.hidden { display: none; }
     .upload-text { font-size: 13px; font-weight: 600; flex: 1 1 220px; min-width: 0; }
@@ -212,8 +215,8 @@ enum WebClientHTML {
     .dropzone.dragging::after {
         content: 'ここにドロップしてアップロード';
         position: absolute; inset: -8px; z-index: 30; border-radius: 16px;
-        border: 2px dashed var(--accent); background: rgba(217,186,115,0.12);
-        display: grid; place-items: center; font-weight: 700; color: var(--accent); pointer-events: none;
+        border: 2px dashed var(--accent); background: rgba(84,153,255,0.12);
+        display: grid; place-items: center; font-weight: 700; color: var(--text); pointer-events: none;
     }
 
     /* アルバム選択・作成のシート */
@@ -278,7 +281,7 @@ enum WebClientHTML {
     .feed-meta { display: flex; gap: 12px; align-items: flex-start; }
     .avatar {
         width: 36px; height: 36px; border-radius: 50%; flex: none;
-        background: var(--bg-2); color: var(--accent); display: grid; place-items: center;
+        background: var(--bg-2); color: var(--text-2); display: grid; place-items: center;
         border: 1px solid var(--line);
     }
     .feed-text { min-width: 0; flex: 1; }
@@ -296,7 +299,7 @@ enum WebClientHTML {
         border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
     }
     .shelf-head { display: flex; align-items: center; gap: 9px; padding: 0 16px 14px; font-size: 17px; font-weight: 800; }
-    .shelf-head .ico { color: var(--accent); }
+    .shelf-head .ico { color: var(--text-2); }
     .shelf-row {
         display: flex; gap: 12px; overflow-x: auto; padding: 0 16px 6px;
         scroll-snap-type: x proximity; scroll-padding-left: 16px; -webkit-overflow-scrolling: touch;
@@ -308,7 +311,7 @@ enum WebClientHTML {
     @media (min-width: 901px) { .short-card { width: 172px; } }
     .short-thumb { position: relative; width: 100%; aspect-ratio: 9 / 16; border-radius: 12px; overflow: hidden; background: #000; border: 1px solid var(--line); }
     .short-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .short-card:hover .short-thumb { border-color: rgba(217,186,115,0.5); }
+    .short-card:hover .short-thumb { border-color: rgba(255,255,255,0.3); }
     .short-title {
         margin-top: 8px; font-size: 12.5px; font-weight: 600; line-height: 1.35; color: var(--text);
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -327,15 +330,15 @@ enum WebClientHTML {
     .album-card { cursor: pointer; }
     .album-thumb { position: relative; width: 100%; aspect-ratio: 1 / 1; border-radius: 16px; overflow: hidden; background: var(--bg-1); border: 1px solid var(--line); }
     .album-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .album-card:hover .album-thumb { border-color: rgba(217,186,115,0.5); }
+    .album-card:hover .album-thumb { border-color: rgba(255,255,255,0.3); }
     .album-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); }
     .album-empty svg { width: 44px; height: 44px; }
     .album-count {
-        position: absolute; bottom: 8px; right: 8px; background: var(--accent); color: #000;
-        font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 8px;
+        position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.65); color: #fff;
+        font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 8px;
     }
     .album-name { margin-top: 9px; font-size: 13.5px; font-weight: 600; line-height: 1.4; }
-    .album-name.photo { color: #FF9F0A; }
+    .album-name.photo { color: var(--text); }
 
     .detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
     .detail-title { font-size: 20px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -352,7 +355,7 @@ enum WebClientHTML {
     .media-grid.ratio-video .media-thumb { aspect-ratio: 16 / 9; }
     .media-grid.ratio-square .media-thumb { aspect-ratio: 1 / 1; }
     .media-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .media-card:hover .media-thumb { border-color: rgba(217,186,115,0.5); }
+    .media-card:hover .media-thumb { border-color: rgba(255,255,255,0.3); }
     .media-name {
         margin-top: 8px; font-size: 13px; font-weight: 600; line-height: 1.4;
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -377,7 +380,7 @@ enum WebClientHTML {
     .shorts-overlay { position: absolute; inset: auto 0 0 0; padding: 16px 16px 20px; pointer-events: none; z-index: 3;
         background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.35) 55%, transparent); }
     @media (max-width: 900px) { .shorts-overlay { padding-right: 76px; } }
-    .shorts-count { font-size: 11.5px; color: var(--accent); font-weight: 700; letter-spacing: 0.5px; }
+    .shorts-count { font-size: 11.5px; color: var(--text-2); font-weight: 700; letter-spacing: 0.5px; }
     .shorts-title { font-size: 15px; font-weight: 700; margin: 4px 0 10px; text-shadow: 0 2px 6px rgba(0,0,0,0.9);
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .shorts-bar {
@@ -388,10 +391,10 @@ enum WebClientHTML {
     /* 見た目は細いまま、指で掴める高さの当たり判定を足す */
     .shorts-bar::before { content: ''; position: absolute; left: 0; right: 0; top: -13px; bottom: -13px; }
     .shorts-bar.scrubbing { height: 12px; }
-    .shorts-bar-fill { height: 100%; width: 0%; border-radius: 4px; background: var(--accent); pointer-events: none; }
+    .shorts-bar-fill { height: 100%; width: 0%; border-radius: 4px; background: rgba(255,255,255,0.92); pointer-events: none; }
     .shorts-bar-knob {
         position: absolute; top: 50%; left: 0; width: 16px; height: 16px; margin-left: -8px;
-        border-radius: 50%; background: var(--accent); transform: translateY(-50%);
+        border-radius: 50%; background: #fff; transform: translateY(-50%);
         pointer-events: none; box-shadow: 0 1px 5px rgba(0,0,0,0.6);
         opacity: 0; transition: opacity 0.12s;
     }
@@ -405,7 +408,7 @@ enum WebClientHTML {
         backdrop-filter: blur(8px);
     }
     .rail-btn:hover { background: rgba(255,255,255,0.28); }
-    .rail-btn.on { background: var(--accent); color: #000; }
+    .rail-btn.on { background: rgba(255,255,255,0.92); color: #000; }
     .shorts-tap { position: absolute; inset: 0; z-index: 1; }
     .shorts-pause {
         position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; z-index: 2;
@@ -415,7 +418,7 @@ enum WebClientHTML {
     .shorts-pause svg { width: 74px; height: 74px; fill: rgba(255,255,255,0.9); filter: drop-shadow(0 4px 14px rgba(0,0,0,0.7)); }
     .shorts-zoom {
         position: absolute; right: 72px; bottom: 96px; z-index: 4; width: 210px; padding: 14px;
-        background: rgba(28,28,40,0.95); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(10px);
+        background: rgba(30,30,30,0.96); border: 1px solid var(--line); border-radius: 14px;
     }
     @media (min-width: 901px) { .shorts-zoom { right: 12px; bottom: 110px; } }
     .shorts-zoom label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 10px; text-align: center; color: var(--text-2); }
@@ -431,12 +434,12 @@ enum WebClientHTML {
     .playback-error {
         position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center;
-        background: radial-gradient(circle at center, rgba(45,35,42,0.96), rgba(0,0,0,0.96));
+        background: radial-gradient(circle at center, rgba(40,40,40,0.96), rgba(0,0,0,0.96));
     }
     .playback-error.hidden { display: none; }
     .playback-error-title { font-size: 17px; font-weight: 800; }
     .playback-error-message { max-width: 520px; color: var(--text-2); font-size: 13px; line-height: 1.7; }
-    .playback-error-progress { color: var(--accent); font-size: 12px; min-height: 18px; }
+    .playback-error-progress { color: var(--text-2); font-size: 12px; min-height: 18px; }
     .stage-close {
         position: absolute; top: 12px; left: 12px; z-index: 5; width: 40px; height: 40px; border-radius: 50%;
         border: none; background: rgba(0,0,0,0.55); color: #fff; display: grid; place-items: center; cursor: pointer; backdrop-filter: blur(6px);
@@ -455,7 +458,7 @@ enum WebClientHTML {
         pointer-events: none;  /* 透明な状態でタップを奪わないようにする */
     }
     .stage:hover .nav-arrow { opacity: 1; pointer-events: auto; }
-    .nav-arrow:hover { background: rgba(0,0,0,0.7); color: var(--accent); }
+    .nav-arrow:hover { background: rgba(0,0,0,0.7); color: #fff; }
     .nav-arrow.prev { left: 14px; }
     .nav-arrow.next { right: 14px; }
     @media (hover: none) { .nav-arrow { display: none; } }
@@ -483,7 +486,7 @@ enum WebClientHTML {
     }
     .chapter:hover .chapter-thumb { border-color: var(--accent); }
     .chapter.active .chapter-thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-    .chapter.active .chapter-time { color: var(--accent); }
+    .chapter.active .chapter-time { color: var(--text); }
     @media (min-width: 901px) {
         .chapters { padding: 14px 0 0; scroll-padding-left: 0; }
         .chapter { width: 116px; }
@@ -498,12 +501,12 @@ enum WebClientHTML {
     .side-head { font-size: 13px; font-weight: 700; color: var(--text-2); padding: 14px 16px 8px; letter-spacing: 0.6px; }
     .un-item { display: flex; gap: 10px; padding: 8px 12px; cursor: pointer; align-items: flex-start; }
     .un-item:hover { background: rgba(255,255,255,0.05); }
-    .un-item.current { background: var(--accent-soft); }
+    .un-item.current { background: var(--select); }
     .un-thumb { position: relative; width: 152px; flex: none; aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: #000; }
     .un-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .un-info { min-width: 0; flex: 1; padding-top: 2px; }
     .un-title { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .un-item.current .un-title { color: var(--accent); font-weight: 700; }
+    .un-item.current .un-title { color: var(--text); font-weight: 700; }
     .un-meta { font-size: 11px; color: var(--text-2); margin-top: 4px; }
 
     @media (min-width: 901px) {
@@ -558,26 +561,26 @@ enum WebClientHTML {
     #player-modal.mode-photo .watch-actions { pointer-events: auto; margin-top: 10px; }
 
     /* ============ PIN ============ */
-    #login-modal { display: none; position: fixed; inset: 0; background: rgba(13,13,20,0.97); z-index: 200; justify-content: center; align-items: center; backdrop-filter: blur(10px); }
+    #login-modal { display: none; position: fixed; inset: 0; background: rgba(27,27,27,0.98); z-index: 200; justify-content: center; align-items: center; }
     #login-modal.open { display: flex; }
-    .login-card { background: var(--bg-1); border: 1px solid rgba(217,186,115,0.25); border-radius: 24px; padding: 36px 28px; width: 90%; max-width: 340px; text-align: center; box-shadow: 0 24px 70px rgba(0,0,0,0.6); }
-    .login-card h2 { color: var(--accent); margin: 10px 0 6px; font-size: 20px; }
+    .login-card { background: var(--bg-1); border: 1px solid var(--line); border-radius: 20px; padding: 36px 28px; width: 90%; max-width: 340px; text-align: center; }
+    .login-card h2 { color: var(--text); margin: 10px 0 6px; font-size: 20px; }
     .login-card p { color: var(--text-2); font-size: 13px; margin: 0 0 22px; line-height: 1.6; }
     .pin-input { width: 100%; background: rgba(255,255,255,0.06); border: 1px solid var(--line); color: #fff; font-size: 24px; letter-spacing: 8px; text-align: center; padding: 14px; border-radius: 14px; outline: none; }
     .pin-input:focus { border-color: var(--accent); }
-    .login-btn { margin-top: 16px; width: 100%; background: var(--accent); color: #000; font-weight: 800; font-size: 16px; padding: 14px; border: none; border-radius: 14px; cursor: pointer; }
+    .login-btn { margin-top: 16px; width: 100%; background: var(--accent); color: #fff; font-weight: 600; font-size: 16px; padding: 14px; border: none; border-radius: 14px; cursor: pointer; }
     .login-error { color: #FF6B6B; font-size: 13px; margin-top: 12px; min-height: 18px; }
 
     .toast {
         position: fixed; left: 50%; bottom: calc(var(--tabbar) + var(--safe-b) + 20px); transform: translateX(-50%);
-        background: rgba(30,30,44,0.97); border: 1px solid var(--line); color: #fff; padding: 12px 20px;
+        background: rgba(38,38,38,0.97); border: 1px solid var(--line); color: var(--text); padding: 12px 20px;
         border-radius: 999px; font-size: 13.5px; z-index: 300; opacity: 0; transition: opacity 0.25s; pointer-events: none;
     }
     .toast.show { opacity: 1; }
     #sync-dot {
         position: fixed; right: 12px; bottom: calc(var(--tabbar) + var(--safe-b) + 12px);
-        width: 8px; height: 8px; border-radius: 50%; background: #ffb347; opacity: 0;
-        box-shadow: 0 0 10px rgba(255,179,71,0.75); transition: opacity 0.2s; z-index: 299;
+        width: 8px; height: 8px; border-radius: 50%; background: var(--text-2); opacity: 0;
+        box-shadow: none; transition: opacity 0.2s; z-index: 299;
     }
     #sync-dot.on { opacity: 1; }
     @media (min-width: 901px) { .toast { bottom: 28px; } }
@@ -2970,7 +2973,7 @@ enum WebClientHTML {
     function updateMangaButton() {
         var btn = el('manga-toggle');
         btn.textContent = state.mangaMode ? '漫画モード' : '通常モード';
-        btn.style.color = state.mangaMode ? 'var(--accent)' : '';
+        btn.style.color = state.mangaMode ? 'var(--text)' : '';
     }
 
     function changeQuality(q) {

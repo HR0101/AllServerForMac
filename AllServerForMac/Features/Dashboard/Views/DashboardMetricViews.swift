@@ -6,23 +6,23 @@ import SwiftUI
 struct DuplicateCheckCountBadge: View {
     let title: String
     let count: Int
-    let tint: Color
 
     var body: some View {
+        // 緑・橙の強い色の面はやめ、中立の面に濃い文字で数字だけを見せる。
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text("\(count)")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.appCaption)
+                .foregroundStyle(NeomorphicTheme.muted)
+            Text(count.formatted())
+                .font(.system(size: 22, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(tint)
+                .foregroundStyle(NeomorphicTheme.ink)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.opacity(0.12))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(NeomorphicTheme.control)
         )
     }
 }
@@ -38,8 +38,8 @@ struct ResourceGauge: View {
             Gauge(value: min(max(value, 0), 100), in: 0...100) {
                 Text(label)
             } currentValueLabel: {
-                Text("\(Int(value))")
-                    .font(.system(size: 13, weight: .bold))
+                Text("\(Int(value))％")
+                    .font(.system(size: 11, weight: .bold))
                     .monospacedDigit()
             }
             .gaugeStyle(.accessoryCircularCapacity)
@@ -48,7 +48,7 @@ struct ResourceGauge: View {
             .frame(width: 52, height: 52)
 
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
         }
     }

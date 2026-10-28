@@ -20,7 +20,7 @@ struct SceneExtractionView: View {
         HStack(spacing: 10) {
           ProgressView(value: progress.fractionCompleted)
           Text("\(progress.stage.displayName) \(Int(progress.fractionCompleted * 100))％")
-            .font(.caption)
+            .font(.appCaption)
             .foregroundStyle(.secondary)
             .frame(width: 150, alignment: .trailing)
         }
@@ -107,7 +107,7 @@ struct SceneExtractionView: View {
       }
 
       Text(viewModel.outputDirectoryURL?.path ?? "出力先が選択されていません")
-        .font(.caption)
+        .font(.appCaption)
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)
@@ -121,7 +121,7 @@ struct SceneExtractionView: View {
 
       if viewModel.isExportingClip {
         Text("クリップを作成中です．完了後に最終MP4が表示されます．")
-          .font(.caption)
+          .font(.appCaption)
           .foregroundStyle(.secondary)
 
         Button(role: .cancel) {
@@ -165,6 +165,9 @@ struct SceneExtractionView: View {
         } label: {
           Label("候補を解析", systemImage: "waveform.path.ecg")
         }
+        // この画面の主役の操作なので、ここだけ青の塗りにする。
+        .buttonStyle(.borderedProminent)
+        .tint(NeomorphicTheme.accent)
         .disabled(viewModel.videoDocument == nil || viewModel.isLoadingVideo)
       }
 
@@ -189,10 +192,10 @@ struct SceneExtractionView: View {
       if let document = viewModel.videoDocument {
         VStack(alignment: .trailing, spacing: 2) {
           Text(document.url.lastPathComponent)
-            .font(.headline)
+            .font(.appHeadline)
             .lineLimit(1)
           Text(metadataText(document))
-            .font(.caption)
+            .font(.appCaption)
             .foregroundStyle(.secondary)
         }
       }

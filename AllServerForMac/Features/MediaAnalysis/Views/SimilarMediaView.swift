@@ -26,6 +26,7 @@ struct SimilarMediaView: View {
             footer
         }
         .frame(minWidth: 820, idealWidth: 1020, minHeight: 540, idealHeight: 700)
+        .appSheet()
         .onAppear {
             model.configure { dataManager.fileMetadata(for: $0).size }
             model.scan(items: items, dataManager: dataManager)
@@ -51,7 +52,7 @@ struct SimilarMediaView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Label("似ているメディアの整理", systemImage: "square.on.square.dashed")
-                .font(.headline)
+                .font(.appHeadline)
             Spacer()
             Button("閉じる") { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -68,7 +69,7 @@ struct SimilarMediaView: View {
                     .progressViewStyle(.linear)
                     .frame(width: 260)
                 Text("\(model.scanStage.title)… \(model.scannedCount) / \(model.totalCount)")
-                    .font(.subheadline)
+                    .font(.appBody)
                     .foregroundStyle(.secondary)
                 Button("中止") { model.cancelScan() }
             }
@@ -77,7 +78,7 @@ struct SimilarMediaView: View {
             ContentUnavailableView(
                 "似ているメディアはありません",
                 systemImage: "checkmark.circle",
-                description: Text("「似ている度合い」をゆるめると候補が増えます。")
+                description: Text("「似ている度合い」をゆるめると候補が増えます．")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -96,11 +97,11 @@ struct SimilarMediaView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("\(group.items.count)件が似ています")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 if group.hasAudioDifferences {
                     Label("音声が異なる版を含みます", systemImage: "waveform.badge.exclamationmark")
-                        .font(.caption2.weight(.semibold))
+                        .font(.appMicro.weight(.semibold))
                         .foregroundStyle(.orange)
                 }
             }
@@ -122,7 +123,7 @@ struct SimilarMediaView: View {
         let isKept = group.keepIDs.contains(item.id)
         let isSelected = model.selectedIDs.contains(item.id)
         return VStack(spacing: 4) {
-            MacVideoThumbnailView(videoItem: item, dataManager: dataManager)
+            MacVideoThumbnailView(videoItem: item, dataManager: dataManager, showsPlayGlyph: false)
                 .frame(width: thumbnailSide, height: thumbnailSide)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
@@ -134,7 +135,7 @@ struct SimilarMediaView: View {
                 )
                 .overlay(alignment: .bottomLeading) {
                     Text(isKept ? "残す候補" : (isSelected ? "削除" : "対象外"))
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.appMicro.weight(.bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
@@ -147,13 +148,13 @@ struct SimilarMediaView: View {
             Button(item.mediaType == .photo ? "これを残す" : "この音声版を残す") {
                 model.setKeep(item.id, inGroupAt: groupIndex)
             }
-                .font(.system(size: 10))
+                .font(.appMicro)
                 .buttonStyle(.plain)
-                .foregroundStyle(isKept ? Color.secondary : Color.accentColor)
+                .foregroundStyle(isKept ? NeomorphicTheme.muted : NeomorphicTheme.ink)
                 .disabled(isKept)
 
             Text(item.originalFilename)
-                .font(.system(size: 9))
+                .font(.appMicro)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: thumbnailSide)
@@ -173,7 +174,7 @@ struct SimilarMediaView: View {
                         Text(String(format: "映像 %.1f Mbps", details.videoBitrate / 1_000_000))
                     }
                 }
-                .font(.system(size: 9).monospacedDigit())
+                .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: thumbnailSide)
             }
@@ -203,7 +204,7 @@ struct SimilarMediaView: View {
 
     private func metadataBadge(_ title: String, systemImage: String, color: Color) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.system(size: 9, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(color)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
@@ -215,24 +216,24 @@ struct SimilarMediaView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Text("似ている度合い")
-                    .font(.caption)
+                    .font(.appCaption)
                 Slider(value: $model.maxDistance, in: 0...16, step: 1)
                     .frame(width: 200)
                 Text("±\(Int(model.maxDistance))")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .frame(width: 38, alignment: .leading)
                 Text("小さいほど「ほぼ同じ」だけに絞られます．音声・尺・画質が一致する動画は再圧縮差も補完します")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
 
             HStack(spacing: 10) {
                 Text("\(model.groups.count)グループ / \(model.selectedIDs.count)件を削除対象")
-                    .font(.subheadline)
+                    .font(.appBody)
                 if model.unreadableCount > 0 {
                     Text("照合できなかった項目: \(model.unreadableCount)件")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()

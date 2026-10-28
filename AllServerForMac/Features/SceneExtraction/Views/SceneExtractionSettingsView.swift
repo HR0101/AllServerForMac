@@ -6,8 +6,8 @@ struct SceneExtractionSettingsView: View {
   @Binding var settings: AnalysisSettings
 
   var body: some View {
-    GroupBox("解析・書き出し設定") {
-      Form {
+    SectionCard(title: "解析・書き出し設定") {
+      VStack(alignment: .leading, spacing: 12) {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
           valueRow("候補区間［秒］") {
             TextField("秒", value: $settings.clipDuration, format: .number.precision(.fractionLength(1)))
@@ -44,18 +44,17 @@ struct SceneExtractionSettingsView: View {
           }
         }
 
-        Divider()
+        Rectangle().fill(NeomorphicTheme.separator).frame(height: 0.5)
 
-        Toggle("音声を含める", isOn: $settings.includesAudio)
-        Toggle("HEVCで書き出す", isOn: $settings.usesHEVC)
-        Toggle("sidecar JSONを出力", isOn: $settings.writesSidecarJSON)
-        Toggle("特徴量CSVを出力", isOn: $settings.writesDatasetCSV)
+        SettingToggleRow(title: "音声を含める", isOn: $settings.includesAudio)
+        SettingToggleRow(title: "HEVCで書き出す", isOn: $settings.usesHEVC)
+        SettingToggleRow(title: "sidecar JSONを出力", isOn: $settings.writesSidecarJSON)
+        SettingToggleRow(title: "特徴量CSVを出力", isOn: $settings.writesDatasetCSV)
 
         Text(String(format: "実出力時間 %.3f秒", settings.outputDuration))
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(.appCaption)
+          .foregroundStyle(NeomorphicTheme.muted)
       }
-      .formStyle(.grouped)
     }
   }
 
@@ -65,8 +64,8 @@ struct SceneExtractionSettingsView: View {
   ) -> some View {
     GridRow {
       Text(title)
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .font(.appCaption)
+        .foregroundStyle(NeomorphicTheme.muted)
       content()
         .textFieldStyle(.roundedBorder)
         .frame(width: 90)

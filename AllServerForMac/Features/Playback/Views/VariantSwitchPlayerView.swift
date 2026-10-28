@@ -178,9 +178,9 @@ struct VariantSwitchPlayerView: View {
                     .controlSize(.large)
                     .tint(.white)
                 Text("映像の共通場面を探しています…")
-                    .font(.headline)
+                    .font(.appHeadline)
                 Text("動画全体から複数の類似ポイントを探し，時間の対応表を作成します")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.white.opacity(0.7))
             }
             .foregroundStyle(.white)
@@ -190,12 +190,12 @@ struct VariantSwitchPlayerView: View {
         } else if let message = viewModel.alignmentErrorMessage {
             VStack(spacing: 14) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.largeTitle)
+                    .font(.appLargeTitle)
                     .foregroundStyle(.yellow)
                 Text("内容で位置合わせできませんでした")
-                    .font(.headline)
+                    .font(.appHeadline)
                 Text(message)
-                    .font(.callout)
+                    .font(.appBody)
                     .foregroundStyle(.white.opacity(0.75))
                     .multilineTextAlignment(.center)
                 HStack {
@@ -216,12 +216,12 @@ struct VariantSwitchPlayerView: View {
     private var activeBadge: some View {
         HStack(spacing: 8) {
             Image(systemName: "eye.fill")
-                .font(.system(size: 11))
+                .font(.appMicro)
                 .foregroundStyle(.white.opacity(0.72))
             Text("\(viewModel.activeIndex + 1) / \(viewModel.variantCount)")
                 .font(.system(size: 13, weight: .bold).monospacedDigit())
             Text(activeTitle)
-                .font(.system(size: 12))
+                .font(.appCaption)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: Self.activeTitleWidth, alignment: .leading)
@@ -242,7 +242,7 @@ struct VariantSwitchPlayerView: View {
                         : viewModel.isNextSwitchBeatAligned ? "拍同期" : "通常間隔",
                     systemImage: "waveform.path.ecg"
                 )
-                .font(.system(size: 11))
+                .font(.appMicro)
                 .foregroundStyle(.white.opacity(0.7))
             }
             if viewModel.isAutoSwitching,
@@ -288,12 +288,8 @@ struct VariantSwitchPlayerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+        .playerPanel(cornerRadius: 14)
+        .environment(\.colorScheme, .dark)
         .padding(16)
         .frame(maxWidth: 1200)
     }
@@ -323,7 +319,7 @@ struct VariantSwitchPlayerView: View {
                     viewModel.toggleMark(at: index)
                 } label: {
                     Image(systemName: isMarked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 13))
+                        .font(.appBody)
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, isMarked ? Color.red : Color.secondary)
                 }
@@ -339,7 +335,7 @@ struct VariantSwitchPlayerView: View {
                         .frame(width: 18, height: 18)
                         .background(Circle().fill(.white.opacity(0.18)))
                     Text(variant.title)
-                        .font(.caption)
+                        .font(.appCaption)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -355,7 +351,7 @@ struct VariantSwitchPlayerView: View {
         )
         .overlay(alignment: .bottom) {
             Capsule()
-                .fill(isActive ? Color.accentColor.opacity(0.78) : Color.clear)
+                .fill(isActive ? Color.white.opacity(0.85) : Color.clear)
                 .frame(height: 3)
                 .padding(.horizontal, 10)
                 .offset(y: 3)
@@ -367,16 +363,16 @@ struct VariantSwitchPlayerView: View {
     private var deleteBar: some View {
         HStack(spacing: 10) {
             Label("削除モード", systemImage: "trash")
-                .font(.caption.weight(.semibold))
+                .font(.appCaption.weight(.semibold))
                 .foregroundStyle(.red)
             Text("消したい差分に印を付けてください（表示中のものは \(keyLabel(.variantMarkForDeletion))）")
-                .font(.caption)
+                .font(.appCaption)
                 .foregroundStyle(.secondary)
             Spacer()
             Text("\(viewModel.markedForDeletionIDs.count)本を選択中")
-                .font(.caption.monospacedDigit())
+                .font(.appCaption.monospacedDigit())
             Button("やめる") { viewModel.isDeleteMode = false }
-                .font(.caption)
+                .font(.appCaption)
             Button(role: .destructive) {
                 showDeleteConfirmation = true
             } label: {
@@ -444,7 +440,7 @@ struct VariantSwitchPlayerView: View {
                 viewModel.isDeleteMode.toggle()
             } label: {
                 Image(systemName: viewModel.isDeleteMode ? "trash.fill" : "trash")
-                    .font(.system(size: 13))
+                    .font(.appBody)
             }
             .buttonStyle(.plain)
             .foregroundStyle(viewModel.isDeleteMode ? Color.red : Color.primary)
@@ -452,20 +448,25 @@ struct VariantSwitchPlayerView: View {
             .accessibilityLabel("削除モード")
 
             Text(formatTime(viewModel.commonCurrentTime))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .trailing)
             Slider(value: $viewModel.commonCurrentTime, in: 0...max(viewModel.commonDuration, 0.1)) { isEditing in
                 viewModel.sliderEditingChanged(isEditing: isEditing)
             }
+            .tint(.white.opacity(0.92))
             .frame(minWidth: 160)
             Text(formatTime(viewModel.commonDuration))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .leading)
         }
     }
 
     private var intervalControls: some View {
         HStack(spacing: 10) {
             Toggle(isOn: $viewModel.isAutoSwitching) {
-                Text("自動切り替え").font(.caption)
+                Text("自動切り替え").font(.appCaption)
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
@@ -473,20 +474,20 @@ struct VariantSwitchPlayerView: View {
 
             HStack(spacing: 4) {
                 Text(viewModel.synchronizesSwitchesToBeats ? "予備間隔" : "間隔")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 intervalField(
                     value: viewModel.minInterval,
                     label: "下限の秒数",
                     set: viewModel.setMinInterval
                 )
-                Text("〜").font(.caption).foregroundStyle(.secondary)
+                Text("〜").font(.appCaption).foregroundStyle(.secondary)
                 intervalField(
                     value: viewModel.maxInterval,
                     label: "上限の秒数",
                     set: viewModel.setMaxInterval
                 )
-                Text("秒").font(.caption).foregroundStyle(.secondary)
+                Text("秒").font(.appCaption).foregroundStyle(.secondary)
             }
             .opacity(viewModel.isAutoSwitching ? 1 : 0.4)
             .disabled(!viewModel.isAutoSwitching)
@@ -495,7 +496,7 @@ struct VariantSwitchPlayerView: View {
                 : "この範囲からランダムに選んだ秒数ごとに切り替えます．上下を同じ値にすれば固定間隔です．")
 
             Toggle(isOn: $viewModel.avoidsImmediateRepeat) {
-                Text("同じものを続けない").font(.caption)
+                Text("同じものを続けない").font(.appCaption)
             }
             .toggleStyle(.checkbox)
             .controlSize(.mini)
@@ -507,7 +508,7 @@ struct VariantSwitchPlayerView: View {
         HStack(spacing: 10) {
             Toggle(isOn: $viewModel.normalizesBGMVolume) {
                 Text("BGM音量を揃える")
-                    .font(.caption.weight(.semibold))
+                    .font(.appCaption.weight(.semibold))
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
@@ -517,17 +518,17 @@ struct VariantSwitchPlayerView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("共通場面の音量を解析中…")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
             } else if let status = viewModel.activeBGMNormalizationText {
                 Label(status, systemImage: "waveform")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
             Text("切り替え時の急な音量差を抑えます")
-                .font(.caption)
+                .font(.appCaption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 4)
@@ -537,7 +538,7 @@ struct VariantSwitchPlayerView: View {
         HStack(spacing: 10) {
             Toggle(isOn: $viewModel.synchronizesSwitchesToBeats) {
                 Text("BGMの拍に合わせる")
-                    .font(.caption.weight(.semibold))
+                    .font(.appCaption.weight(.semibold))
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
@@ -571,7 +572,7 @@ struct VariantSwitchPlayerView: View {
                     .fixedSize()
 
                     Text("拍ごと")
-                        .font(.caption)
+                        .font(.appCaption)
                         .foregroundStyle(.secondary)
                 }
                 .help("何拍ごとに差分を切り替えるかを選びます．4拍で約1小節，8拍で約2小節，1/2拍・1/4拍は拍と拍のあいだでも切り替えます．")
@@ -583,7 +584,7 @@ struct VariantSwitchPlayerView: View {
             }
             if let status = viewModel.beatSynchronizationStatusText {
                 Label(status, systemImage: "waveform.path.ecg")
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
@@ -591,7 +592,7 @@ struct VariantSwitchPlayerView: View {
             Text(viewModel.synchronizesSwitchesToBeats
                 ? "4拍子の小節先頭を推定し，選んだ拍数ごとに切り替えます（1拍未満も可）"
                 : "テンポと小節の区切りを解析してから切り替えます")
-                .font(.caption)
+                .font(.appCaption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 4)
@@ -623,7 +624,7 @@ struct VariantSwitchPlayerView: View {
             }
         ) {
             Text(String(format: "%.1f", value))
-                .font(.caption.monospacedDigit())
+                .font(.appCaption.monospacedDigit())
                 .frame(width: 30, alignment: .trailing)
         }
         .controlSize(.mini)
@@ -655,7 +656,7 @@ struct VariantSwitchPlayerView: View {
                 ("− / +", "切り替え間隔を調整（0.5秒以下は0.1秒刻み）"),
                 ("P", "操作パネルを出しっぱなしにする／自動で隠す"),
                 ("マウスを動かす", "隠れている操作パネルを出す（2.5秒後に自動で隠れます）"),
-                ("差分の切り替え", "映像に被らないよう、操作パネルは出しません"),
+                ("差分の切り替え", "映像に被らないよう，操作パネルは出しません"),
                 ("?", "ショートカット一覧を表示"),
                 ("Esc", "プレイヤーを閉じる")
             ]

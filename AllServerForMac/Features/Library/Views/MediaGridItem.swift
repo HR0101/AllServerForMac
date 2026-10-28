@@ -30,10 +30,14 @@ struct MediaGridItem: View {
     /// 複数選択中に右クリックすると選択全体が対象になるため、
     /// 確認文が「このセル1件」の話に見えないよう、対象の実態をここで受け取る。
     var affectedItems: [VideoItem] = []
-    /// 「再生履歴」アルバムでのみ渡す。nil なら右クリックメニューに項目を出さない。
-    var onRemoveFromHistory: (() -> Void)?
+    /// 「再生履歴」「続きを見る」でだけ渡す、その一覧から外すための項目。
+    /// nil なら右クリックメニューに出さない。
+    var onRemoveFromList: (label: String, action: () -> Void)?
 
     @EnvironmentObject private var watchState: WatchStateStore
+
+    /// サムネイルの角丸。フォルダ／アルバムの表紙（FolderEntryTile）と同じ値にそろえる。
+    static let thumbnailRadius: CGFloat = 10
 
     @State private var isHovering = false
     @State private var showDeleteConfirmation = false
@@ -63,7 +67,7 @@ struct MediaGridItem: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            MacVideoThumbnailView(videoItem: video, dataManager: dataManager)
+            MacVideoThumbnailView(videoItem: video, dataManager: dataManager, showsPlayGlyph: false)
                 // YouTube と同じ、サムネイル下端の視聴済みバー。
                 // サムネイル側が角丸で切り抜いているので、こちらでも同じ形で切り抜いて下端に沿わせる。
                 .overlay(alignment: .bottom) {
@@ -81,11 +85,27 @@ struct MediaGridItem: View {
                         .accessibilityLabel("視聴済み \(Int(watchedFraction * 100))パーセント")
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous))
+                // 明るい/暗い画像のどちらでも輪郭が立つよう、ごく細い縁線を引く。選択中はアクセント色の枠にする。
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous)
                         .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2.5)
                 )
+                // 再生ボタンは常時ではなく、カーソルを乗せたときだけ出す（全サムネイルに付くと画面がうるさい）。
+                .overlay {
+                    if isHovering && video.mediaType == .video {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.black.opacity(0.55), in: Circle())
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
@@ -98,13 +118,13 @@ struct MediaGridItem: View {
                 .overlay(alignment: .bottomTrailing) {
                     if video.mediaType == .video, video.duration > 0 {
                         Text(formatDuration(video.duration))
-                            .font(.caption2.weight(.semibold))
+                            .font(.system(size: 11, weight: .medium))
                             .monospacedDigit()
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
+                            .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(.black.opacity(0.65)))
-                            .padding(7)
+                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(.black.opacity(0.62)))
+                            .padding(6)
                     }
                 }
                 .overlay(alignment: .topLeading) {
@@ -113,7 +133,7 @@ struct MediaGridItem: View {
                     if isHovering && !isTrashView {
                         Button(action: onToggleFavorite) {
                             Image(systemName: video.isFavorite ? "heart.fill" : "heart")
-                                .font(.system(size: 13))
+                                .font(.appBody)
                                 .foregroundStyle(.red)
                                 .padding(7)
                                 .contentShape(Rectangle())
@@ -122,7 +142,7 @@ struct MediaGridItem: View {
                         .help(video.isFavorite ? "お気に入りから外す" : "お気に入りに追加")
                     } else if video.isFavorite {
                         Image(systemName: "heart.fill")
-                            .font(.system(size: 13))
+                            .font(.appBody)
                             .foregroundStyle(.red)
                             .padding(7)
                     }
@@ -132,14 +152,15 @@ struct MediaGridItem: View {
                 VStack(alignment: .leading, spacing: 2) {
                     if showTitle {
                         Text(video.originalFilename)
-                            .font(.caption)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(NeomorphicTheme.ink)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
 
                     if showImportDate {
                         Text(MediaGridItem.itemFormatter.string(from: video.importDate))
-                            .font(.caption2)
+                            .font(.appMicro)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -147,12 +168,7 @@ struct MediaGridItem: View {
             }
         }
         .padding(MediaGridLayout.itemInset)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isSelected
-                      ? Color.accentColor.opacity(0.12)
-                      : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
-        )
+        // 選択はサムネイルのアクセント枠で示すので、セル全体の塗りは付けない（枠と塗りの二重で重く見えるため）。
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering in
             // アニメーション付きだとセルの出入りのたびにトランザクションが発生し、
@@ -186,6 +202,9 @@ struct MediaGridItem: View {
                 }
                 if showRemoveFromAlbum {
                     Button("アルバムから外す") { onRemoveFromAlbum() }
+                }
+                if let onRemoveFromList {
+                    Button(onRemoveFromList.label) { onRemoveFromList.action() }
                 }
                 Divider()
                 Button("削除…", role: .destructive) { showDeleteConfirmation = true }

@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 struct LibraryCategoryView: View {
     enum Kind: Hashable {
         case favorites
+        /// 途中でやめた動画だけを並べる。中身は視聴位置の保管庫なので、
+        /// ブラウザ・iPhone で途中まで観たものもここに出る。
+        case continueWatching
         case history
         case trash
     }
@@ -48,6 +51,7 @@ struct LibraryCategoryView: View {
 
     private var isTrash: Bool { kind == .trash }
     private var isHistory: Bool { kind == .history }
+    private var isContinueWatching: Bool { kind == .continueWatching }
 
     @State private var showClearHistoryAlert = false
 
@@ -55,6 +59,8 @@ struct LibraryCategoryView: View {
         switch kind {
         case .favorites:
             return dataManager.favoriteVideos
+        case .continueWatching:
+            return continueWatchingItems
         case .history:
             return historyItems
         case .trash:
@@ -72,11 +78,33 @@ struct LibraryCategoryView: View {
         return watchState.historyOrder.compactMap { itemByID[$0] }
     }
 
+    /// 途中でやめた動画を、最後に再生した順（新しい順）に並べたもの。
+    /// 並びに `historyOrder` を使うのは、視聴位置そのものには前後関係が無いため。
+    /// 履歴から外した動画は並びから消えるので、視聴位置だけが残っているものを末尾に足す。
+    private var continueWatchingItems: [VideoItem] {
+        let itemByID = Dictionary(
+            dataManager.videos.lazy.filter { !$0.isInTrash && $0.mediaType == .video }.map { ($0.id, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        var seen = Set<UUID>()
+        var result: [VideoItem] = []
+        for id in watchState.historyOrder {
+            guard let item = itemByID[id],
+                  watchState.resumableSeconds(for: id, duration: item.duration) != nil else { continue }
+            seen.insert(id)
+            result.append(item)
+        }
+        // 履歴を消しても視聴位置は残る（仕様）。その分は順序を決めようがないので後ろへ回す。
+        let orphans = itemByID.values
+            .filter { !seen.contains($0.id) && watchState.resumableSeconds(for: $0.id, duration: $0.duration) != nil }
+            .sorted { $0.originalFilename.localizedStandardCompare($1.originalFilename) == .orderedAscending }
+        return result + orphans
+    }
+
     private var displayedItems: [VideoItem] {
         let filtered = sourceItems.filtered(bySearch: searchText)
-        // 履歴は「再生した順」そのものが中身なので並べ替えない
-        // （名前順に並べ替えた履歴には意味がない）。
-        guard !isHistory else { return filtered }
+        // 履歴と「続きを見る」は、並び（最後に再生した順）そのものが中身なので並べ替えない。
+        guard !isHistory, !isContinueWatching else { return filtered }
         return filtered.sorted(by: appSettings.sortOrder, reversed: appSettings.sortReversed, lastPlayed: watchState.lastPlayed) { dataManager.fileMetadata(for: $0) }
     }
     private var selectedVideoItems: [VideoItem] {
@@ -91,11 +119,32 @@ struct LibraryCategoryView: View {
     /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
     /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
     private var columnCount: Int {
-        max(2, Int(appSettings.columnCount))
+        MediaGridLayout.columnCount(requested: appSettings.columnCount, availableWidth: gridWidth)
     }
+
+    /// グリッドを置く領域の幅。狭いウィンドウで列を自動的に減らすために測る。
+    @State private var gridWidth: CGFloat = 0
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
+    }
+
+    private var pageTitle: String {
+      switch kind {
+      case .favorites: return "お気に入り"
+      case .continueWatching: return "続きを見る"
+      case .history: return "再生履歴"
+      case .trash: return "ゴミ箱"
+      }
+    }
+
+    private var pageSubtitle: String {
+      switch kind {
+      case .favorites: return "もう一度楽しみたいメディアを，ひとつの場所に．"
+      case .continueWatching: return "前回の続きから，再生できます．"
+      case .history: return "最近再生した順に並んでいます．"
+      case .trash: return "削除したメディアを確認・復元できます．"
+      }
     }
 
     var body: some View {
@@ -105,6 +154,7 @@ struct LibraryCategoryView: View {
         let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
 
         return VStack(spacing: 0) {
+            LibraryPageHeader(title: pageTitle, subtitle: pageSubtitle, count: items.count)
             ZStack {
                 Color.clear
                     .contentShape(Rectangle())
@@ -126,18 +176,24 @@ struct LibraryCategoryView: View {
                             .foregroundColor(.white)
                         Text("\(exportCurrent) / \(exportTotal)")
                             .foregroundColor(.white)
-                            .font(.subheadline)
+                            .font(.appBody)
                     }
-                    .padding()
-                    .background(.thickMaterial)
-                    .cornerRadius(12)
+                    .padding(20)
+                    .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5))
+                    .environment(\.colorScheme, NeomorphicTheme.isDarkBase ? .dark : .light)
                 }
             }
             Divider()
-            MediaGridControlBar(dataManager: dataManager, showsSortControls: !isHistory)
+            MediaGridControlBar(dataManager: dataManager, showsSortControls: !isHistory && !isContinueWatching)
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
+            if !isTrash {
+              ToolbarItem(placement: .primaryAction) {
+                LibraryTourMenu(videos: videoItems, dataManager: dataManager, beforePlay: { rememberGridState() })
+              }
+            }
             if isTrash {
                 ToolbarItem(placement: .primaryAction) {
                     if !dataManager.trashedVideos.isEmpty {
@@ -172,7 +228,7 @@ struct LibraryCategoryView: View {
                 if !selectedVideoIDs.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         Text("\(selectedVideoIDs.count)項目を選択中")
-                            .font(.system(size: 11))
+                            .font(.appMicro)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -186,28 +242,38 @@ struct LibraryCategoryView: View {
                         .help("選択した動画から候補シーンを抽出します")
                     }
                 }
-                if selectedItems.count >= 2 {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startMultiPlayback(selectedItems) } label: {
-                            Label("同時再生", systemImage: "square.grid.2x2.fill")
+                // 複数選択時の再生方法は4種類あり，アイコンだけを並べると見分けにくいので1つのメニューにまとめる。
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedItems.count >= 2 {
+                        Menu {
+                            Button {
+                                startMultiPlayback(selectedItems)
+                            } label: {
+                                Label("同時再生", systemImage: "square.grid.2x2.fill")
+                            }
+                            .help("選択した動画を同期再生（最大9本）")
+                            Button {
+                                startVariantSwitchPlayback(selectedItems)
+                            } label: {
+                                Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
+                            }
+                            .help("選択した動画を同期再生し，一定間隔／キー操作で見せる1本を切り替える（最大9本）")
+                            Button {
+                                startContentAlignedVariantPlayback(selectedItems)
+                            } label: {
+                                Label("類似点で合わせる", systemImage: "link")
+                            }
+                            .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
+                            Button {
+                                startSlideshowPlayback(selectedItems)
+                            } label: {
+                                Label("スライドショー", systemImage: "play.square.stack")
+                            }
+                            .help("選択した動画をスライドショー再生")
+                        } label: {
+                            Label("選択を再生", systemImage: "play.rectangle.on.rectangle")
                         }
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startVariantSwitchPlayback(selectedItems) } label: {
-                            Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
-                        }
-                        .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startContentAlignedVariantPlayback(selectedItems) } label: {
-                            Label("類似点で合わせる", systemImage: "link")
-                        }
-                        .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startSlideshowPlayback(selectedItems) } label: {
-                            Label("スライドショー", systemImage: "play.square.stack")
-                        }
+                        .help("選択した動画を同時再生・差分切り替え・スライドショーなどで再生")
                     }
                 }
                 if selectedItems.count == 1, let video = selectedItems.first {
@@ -260,7 +326,7 @@ struct LibraryCategoryView: View {
             }
             Button("キャンセル", role: .cancel) {}
         } message: {
-            Text("動画そのものと「続きから」の視聴位置は消えません。ブラウザや iPhone の履歴からも消えます。")
+            Text("動画そのものと「続きから」の視聴位置は消えません．ブラウザや iPhone の履歴からも消えます．")
         }
         .alert("エクスポート完了", isPresented: $showExportResultAlert) {
             Button("OK", role: .cancel) { }
@@ -299,22 +365,22 @@ struct LibraryCategoryView: View {
             }
             Button("キャンセル", role: .cancel) { pendingMoveVideoIDs = [] }
         } message: {
-            Text("作成する新しいアルバム名を入力してください。")
+            Text("作成する新しいアルバム名を入力してください．")
         }
         .sheet(isPresented: $showSplitSheet) {
             VStack(spacing: 20) {
                 Text("分割再生")
-                    .font(.headline)
+                    .font(.system(size: 17, weight: .semibold))
                 if let video = splitTargetVideo {
                     Text(video.originalFilename)
-                        .font(.subheadline)
+                        .font(.appBody)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Stepper("分割数: \(splitCount)", value: $splitCount, in: 2...9)
                     .frame(width: 200)
                 Text("動画を\(splitCount)等分して\(splitCount)画面で同時再生します")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     Button("キャンセル") { showSplitSheet = false }
@@ -331,6 +397,7 @@ struct LibraryCategoryView: View {
             }
             .padding(30)
             .frame(minWidth: 320)
+            .appSheet()
         }
         // 他の画面に移動したら、ここで表示していたサムネイルはメモリから解放する。
         .onDisappear {
@@ -386,10 +453,7 @@ struct LibraryCategoryView: View {
                                 onAnalyzeScenes(video)
                             } : nil,
                             affectedItems: menuTargets(for: video, in: items),
-                            onRemoveFromHistory: isHistory ? {
-                                watchState.removeHistory(videoIDs: targetIDs(for: video))
-                                selectedVideoIDs.removeAll()
-                            } : nil
+                            onRemoveFromList: listRemoval(for: video)
                         )
                         .id(video.id)
                     }
@@ -398,6 +462,7 @@ struct LibraryCategoryView: View {
                 .padding(MediaGridLayout.contentInset)
             }
             .scrollPosition(id: $scrollTargetMediaID, anchor: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
             // フォーカスはグリッド全体で1つだけ持つ。セルごとに .focusable() を付けると、
             // SwiftUI 標準の矢印キーによるフォーカス送りが自前の「index ± 列数」移動と同時に走り、
             // 1回の入力で二重に動いたり斜めに飛んだりする（列数によって挙動が変わって見える原因）。
@@ -745,32 +810,67 @@ struct LibraryCategoryView: View {
             }
             isExporting = false
             exportResultMessage = result.failedCount > 0
-                ? "\(result.successCount)件を書き出しました。\(result.failedCount)件は失敗しました。"
-                : "\(result.successCount)件を書き出しました。"
+                ? "\(result.successCount)件を書き出しました．\(result.failedCount)件は失敗しました．"
+                : "\(result.successCount)件を書き出しました．"
             showExportResultAlert = true
         }
+    }
+
+    /// 「再生履歴」「続きを見る」から外す右クリック項目。どちらでもない画面では出さない。
+    private func listRemoval(for video: VideoItem) -> (label: String, action: () -> Void)? {
+        if isHistory {
+            return ("履歴から削除", {
+                watchState.removeHistory(videoIDs: targetIDs(for: video))
+                selectedVideoIDs.removeAll()
+            })
+        }
+        if isContinueWatching {
+            // 捨てるのは視聴位置だけ。履歴にも動画そのものにも触らない
+            // （「もう続きは要らない」と「観た記録を消したい」は別の意思表示）。
+            return ("続きを見るから外す", {
+                for id in targetIDs(for: video) { watchState.markFinished(videoID: id) }
+                watchState.publishPendingChanges()
+                selectedVideoIDs.removeAll()
+            })
+        }
+        return nil
     }
 
     private var categoryScope: PlaybackCoordinator.LibraryScope {
         switch kind {
         case .favorites: return .favorites
+        case .continueWatching: return .continueWatching
         case .history: return .history
         case .trash: return .trash
         }
     }
 
+    @ViewBuilder
     private var emptyState: some View {
+      if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        ContentUnavailableView {
+          Label("該当する項目がありません", systemImage: "magnifyingglass")
+        } description: {
+          Text("「\(searchText)」に一致するタイトルは見つかりませんでした．")
+        } actions: {
+          Button("検索を解除") { searchText = "" }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
         ContentUnavailableView(
-            emptyStateTitle,
-            systemImage: emptyStateSymbol,
-            description: Text(emptyStateDescription)
+          emptyStateTitle,
+          systemImage: emptyStateSymbol,
+          description: Text(emptyStateDescription)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
     }
 
     private var emptyStateTitle: String {
         switch kind {
         case .favorites: return "お気に入りはありません"
+        case .continueWatching: return "途中の動画はありません"
         case .history: return "再生履歴はありません"
         case .trash: return "ゴミ箱は空です"
         }
@@ -779,6 +879,7 @@ struct LibraryCategoryView: View {
     private var emptyStateSymbol: String {
         switch kind {
         case .favorites: return "heart"
+        case .continueWatching: return "play.circle"
         case .history: return "clock.arrow.circlepath"
         case .trash: return "trash"
         }
@@ -787,6 +888,7 @@ struct LibraryCategoryView: View {
     private var emptyStateDescription: String {
         switch kind {
         case .favorites: return "グリッドの右クリックメニューからお気に入りに追加できます"
+        case .continueWatching: return "最後まで観ずにやめた動画がここに並びます（ブラウザや iPhone で観た分も含みます）"
         case .history: return "再生した動画がここに新しい順で並びます（ブラウザや iPhone での再生も含みます）"
         case .trash: return "削除した項目はここに移動します"
         }

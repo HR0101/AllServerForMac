@@ -316,7 +316,7 @@ extension LibraryViewModel {
         guard let exportSession = AVAssetExportSession(asset: asset, presetName: preset) else {
             await MainActor.run {
                 self.proxyProgressMap[key] = nil
-                self.proxyFailureMap[key] = "このファイルはmacOSの変換機能で読み込めません。"
+                self.proxyFailureMap[key] = "このファイルはmacOSの変換機能で読み込めません．"
             }
             return
         }

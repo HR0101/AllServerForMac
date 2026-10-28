@@ -1,71 +1,165 @@
 import AppKit
 import SwiftUI
 
+// MARK: - 文字サイズの階層
+
+/// アプリ全体の文字サイズの段階。システム標準の `.caption`（macOS では 10pt）は小さすぎて読みにくいので使わず、
+/// 画面ごとにばらついていた指定を、次の 6 段階にそろえる。強弱は太さ（.weight）で足す。
+///
+/// | 名前          | pt | 用途                                   |
+/// |---------------|----|----------------------------------------|
+/// | appMicro      | 11 | バッジ・単位・時刻などの補足           |
+/// | appCaption    | 12 | 説明文・2 行目・ラベル                 |
+/// | appBody       | 13 | 本文・行・ボタン                       |
+/// | appHeadline   | 15 | カードの見出し                         |
+/// | appTitle      | 17 | シート・パネルの見出し                 |
+/// | appLargeTitle | 26 | ページの見出し（LibraryPageHeader）    |
+extension Font {
+    static let appMicro = Font.system(size: 11)
+    static let appCaption = Font.system(size: 12)
+    static let appBody = Font.system(size: 13)
+    static let appHeadline = Font.system(size: 15, weight: .semibold)
+    static let appTitle = Font.system(size: 17, weight: .semibold)
+    static let appLargeTitle = Font.system(size: 26, weight: .bold)
+}
+
 // MARK: - デザイントークン
 
 enum DS {
-    static let cardCornerRadius: CGFloat = 8
-    static let cardPadding: CGFloat = 18
-    static let cardSpacing: CGFloat = 18
-    static let cyan = Color(red: 0.18, green: 0.86, blue: 1.0)
-    static let violet = Color(red: 0.52, green: 0.42, blue: 1.0)
-    static let lime = Color(red: 0.42, green: 1.0, blue: 0.63)
-    static let signalRed = Color(red: 1.0, green: 0.19, blue: 0.18)
-    static let signalAmber = Color(red: 1.0, green: 0.65, blue: 0.16)
-    static let tallyGreen = Color(red: 0.49, green: 0.9, blue: 0.13)
-    static let surface = Color.black
-    static let surfaceRaised = Color(white: 0.028)
+    static let cardCornerRadius: CGFloat = 16
+    static let cardPadding: CGFloat = 20
+    static let cardSpacing: CGFloat = 20
 }
 
-/// ネオモーフィズムのベースカラー。設定「外観」のトグルで白ベース⇄黒ベースを切り替える。
-/// 色の値だけを差し替え、レイアウトやシャドウの構造は白ベースと完全に共通のまま保つ。
-/// 単一の真実の source として UserDefaults を直接読むことで、AppSettings を経由できない
-/// 静的な色参照（CommandDeckBackground など）や AppKit 側（NSColor）からも常に同じ値を得る。
-/// トグル時の一貫した再描画は ContentView 側の `.id()` による作り直しで保証している。
+/// ガラス風テーマの色です．既存の外観設定キーを引き継ぎます．
+/// 静的な色参照とAppKitのウィンドウ外観を同じ設定に揃えます．
 enum NeomorphicTheme {
     static let darkBaseDefaultsKey = "appearance.neomorphicDarkBase"
 
+    /// 未設定のときは黒基調。動画・画像が主役のアプリなので、作品の色が映える暗い下地を既定にする。
     static var isDarkBase: Bool {
-        UserDefaults.standard.bool(forKey: darkBaseDefaultsKey)
+        UserDefaults.standard.object(forKey: darkBaseDefaultsKey) as? Bool ?? true
     }
 
-    static var background: Color {
-        isDarkBase ? Color(red: 0.08, green: 0.085, blue: 0.09) : Color(red: 0.89, green: 0.92, blue: 0.93)
+    // 配色の考え方：色味のない中立のグレーだけで面を作り、強弱は面の明るさと文字の濃淡でつける。
+    // 色（アクセント）は、主要ボタン・スイッチ・選択中の枠のような「操作の目印」にだけ使う。
+
+    /// 内容側の下地。
+    static var canvas: Color {
+        isDarkBase ? Color(white: 0.105) : Color(white: 0.965)
     }
+    /// サイドバー・カードの面。下地よりわずかに明るい（黒基調）／白（明るい側）。
+    static var sidebar: Color {
+        isDarkBase ? Color(white: 0.150) : Color(white: 0.925)
+    }
+    /// サイドバーの左に並ぶアイコンのレール。サイドバーより一段暗くして、2列を重ねて見せる。
+    static var rail: Color {
+        isDarkBase ? Color(white: 0.125) : Color(white: 0.895)
+    }
+    static var card: Color {
+        isDarkBase ? Color(white: 0.150) : Color.white
+    }
+    /// 入力欄・検索欄・セグメントのような、面の上に置く操作部品の地。
+    static var control: Color {
+        isDarkBase ? Color.white.opacity(0.085) : Color.black.opacity(0.055)
+    }
+    /// セグメントの選ばれている側。地（control）より一段はっきりさせる。
+    static var controlSelected: Color {
+        isDarkBase ? Color.white.opacity(0.17) : Color.white
+    }
+    static var cardBorder: Color {
+        isDarkBase ? Color.white.opacity(0.06) : Color.black.opacity(0.07)
+    }
+    static var background: Color { canvas }
     static var surface: Color {
-        isDarkBase ? Color(red: 0.14, green: 0.15, blue: 0.16) : Color(red: 0.91, green: 0.93, blue: 0.93)
+        isDarkBase ? Color.white.opacity(0.06) : Color.black.opacity(0.04)
     }
     static var ink: Color {
-        isDarkBase ? Color(red: 0.90, green: 0.92, blue: 0.93) : Color(red: 0.16, green: 0.18, blue: 0.19)
+        isDarkBase ? Color(white: 0.93) : Color(white: 0.10)
     }
     static var muted: Color {
-        isDarkBase ? Color(red: 0.60, green: 0.64, blue: 0.66) : Color(red: 0.48, green: 0.52, blue: 0.54)
+        isDarkBase ? Color(white: 0.62) : Color(white: 0.42)
     }
     static var accent: Color {
-        Color(red: 0.14, green: 0.59, blue: 0.66)
+        isDarkBase ? Color(red: 0.33, green: 0.60, blue: 1.0) : Color(red: 0.0, green: 0.40, blue: 0.92)
+    }
+    static var separator: Color {
+        isDarkBase ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
+    }
+    /// 選択中の行・セグメント。色を付けず、面を一段明るく（暗く）するだけにする。
+    static var selection: Color {
+        isDarkBase ? Color.white.opacity(0.11) : Color.black.opacity(0.08)
+    }
+    static var hover: Color {
+        isDarkBase ? Color.white.opacity(0.06) : Color.black.opacity(0.045)
     }
     static var shadow: Color {
-        isDarkBase ? Color(red: 0.0, green: 0.0, blue: 0.0) : Color(red: 0.62, green: 0.67, blue: 0.69)
+        Color.black.opacity(isDarkBase ? 0.5 : 0.12)
+    }
+    /// 稼働中・許可の目印（状態ドットと同じ落ち着いた緑）
+    static let online = Color(red: 0.30, green: 0.78, blue: 0.45)
+    /// 拒否・削除・エラーの目印（ハートや破壊的な操作と同じ赤）
+    static let negative = Color(red: 1.0, green: 0.27, blue: 0.23)
+    /// 「どちらとも言えない」「注意」の目印（強い黄・橙ではなく、落ち着いた琥珀）
+    static let caution = Color(red: 0.96, green: 0.68, blue: 0.22)
+}
+
+// MARK: - 見出しつきのカード
+
+/// 標準の GroupBox の代わりに使う、平らなカード。見出しは控えめな文字だけで、枠や色は付けない。
+struct SectionCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(NeomorphicTheme.muted)
+            content
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(GlassCardSurface())
     }
 }
 
-struct NeomorphicWavePattern: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let lineCount = 22
-        for index in 0..<lineCount {
-            let progress = CGFloat(index) / CGFloat(max(lineCount - 1, 1))
-            let baseY = rect.minY + rect.height * progress
-            path.move(to: CGPoint(x: rect.minX, y: baseY))
-            for step in 0...64 {
-                let xProgress = CGFloat(step) / 64
-                let x = rect.minX + rect.width * xProgress
-                let wave = sin((xProgress * 2.2 + progress * 0.7) * .pi * 2)
-                let y = baseY + wave * 18
-                path.addLine(to: CGPoint(x: x, y: y))
+// MARK: - シート共通
+
+extension View {
+    /// シートの下地を、アプリ本体と同じ中立の単色にそろえる。
+    /// 何も指定しないと OS 標準の半透明になり、デスクトップの色で青や緑に濁る。
+    func appSheet() -> some View {
+        self
+            .foregroundStyle(NeomorphicTheme.ink)
+            .background(NeomorphicTheme.canvas)
+            .tint(NeomorphicTheme.accent)
+    }
+}
+
+/// シート上部の見出し。色付きのタイルは使わず、細い無彩色のアイコンと文字だけにする。
+struct SheetHeader: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(NeomorphicTheme.muted)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(NeomorphicTheme.muted)
+                }
             }
+            Spacer(minLength: 0)
         }
-        return path
     }
 }
 
@@ -75,23 +169,96 @@ struct NeomorphicWavePattern: Shape {
 /// 背景を常時動かすと内容より演出が目立つため，ここは静的に保ちます。
 /// 動きはカードへのホバーやサーバーの稼働状態など，意味のある箇所だけで見せます。
 struct CommandDeckBackground: View {
+  var body: some View {
+    NeomorphicTheme.canvas
+      .ignoresSafeArea()
+      .allowsHitTesting(false)
+  }
+}
+
+/// ホーム・管理画面で共通の、平らなカードの面です。
+struct GlassCardSurface: View {
+  var isHovering = false
+
+  var body: some View {
+    // 影は付けず、面の明るさの差だけで下地から浮かせる（平らで静かな見た目にする）。
+    RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
+      .fill(NeomorphicTheme.card)
+      .overlay {
+        RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
+          .strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5)
+      }
+  }
+}
+
+/// どの一覧でも同じ位置と文字組みで，現在地と件数を示します．
+struct LibraryPageHeader: View {
+  let title: String
+  let subtitle: String
+  var count: Int? = nil
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 16) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text(title)
+          .font(.system(size: 26, weight: .bold))
+          .foregroundStyle(NeomorphicTheme.ink)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(title)
+        Text(subtitle)
+          .font(.appBody)
+          .foregroundStyle(NeomorphicTheme.muted)
+          .lineLimit(2)
+      }
+      Spacer(minLength: 8)
+      if let count {
+        Text("\(count.formatted())件")
+          .font(.appBody.weight(.medium).monospacedDigit())
+          .foregroundStyle(NeomorphicTheme.muted)
+      }
+    }
+    .padding(.horizontal, 24)
+    .padding(.vertical, 20)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+// MARK: - 平らなセグメント（絞り込み用）
+
+/// 標準のセグメントは選択中が青い塊になって目立ちすぎるので、色を付けない薄い選択表示にした版。
+/// 幅は呼び出し側が指定する（サイドバーでは「広がるだけ広がる」指定が使えないため、固定幅で組む）。
+struct FlatSegmentedControl<Option: Hashable>: View {
+    let options: [Option]
+    let title: (Option) -> String
+    @Binding var selection: Option
+    let width: CGFloat
+
     var body: some View {
-        ZStack {
-            NeomorphicTheme.background
-
-            NeomorphicWavePattern()
-                .stroke(Color.white.opacity(0.48), lineWidth: 1)
-                .frame(width: 540, height: 260)
-                .offset(x: -300, y: -240)
-
-            NeomorphicWavePattern()
-                .stroke(Color(red: 0.72, green: 0.79, blue: 0.83).opacity(0.38), lineWidth: 1)
-                .frame(width: 700, height: 340)
-                .rotationEffect(.degrees(8))
-                .offset(x: 330, y: 270)
+        let inner = width - 4
+        let segment = inner / CGFloat(max(options.count, 1))
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                let isSelected = option == selection
+                Button {
+                    selection = option
+                } label: {
+                    Text(title(option))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(isSelected ? NeomorphicTheme.ink : NeomorphicTheme.muted)
+                        .frame(width: segment, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(isSelected ? NeomorphicTheme.controlSelected : Color.clear)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
+        .padding(2)
+        .frame(width: width)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(NeomorphicTheme.control))
     }
 }
 
@@ -103,16 +270,7 @@ struct CardBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(DS.cardPadding)
-            .background(
-                RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-                    .fill(NeomorphicTheme.surface)
-                    .shadow(color: .white.opacity(0.9), radius: isHovering ? 10 : 7, x: -6, y: -6)
-                    .shadow(color: NeomorphicTheme.shadow.opacity(isHovering ? 0.36 : 0.28), radius: isHovering ? 16 : 11, x: 8, y: 8)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-                    .strokeBorder(.white.opacity(isHovering ? 0.76 : 0.58), lineWidth: 1)
-            )
+            .background(GlassCardSurface(isHovering: isHovering))
             .animation(.easeOut(duration: 0.18), value: isHovering)
             .onHover { isHovering = $0 }
     }
@@ -134,14 +292,18 @@ struct CardHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            IconTile(icon: icon, tint: tint)
+            // 角丸のタイルで囲まず、アイコンだけを置く（カードごとに青いタイルが並ぶとテンプレート然として見えるため）。
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(NeomorphicTheme.muted)
+                .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(NeomorphicTheme.ink)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .font(.system(size: 12))
                         .foregroundStyle(NeomorphicTheme.muted)
                 }
             }
@@ -156,19 +318,17 @@ struct IconTile: View {
     var size: CGFloat = 26
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(NeomorphicTheme.surface)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(tint.opacity(0.10))
             .frame(width: size, height: size)
-            .shadow(color: .white.opacity(0.9), radius: 3, x: -2, y: -2)
-            .shadow(color: NeomorphicTheme.shadow.opacity(0.24), radius: 5, x: 3, y: 3)
             .overlay(
                 safeSystemImage(named: icon)
                     .font(.system(size: size * 0.5, weight: .semibold))
                     .foregroundStyle(tint)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(.white.opacity(0.64), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(tint.opacity(0.12), lineWidth: 1)
             )
     }
 
@@ -193,16 +353,15 @@ struct StatusDot: View {
         ZStack {
             if active {
                 Circle()
-                    .fill(Color.green.opacity(0.35))
+                    .fill(Color(red: 0.30, green: 0.78, blue: 0.45).opacity(0.35))
                     .frame(width: 16, height: 16)
                     .scaleEffect(pulse ? 1.6 : 0.8)
                     .opacity(pulse ? 0 : 0.8)
                     .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulse)
             }
             Circle()
-                .fill(active ? Color.green : Color.secondary.opacity(0.5))
+                .fill(active ? Color(red: 0.30, green: 0.78, blue: 0.45) : Color.secondary.opacity(0.5))
                 .frame(width: 9, height: 9)
-                .shadow(color: active ? .green.opacity(0.6) : .clear, radius: 3)
         }
         .frame(width: 18, height: 18)
         .onAppear { pulse = active }
@@ -219,10 +378,30 @@ struct SettingRow<Content: View>: View {
     var body: some View {
         HStack {
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
             Spacer()
             content
         }
+    }
+}
+
+/// ラベルを左、スイッチを右端に置く設定行（macOS のシステム設定と同じ並び）。
+/// スイッチをラベルのすぐ隣に置くと、行ごとに位置がばらついて見える。
+struct SettingToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13))
+            Spacer(minLength: 12)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -269,7 +448,7 @@ struct ProminentActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .bold, design: .rounded))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 22)
             .padding(.vertical, 9)
@@ -305,7 +484,7 @@ struct StatPill: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 0) {
                 Text(label)
-                    .font(.system(size: 9))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Text(value)
                     .font(.system(size: 12, weight: .semibold))
@@ -316,7 +495,24 @@ struct StatPill: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(
-            Capsule().fill(DS.cyan.opacity(0.1))
+            Capsule().fill(NeomorphicTheme.accent.opacity(0.1))
         )
+    }
+}
+
+// MARK: - 入力欄の自動選択を外す
+
+/// 置かれたウィンドウの最初の入力欄の自動選択を，表示直後に一度だけ外す。
+struct InitialFirstResponderClearer: NSViewRepresentable {
+    func makeNSView(context: Context) -> ClearerView { ClearerView() }
+    func updateNSView(_ nsView: ClearerView, context: Context) {}
+
+    final class ClearerView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            // AppKit が初期の first responder を決めるのはウィンドウが key になった後なので，次のループで外す。
+            DispatchQueue.main.async { window.makeFirstResponder(nil) }
+        }
     }
 }

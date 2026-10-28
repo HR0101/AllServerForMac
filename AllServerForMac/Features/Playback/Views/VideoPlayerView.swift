@@ -21,7 +21,7 @@ private struct ChapterRow: View {
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .cornerRadius(4)
                 Text(chapter.timeString)
-                    .font(.caption.monospacedDigit())
+                    .font(.appCaption.monospacedDigit())
             }
             .contentShape(Rectangle())
         }
@@ -42,18 +42,10 @@ private struct PlaybackVideoStrip: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("他の動画")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.82))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PlayerChrome.icon)
                 Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .symbolRenderingMode(.hierarchical)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.78))
-                .help("動画一覧を閉じる")
-                .accessibilityLabel("動画一覧を閉じる")
+                PlayerRoundButton(systemImage: "xmark", help: "動画一覧を閉じる", action: onClose)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -73,11 +65,7 @@ private struct PlaybackVideoStrip: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-        )
+        .playerPanel()
         .padding(.horizontal, 30)
     }
 
@@ -109,7 +97,7 @@ private struct PlaybackVideoThumbnailButton: View {
                 )
 
                 Text(displayName)
-                    .font(.caption.weight(.semibold))
+                    .font(.appCaption.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
@@ -140,7 +128,7 @@ private struct PlaybackVideoThumbnailButton: View {
                 ZStack {
                     Rectangle().fill(.black.opacity(0.35))
                     Image(systemName: "film")
-                        .font(.title3)
+                        .font(.appTitle)
                         .foregroundStyle(.white.opacity(0.48))
                 }
             }
@@ -181,7 +169,7 @@ private struct UpNextVideoRow: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                     Text(durationString)
-                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .font(.appMicro.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
@@ -190,7 +178,7 @@ private struct UpNextVideoRow: View {
                 }
 
                 Text(displayName)
-                    .font(.footnote.weight(.medium))
+                    .font(.appBody.weight(.medium))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -399,6 +387,8 @@ struct VideoPlayerView: View {
     private let playbackControlsHorizontalPadding: CGFloat = 28
     private let playbackControlsBottomPadding: CGFloat = 24
     private let playbackControlButtonWidth: CGFloat = 26
+    /// キー1打ちで動かす音量の幅。20回で無音から最大まで届く。
+    private let volumeStep: Float = 0.05
     private let minimumSliderDuration: Double = 0.1
     private let videoStripScrollThreshold: CGFloat = 2
     private let secondsPerMinute = 60
@@ -413,7 +403,8 @@ struct VideoPlayerView: View {
         currentVideo: VideoItem,
         dataManager: LibraryViewModel,
         watchState: WatchStateStore,
-        settings: PlaybackSettings
+        settings: PlaybackSettings,
+        initialStartTime: Double? = nil
     ) {
         self.dataManager = dataManager
         _settings = ObservedObject(wrappedValue: settings)
@@ -423,7 +414,8 @@ struct VideoPlayerView: View {
                 currentVideo: currentVideo,
                 dataManager: dataManager,
                 watchState: watchState,
-                settings: settings
+                settings: settings,
+                initialStartTime: initialStartTime
             )
         )
     }
@@ -449,7 +441,14 @@ struct VideoPlayerView: View {
                 .videoCycleRepeat,
                 .videoRateDown,
                 .videoRateUp,
-                .videoTogglePictureInPicture
+                .videoTogglePictureInPicture,
+                .videoVolumeUp,
+                .videoVolumeDown,
+                .videoToggleMute,
+                .videoToggleFavorite,
+                .videoStepBackward,
+                .videoStepForward,
+                .videoToggleFillScreen
             ],
             extraItems: [
                 ("0〜9", "動画の 0%〜90% の位置へジャンプ"),
@@ -515,20 +514,39 @@ struct VideoPlayerView: View {
                 }
             }
 
+            // 再生中の動画名。タイトルバーが出ない画面なので，ここに出さないと何を見ているか分からない。
+            // 右上の操作と同じタイミングで出し入れし，右側は操作群と重ならないよう空けておく。
+            Text(viewModel.currentVideo.originalFilename)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(PlayerChrome.icon)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .playerPanel(cornerRadius: 16)
+                .padding()
+                .padding(.top, PlayerCornerControls.titlebarClearance)
+                .padding(.trailing, 300)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(areCornerControlsVisible || showShortcutHelp ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(!(areCornerControlsVisible || showShortcutHelp))
+
             // シークバーと同じく，カーソル操作中だけ右上の補助操作を表示する。
             // パネルの開閉に関わらず常にウィンドウ右上端に留める。
-            if areCornerControlsVisible || showShortcutHelp {
-                PlayerCornerControls(
-                    showShortcutHelp: $showShortcutHelp,
-                    volume: $viewModel.volume,
-                    isMuted: $viewModel.isMuted
-                ) {
-                    coordinator.close()
-                }
-                .transition(.opacity)
+            // 条件付きで挿入すると，隠れている間に右上の × を押しても「表示するだけ」で閉じられない。
+            // 常に置いたまま透明度だけ切り替え，見えていなくても押せるようにする。
+            PlayerCornerControls(
+                showShortcutHelp: $showShortcutHelp,
+                volume: $viewModel.volume,
+                isMuted: $viewModel.isMuted
+            ) {
+                coordinator.close()
             }
+            .opacity(areCornerControlsVisible || showShortcutHelp ? 1 : 0)
 
-            if let notice = viewModel.resumeNotice {
+            if let notice = viewModel.resumeNotice
+                ?? (viewModel.isAnalyzingLoopEdges ? viewModel.loopAnalysisNotice : nil) {
                 resumeNoticeBadge(notice)
             }
 
@@ -567,7 +585,7 @@ struct VideoPlayerView: View {
     private var miniPlayerView: some View {
         ZStack(alignment: .bottom) {
             Color.black
-            PlayerLayerContainerView(player: viewModel.player)
+            PlayerLayerContainerView(player: viewModel.player, videoGravity: viewModel.videoGravity)
 
             if isMiniControlsVisible {
                 HStack(spacing: 8) {
@@ -640,7 +658,10 @@ struct VideoPlayerView: View {
                 Color.black
                 // AVKit標準コントロールは表示時に動画全体を暗くするため使わず、
                 // 下部に独自のシークバーを重ねる。
-                PlayerLayerContainerView(player: viewModel.player) { layer in
+                PlayerLayerContainerView(
+                    player: viewModel.player,
+                    videoGravity: viewModel.videoGravity
+                ) { layer in
                     pictureInPicture.attach(playerLayer: layer)
                 }
                 .scaleEffect(x: videoZoom.scaleX, y: videoZoom.scaleY, anchor: .topLeading)
@@ -713,12 +734,11 @@ struct VideoPlayerView: View {
             Image(systemName: "clock.arrow.circlepath")
             Text(notice)
         }
-        .font(.callout.weight(.medium))
-        .foregroundStyle(.white)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(PlayerChrome.icon)
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Capsule().fill(.black.opacity(0.62)))
-        .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .frame(height: 34)
+        .playerPanel(cornerRadius: 17)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .transition(.opacity)
@@ -729,7 +749,7 @@ struct VideoPlayerView: View {
     private var upNextPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("同じアルバムの動画")
-                .font(.callout.weight(.semibold))
+                .font(.appBody.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.82))
                 .padding(.horizontal, 16)
                 .padding(.top, 22)
@@ -738,7 +758,7 @@ struct VideoPlayerView: View {
             if viewModel.otherVideos.isEmpty {
                 Spacer()
                 Text("他に動画がありません")
-                    .font(.caption)
+                    .font(.appCaption)
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -803,45 +823,40 @@ struct VideoPlayerView: View {
 
     /// AVKit標準の暗転を避けるための通常再生用コントロール。
     private var playbackControls: some View {
-        HStack(spacing: 12) {
-            Button {
+        HStack(spacing: 10) {
+            PlayerIconButton(
+                systemImage: "backward.end",
+                help: "前の動画",
+                accessibilityLabel: "前の動画"
+            ) {
                 viewModel.playPreviousVideo()
-            } label: {
-                Image(systemName: "backward.end.fill")
-                    .font(.system(size: 15))
-                    .frame(width: playbackControlButtonWidth)
             }
-            .buttonStyle(.plain)
             .disabled(!viewModel.canPlayPreviousVideo)
-            .help("前の動画")
-            .accessibilityLabel("前の動画")
 
-            Button {
+            // 主役の再生/一時停止だけを白い丸にして目立たせる。
+            PlayerPlayButton(
+                isPlaying: viewModel.isPlaybackPlaying,
+                help: viewModel.isPlaybackPlaying ? "一時停止（Space）" : "再生（Space）"
+            ) {
                 viewModel.playPause()
-            } label: {
-                Image(systemName: viewModel.isPlaybackPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16))
-                    .frame(width: playbackControlButtonWidth)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.isPlaybackPlaying ? "一時停止（Space）" : "再生（Space）")
-            .accessibilityLabel(viewModel.isPlaybackPlaying ? "一時停止" : "再生")
 
-            Button {
+            PlayerIconButton(
+                systemImage: "forward.end",
+                help: "次の動画",
+                accessibilityLabel: "次の動画"
+            ) {
                 viewModel.playNextVideo()
-            } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 15))
-                    .frame(width: playbackControlButtonWidth)
             }
-            .buttonStyle(.plain)
             .disabled(!viewModel.canPlayNextVideo)
-            .help("次の動画")
-            .accessibilityLabel("次の動画")
+
+            StockMomentButton(video: viewModel.currentVideo, time: viewModel.currentTime,
+              duration: viewModel.duration, dataManager: dataManager, compact: true)
 
             Text(formatTime(viewModel.currentTime))
-                .font(.caption.monospacedDigit())
-                .frame(minWidth: 46, alignment: .trailing)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 48, alignment: .trailing)
 
             Slider(
                 value: $viewModel.currentTime,
@@ -849,6 +864,7 @@ struct VideoPlayerView: View {
             ) { isEditing in
                 viewModel.playbackSliderEditingChanged(isEditing: isEditing)
             }
+            .tint(.white.opacity(0.92))
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { seekBarWidth = $0 }
             .onContinuousHover(coordinateSpace: .local) { phase in
                 handleSeekBarHover(phase)
@@ -861,58 +877,72 @@ struct VideoPlayerView: View {
             }
 
             Text(formatTime(viewModel.duration))
-                .font(.caption.monospacedDigit())
-                .frame(minWidth: 46, alignment: .leading)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 48, alignment: .leading)
 
-            Divider().frame(height: 18)
+            Rectangle()
+                .fill(PlayerChrome.panelBorder)
+                .frame(width: 1, height: 16)
 
-            Button {
+            PlayerIconButton(
+                systemImage: "shuffle",
+                isActive: settings.isShuffleEnabled,
+                help: settings.isShuffleEnabled ? "シャッフル: オン" : "シャッフル: オフ",
+                accessibilityLabel: "シャッフル"
+            ) {
                 settings.isShuffleEnabled.toggle()
-            } label: {
-                Image(systemName: "shuffle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: playbackControlButtonWidth)
-                    .foregroundStyle(settings.isShuffleEnabled ? Color.accentColor : Color.primary)
             }
-            .buttonStyle(.plain)
-            .help(settings.isShuffleEnabled ? "シャッフル: オン" : "シャッフル: オフ")
-            .accessibilityLabel("シャッフル")
 
-            Button {
+            PlayerIconButton(
+                systemImage: settings.repeatMode.symbolName,
+                isActive: settings.repeatMode != .off,
+                help: viewModel.loopAnalysisNotice ?? settings.repeatMode.title,
+                accessibilityLabel: settings.repeatMode.title
+            ) {
                 settings.repeatMode = settings.repeatMode.next
-            } label: {
-                Image(systemName: settings.repeatMode.symbolName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: playbackControlButtonWidth)
-                    .foregroundStyle(settings.repeatMode == .off ? Color.primary : Color.accentColor)
             }
-            .buttonStyle(.plain)
-            .help(settings.repeatMode.title)
-            .accessibilityLabel(settings.repeatMode.title)
+
+            PlayerIconButton(
+                systemImage: viewModel.isCurrentVideoFavorite ? "heart.fill" : "heart",
+                isActive: viewModel.isCurrentVideoFavorite,
+                help: viewModel.isCurrentVideoFavorite ? "お気に入りから外す" : "お気に入りに追加",
+                accessibilityLabel: "お気に入り"
+            ) {
+                viewModel.toggleCurrentVideoFavorite()
+            }
+
+            PlayerIconButton(
+                systemImage: viewModel.fillsScreen
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right",
+                isActive: viewModel.fillsScreen,
+                help: viewModel.fillsScreen ? "全体が収まる表示に戻す" : "画面いっぱいに広げる（黒帯を切り落とす）",
+                accessibilityLabel: "画面いっぱい"
+            ) {
+                viewModel.toggleFillsScreen()
+            }
 
             if PictureInPictureCoordinator.isSupported {
-                Button {
+                PlayerIconButton(
+                    systemImage: pictureInPicture.isActive ? "pip.exit" : "pip.enter",
+                    isActive: pictureInPicture.isActive,
+                    help: pictureInPicture.isActive ? "小窓をやめて戻す" : "ピクチャインピクチャ（P）",
+                    accessibilityLabel: "ピクチャインピクチャ"
+                ) {
                     pictureInPicture.toggle()
-                } label: {
-                    Image(systemName: pictureInPicture.isActive
-                          ? "pip.exit"
-                          : "pip.enter")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: playbackControlButtonWidth)
-                        .foregroundStyle(pictureInPicture.isActive ? Color.accentColor : Color.primary)
                 }
-                .buttonStyle(.plain)
                 .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
-                .help(pictureInPicture.isActive ? "小窓をやめて戻す" : "ピクチャインピクチャ（P）")
-                .accessibilityLabel("ピクチャインピクチャ")
             }
 
             playbackOptionsMenu
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .frame(maxWidth: playbackControlsMaxWidth)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .playerPanel()
+        // 暗い面に白で組むので、スライダーやメニューも暗い外観で描かせる。
+        .environment(\.colorScheme, .dark)
         .padding(.horizontal, playbackControlsHorizontalPadding)
         .padding(.bottom, playbackControlsBottomPadding)
     }
@@ -952,14 +982,19 @@ struct VideoPlayerView: View {
         } label: {
             HStack(spacing: 4) {
                 if viewModel.selectedSubtitleIndex != VideoPlayerViewModel.MediaTrackChoice.offIndex {
-                    Image(systemName: "captions.bubble.fill")
-                        .font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "captions.bubble")
+                        .font(.system(size: 11, weight: .regular))
                 }
                 Text(settings.rateLabel)
-                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
             }
+            .foregroundStyle(PlayerChrome.icon)
+            .padding(.horizontal, 6)
+            .frame(height: 30)
         }
         .menuStyle(.borderlessButton)
+        // メニューの文字がアクセントの青になるのを避け、他のボタンと同じ白にそろえる。
+        .tint(PlayerChrome.icon)
         .fixedSize()
         .help("再生速度・音声・字幕・自動再生")
         .accessibilityLabel("再生の設定")
@@ -986,11 +1021,11 @@ struct VideoPlayerView: View {
             )
 
             Text(formatTime(hoveredSeconds ?? 0))
-                .font(.caption2.monospacedDigit().weight(.semibold))
+                .font(.appMicro.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.white)
         }
         .padding(5)
-        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .playerPanel(cornerRadius: 8)
         .allowsHitTesting(false)
     }
 
@@ -1074,7 +1109,7 @@ struct VideoPlayerView: View {
                 .padding(8)
             }
             .frame(width: sidebarWidth)
-            .background(.regularMaterial)
+            .background(Color(white: 0.07))
             .offset(x: isSidebarVisible ? 0 : -sidebarWidth + triggerWidth)
         }
         .frame(width: isSidebarVisible ? sidebarWidth : triggerWidth)
@@ -1164,6 +1199,31 @@ struct VideoPlayerView: View {
         } else if MediaShortcutSettings.matches(.videoTogglePictureInPicture, press: press) {
             pictureInPicture.toggle()
             return .handled
+        } else if MediaShortcutSettings.matches(.videoVolumeUp, press: press) {
+            viewModel.adjustVolume(by: volumeStep)
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoVolumeDown, press: press) {
+            viewModel.adjustVolume(by: -volumeStep)
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleMute, press: press) {
+            viewModel.toggleMute()
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleFavorite, press: press) {
+            viewModel.toggleCurrentVideoFavorite()
+            revealCornerControls()
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoStepBackward, press: press) {
+            viewModel.stepFrame(by: -1)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoStepForward, press: press) {
+            viewModel.stepFrame(by: 1)
+            return .handled
+        } else if MediaShortcutSettings.matches(.videoToggleFillScreen, press: press) {
+            viewModel.toggleFillsScreen()
+            return .handled
         }
 
         return .ignored
@@ -1182,4 +1242,250 @@ struct VideoPlayerView: View {
         }
         return String(format: "%d:%02d", totalSeconds / secondsPerMinute, totalSeconds % secondsPerMinute)
     }
+}
+
+// MARK: - 一覧から開始する巡回メニュー
+
+struct LibraryTourMenu: View {
+  let videos: [VideoItem]
+  let dataManager: LibraryViewModel
+  let beforePlay: () -> Void
+  @EnvironmentObject private var watchState: WatchStateStore
+  @EnvironmentObject private var coordinator: PlaybackCoordinator
+  @State private var errorMessage: String?
+
+  var body: some View {
+    Menu {
+      Section("新しい楽しみ方") {
+        Button("マイチャンネル（全動画アルバム）") {
+          start { try PlaybackTourSession.channelSession(albums: dataManager.albums, videos: dataManager.videos) }
+        }
+        Menu("気分でミックス") {
+          ForEach(PlaybackTourSession.Mood.allCases, id: \.rawValue) { mood in
+            Button(mood.rawValue) {
+              start {
+                try PlaybackTourSession.mix(videos: videos, mood: mood,
+                  seenIDs: Set(watchState.historyOrder).union(watchState.progress.keys))
+              }
+            }
+          }
+        }
+        Menu("時間ぴったり再生") {
+          ForEach([5, 10, 15, 30], id: \.self) { minutes in
+            Button("\(minutes)分") {
+              start { try PlaybackTourSession.timed(videos: videos, seconds: Double(minutes * 60)) }
+            }
+          }
+        }
+        Button("ストックした場面を再生") {
+          start { try PlaybackTourSession.highlights(videos: videos, urlForVideo: dataManager.fileURL) }
+        }
+      }
+      Section("プレビュー巡回") {
+        Button("15秒ずつ試聴") { startPreview(seconds: 15) }
+        Button("30秒ずつ試聴") { startPreview(seconds: 30) }
+      }
+      Section("採用した区間を楽しむ") {
+        Button("シーンシャッフル") {
+          start { try PlaybackTourSession.scenes(videos: videos, urlForVideo: dataManager.fileURL) }
+        }
+      }
+    } label: {
+      Label("お楽しみ再生", systemImage: "play.rectangle.on.rectangle")
+    }
+    .help("チャンネル・気分ミックス・時間指定・ストック・プレビュー巡回・シーン再生")
+    .disabled(videos.isEmpty)
+    .alert("再生を開始できません", isPresented: Binding(
+      get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+    )) {
+      Button("閉じる", role: .cancel) { errorMessage = nil }
+    } message: { Text(errorMessage ?? "") }
+  }
+
+  private func startPreview(seconds: Double) {
+    start { try PlaybackTourSession.preview(videos: videos, seconds: seconds) }
+  }
+
+  private func start(_ makeSession: () throws -> PlaybackTourSession) {
+    do {
+      let session = try makeSession()
+      beforePlay()
+      coordinator.startTour(session)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+}
+
+// MARK: - 履歴を更新せずに区間を試す専用プレイヤー
+
+struct PlaybackTourView: View {
+  @StateObject private var model: PlaybackTourViewModel
+  @EnvironmentObject private var coordinator: PlaybackCoordinator
+  private let session: PlaybackTourSession
+  private let dataManager: LibraryViewModel
+
+  init(session: PlaybackTourSession, dataManager: LibraryViewModel) {
+    self.session = session
+    self.dataManager = dataManager
+    _model = StateObject(wrappedValue: PlaybackTourViewModel(session: session, dataManager: dataManager))
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 5) {
+          Text(model.channelName.map { "マイチャンネル · \($0)" } ?? session.title).font(.appTitle.bold())
+          Text(model.currentEntry?.video.originalFilename ?? "")
+            .font(.appBody).lineLimit(1).truncationMode(.middle)
+        }
+        Spacer()
+        Text("\(model.index + 1) / \(session.entries.count)").monospacedDigit()
+        Button("一覧に戻る", systemImage: "xmark") { coordinator.close() }
+          .keyboardShortcut(.escape, modifiers: [])
+      }
+      .padding(20)
+
+      ZStack {
+        Color.black
+        PlayerLayerContainerView(player: model.player)
+        if model.isLoading {
+          ProgressView("動画を読み込み中…").tint(.white)
+        }
+        if let error = model.errorMessage {
+          VStack(spacing: 16) {
+            Text("この項目を再生できません").font(.appTitle.bold())
+            Text(error).multilineTextAlignment(.center)
+            HStack {
+              Button("再試行") { model.retry() }
+              Button("次へ進む") { model.next() }
+            }
+          }
+          .padding(24)
+          .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 16))
+        }
+        if model.isFinished {
+          VStack(spacing: 16) {
+            Text("一巡しました").font(.appLargeTitle.bold())
+            Text("\(session.entries.count)件の区間の巡回が終了しました．")
+            HStack {
+              Button("もう一度巡回") { model.restart() }
+              Button("一覧に戻る") { coordinator.close() }
+            }
+          }
+          .padding(24)
+          .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 16))
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      VStack(spacing: 12) {
+        ProgressView(value: model.progress)
+        HStack(spacing: 16) {
+          Button(model.isChannelMode ? "前のCH" : "前へ", systemImage: "backward.end") { model.previous() }
+            .keyboardShortcut(model.isChannelMode ? .upArrow : .leftArrow, modifiers: [])
+            .disabled(!model.isChannelMode && model.index == 0)
+          Button(model.isPlaying ? "一時停止" : "再生", systemImage: model.isPlaying ? "pause.fill" : "play.fill") {
+            model.togglePlayback()
+          }
+          .keyboardShortcut(.space, modifiers: [])
+          .disabled(model.isLoading || model.isFinished || model.errorMessage != nil)
+          Button(model.isChannelMode ? "次のCH" : "次へ", systemImage: "forward.end") { model.next() }
+            .keyboardShortcut(model.isChannelMode ? .downArrow : .rightArrow, modifiers: [])
+            .disabled(model.isFinished)
+          Text("残り\(Int(ceil(model.sessionRemaining)))秒").monospacedDigit()
+          Spacer()
+          Button(model.isMuted ? "消音を解除" : "消音", systemImage: model.isMuted ? "speaker.slash" : "speaker.wave.2") {
+            model.isMuted.toggle()
+          }
+          .labelStyle(.iconOnly)
+          .accessibilityLabel(model.isMuted ? "消音を解除" : "消音")
+          Slider(value: $model.volume, in: 0...1)
+            .frame(width: 90)
+            .accessibilityLabel("音量")
+          Button("このまま見る", systemImage: "play.rectangle") { continueWatching() }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(model.isLoading || model.errorMessage != nil || model.isFinished)
+        }
+        HStack {
+          if let entry = model.currentEntry {
+            StockMomentButton(video: entry.video, time: model.currentTime,
+              duration: entry.video.duration, dataManager: dataManager)
+              .disabled(model.isLoading || model.errorMessage != nil || model.isFinished)
+          }
+          Spacer()
+          if session.kind == .timed {
+            Text("予定：\(Int((session.requestedSeconds ?? 0) / 60))分 · 一時停止・読み込み・手動送りで終了時刻は変わります．")
+              .font(.appCaption)
+          }
+        }
+        Text("試聴中は視聴位置・履歴を変更しません．「このまま見る」で通常再生へ切り替わります．")
+          .font(.appCaption).foregroundStyle(.white.opacity(0.75))
+      }
+      .padding(20)
+    }
+    .foregroundStyle(.white)
+    .background(Color.black)
+    .tint(NeomorphicTheme.accent)
+    .buttonStyle(.bordered)
+    .preferredColorScheme(.dark)
+    .onAppear {
+      coordinator.setPlaybackActive(false)
+      model.start()
+    }
+    .onChange(of: model.isPlaying) { _, playing in coordinator.setPlaybackActive(playing) }
+    .onChange(of: model.isFinished) { _, finished in
+      if finished { coordinator.setPlaybackActive(false) }
+    }
+    .onDisappear { model.cleanup() }
+  }
+
+  private func continueWatching() {
+    guard let entry = model.currentEntry else { return }
+    let time = model.currentTime
+    model.cleanup()
+    var seen = Set<UUID>()
+    let source = model.isChannelMode ? session.channels[model.index].videos : session.entries.map(\.video)
+    let videos = source.filter { seen.insert($0.id).inserted }
+    coordinator.playSingle(playlist: videos, current: entry.video, startAt: time)
+  }
+}
+
+// MARK: - 再生中の前後10秒をワンアクションで保存
+
+struct StockMomentButton: View {
+  let video: VideoItem
+  let time: Double
+  let duration: Double
+  let dataManager: LibraryViewModel
+  var compact = false
+  @State private var notice: String?
+  @State private var errorMessage: String?
+
+  var body: some View {
+    Button {
+      do {
+        guard let url = dataManager.fileURL(for: video) else { throw PlaybackTourError.missingFile }
+        try HighlightStore.capture(url: url, time: time, duration: duration)
+        notice = "前後10秒を保存しました．一覧の「お楽しみ再生 → ストックした場面を再生」から見返せます．"
+      } catch {
+        errorMessage = "場面を保存できませんでした．\(error.localizedDescription)"
+      }
+    } label: {
+      if compact { Image(systemName: "bookmark.badge.plus") }
+      else { Label("場面を保存", systemImage: "bookmark.badge.plus") }
+    }
+    .keyboardShortcut("b", modifiers: [.command])
+    .accessibilityLabel("場面を保存")
+    .help("現在位置の前後10秒をストックします（⌘B）")
+    .popover(isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+      Text(notice ?? "").font(.appBody).padding(16).frame(width: 300)
+    }
+    .alert("保存できません", isPresented: Binding(
+      get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+    )) {
+      Button("閉じる", role: .cancel) { errorMessage = nil }
+    } message: { Text(errorMessage ?? "") }
+  }
 }

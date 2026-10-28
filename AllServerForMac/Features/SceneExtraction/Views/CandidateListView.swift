@@ -33,7 +33,7 @@ struct CandidateListView: View {
   }
 
   var body: some View {
-    GroupBox("候補区間") {
+    SectionCard(title: "候補区間") {
       if candidates.isEmpty {
         ContentUnavailableView(
           "候補がありません",
@@ -61,9 +61,9 @@ struct CandidateListView: View {
     HStack(spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text(positionText)
-          .font(.headline.monospacedDigit())
+          .font(.appHeadline.monospacedDigit())
         Text("判定済み \(reviewedCount)／\(candidates.count)")
-          .font(.caption)
+          .font(.appCaption)
           .foregroundStyle(.secondary)
       }
       .frame(minWidth: 105, alignment: .leading)
@@ -129,9 +129,9 @@ struct CandidateListView: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 10) {
           Text("ピーク \(timeText(candidate.peakTime))")
-            .font(.headline)
+            .font(.appBody.weight(.semibold))
           Text(String(format: "score %.3f", candidate.score))
-            .font(.system(.caption, design: .monospaced))
+            .font(.system(size: 12, design: .monospaced))
             .foregroundStyle(.secondary)
           labelBadge(candidate.userLabel)
         }
@@ -156,20 +156,21 @@ struct CandidateListView: View {
             format: .number.precision(.fractionLength(2))
           )
         }
-        .font(.system(.caption, design: .monospaced))
+        .font(.system(size: 12, design: .monospaced))
         .textFieldStyle(.roundedBorder)
         .frame(maxWidth: 245)
 
         Text(candidate.reason.joined(separator: "，"))
-          .font(.caption)
+          .font(.appCaption)
+          .foregroundStyle(NeomorphicTheme.muted)
           .lineLimit(1)
       }
 
       Spacer()
 
       Text(String(format: "A %.2f  B %.2f  C %.2f", candidate.audioScore, candidate.visualScore, candidate.transitionScore))
-        .font(.system(.caption2, design: .monospaced))
-        .foregroundStyle(.secondary)
+        .font(.system(size: 11, design: .monospaced))
+        .foregroundStyle(NeomorphicTheme.muted)
 
       HStack(spacing: 5) {
         ForEach(CandidateLabel.allCases, id: \.self) { label in
@@ -189,7 +190,12 @@ struct CandidateListView: View {
     .padding(10)
     .background(
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(candidate.id == selectedCandidateID ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.08))
+        .fill(candidate.id == selectedCandidateID ? NeomorphicTheme.selection : NeomorphicTheme.control)
+    )
+    .overlay(
+      // 選んでいる行は、面の明るさに加えて細い青の縁で示す（選択の目印）。
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(candidate.id == selectedCandidateID ? NeomorphicTheme.accent.opacity(0.8) : Color.clear, lineWidth: 1)
     )
     .contentShape(Rectangle())
     .onTapGesture {
@@ -209,15 +215,16 @@ struct CandidateListView: View {
     } label: {
       VStack(spacing: 2) {
         Label(label.displayName, systemImage: labelIcon(label))
-          .font(.headline)
+          .font(.appHeadline)
         Text("キー \(shortcut)")
-          .font(.caption2.monospaced())
+          .font(.appMicro.monospaced())
           .opacity(0.85)
       }
       .frame(minWidth: 86)
       .padding(.vertical, 5)
     }
-    .buttonStyle(.borderedProminent)
+    // 塗りつぶさず、色は文字と薄い面だけにする（3色の塗りが並ぶと、判定ボタンが画面で一番目立ってしまう）。
+    .buttonStyle(.bordered)
     .tint(labelColor(label))
   }
 
@@ -250,13 +257,13 @@ struct CandidateListView: View {
 
   private func labelBadge(_ label: CandidateLabel?) -> some View {
     Text(label?.displayName ?? "未判定")
-      .font(.caption2.weight(.semibold))
-      .foregroundStyle(label.map(labelColor) ?? Color.secondary)
+      .font(.appMicro.weight(.semibold))
+      .foregroundStyle(label.map(labelColor) ?? NeomorphicTheme.muted)
       .padding(.horizontal, 7)
       .padding(.vertical, 2)
       .background(
         Capsule()
-          .fill((label.map(labelColor) ?? Color.secondary).opacity(0.12))
+          .fill((label.map(labelColor) ?? NeomorphicTheme.muted).opacity(0.14))
       )
   }
 
@@ -297,11 +304,11 @@ struct CandidateListView: View {
   private func labelColor(_ label: CandidateLabel) -> Color {
     switch label {
     case .accepted:
-      return .green
+      return NeomorphicTheme.online
     case .rejected:
-      return .red
+      return NeomorphicTheme.negative
     case .uncertain:
-      return .orange
+      return NeomorphicTheme.caution
     }
   }
 

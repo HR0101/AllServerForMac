@@ -121,6 +121,13 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
     case videoRateDown
     case videoRateUp
     case videoTogglePictureInPicture
+    case videoVolumeUp
+    case videoVolumeDown
+    case videoToggleMute
+    case videoToggleFavorite
+    case videoStepBackward
+    case videoStepForward
+    case videoToggleFillScreen
     case variantNext
     case variantPrevious
     case variantRandom
@@ -181,6 +188,13 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRateDown: return "動画: 再生速度を下げる"
         case .videoRateUp: return "動画: 再生速度を上げる"
         case .videoTogglePictureInPicture: return "動画: ピクチャインピクチャ"
+        case .videoVolumeUp: return "動画: 音量を上げる"
+        case .videoVolumeDown: return "動画: 音量を下げる"
+        case .videoToggleMute: return "動画: ミュート切替"
+        case .videoToggleFavorite: return "動画: お気に入り切替"
+        case .videoStepBackward: return "動画: 1コマ戻る"
+        case .videoStepForward: return "動画: 1コマ進む"
+        case .videoToggleFillScreen: return "動画: 画面いっぱい切替"
         case .variantNext: return "差分: 次のバージョンへ"
         case .variantPrevious: return "差分: 前のバージョンへ"
         case .variantRandom: return "差分: ランダムなバージョンへ"
@@ -237,6 +251,13 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRateDown: return "再生速度を1段下げる"
         case .videoRateUp: return "再生速度を1段上げる"
         case .videoTogglePictureInPicture: return "他アプリの上に浮かぶ小窓で再生する／戻す"
+        case .videoVolumeUp: return "音量を上げる"
+        case .videoVolumeDown: return "音量を下げる"
+        case .videoToggleMute: return "ミュートを切り替え"
+        case .videoToggleFavorite: return "観ている動画のお気に入りを切り替え"
+        case .videoStepBackward: return "一時停止して1コマ戻る"
+        case .videoStepForward: return "一時停止して1コマ進む"
+        case .videoToggleFillScreen: return "黒帯を切り落として画面いっぱいに広げる／元に戻す"
         case .variantNext: return "次の差分バージョンへ切り替え"
         case .variantPrevious: return "前の差分バージョンへ切り替え"
         case .variantRandom: return "ランダムな差分バージョンへ切り替え"
@@ -297,6 +318,22 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         case .videoRateDown: return [MediaShortcutKey(rawValue: ",")]
         case .videoRateUp: return [MediaShortcutKey(rawValue: ".")]
         case .videoTogglePictureInPicture: return [MediaShortcutKey(rawValue: "p")]
+        // 通常再生で空いていたのは ↑↓ と Z・C だけだったので、使用頻度の高い音量を矢印に置く。
+        case .videoVolumeUp: return [.upArrow]
+        case .videoVolumeDown: return [.downArrow]
+        // ミュートは M が通用する。同時再生も M を音声ミキサーに直接割り当てているが、
+        // あちらは `.videoToggleMute` を配っていない別画面なので、押し合いにはならない。
+        case .videoToggleMute: return [.m]
+        // お気に入り（Okiniiri）の O。一覧側は V だが、V は差分切り替え再生が使っていて、
+        // 環境設定の重複チェックは動画と差分をまとめて見るため、既定のまま警告が出てしまう。
+        // 差分切り替え再生は Q〜O を「何本目を出すか」に直接割り当てているので O とも重なるが、
+        // あちらは専用のキー処理を持つ別画面で、E・R・T・I も同じように重なっている。
+        case .videoToggleFavorite: return [MediaShortcutKey(rawValue: "o")]
+        // Z と C は X（差分の削除マーク）を挟んで左右に並ぶ。左が戻る、右が進む。
+        case .videoStepBackward: return [MediaShortcutKey(rawValue: "z")]
+        case .videoStepForward: return [MediaShortcutKey(rawValue: "c")]
+        // W（wide）。これも差分切り替え再生の直接選択と重なるが、事情は O と同じ。
+        case .videoToggleFillScreen: return [MediaShortcutKey(rawValue: "w")]
         case .variantNext: return [MediaShortcutKey(rawValue: "n")]
         case .variantPrevious: return [MediaShortcutKey(rawValue: "b")]
         case .variantRandom: return [MediaShortcutKey(rawValue: "v")]
@@ -351,7 +388,14 @@ enum MediaShortcutAction: String, CaseIterable, Identifiable {
         .videoCycleRepeat,
         .videoRateDown,
         .videoRateUp,
-        .videoTogglePictureInPicture
+        .videoTogglePictureInPicture,
+        .videoVolumeUp,
+        .videoVolumeDown,
+        .videoToggleMute,
+        .videoToggleFavorite,
+        .videoStepBackward,
+        .videoStepForward,
+        .videoToggleFillScreen
     ]
 
     /// 差分切り替え再生だけで使うもの。再生・シーク・閉じるは `videoActions` と共通なので重ねない。
