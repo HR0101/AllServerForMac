@@ -7,7 +7,7 @@ struct FeatureScoreChartView: View {
   let features: [FeatureVector]
 
   var body: some View {
-    GroupBox("特徴量スコア") {
+    SectionCard(title: "特徴量スコア") {
       if features.isEmpty {
         ContentUnavailableView(
           "解析結果がありません",
@@ -45,6 +45,13 @@ struct FeatureScoreChartView: View {
           .foregroundStyle(by: .value("系列", "合成"))
           .lineStyle(StrokeStyle(lineWidth: 2.5))
         }
+        // 音声・映像・遷移は明るさの違う無彩色にし、結論である合成スコアだけを青の太線にする。
+        .chartForegroundStyleScale([
+          "音声 A": NeomorphicTheme.ink.opacity(0.38),
+          "映像 B": NeomorphicTheme.ink.opacity(0.58),
+          "遷移 C": NeomorphicTheme.ink.opacity(0.80),
+          "合成": NeomorphicTheme.accent,
+        ])
         .chartYScale(domain: 0...1)
         .chartXAxisLabel("時刻［秒］")
         .chartYAxisLabel("正規化スコア")
