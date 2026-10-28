@@ -11,6 +11,10 @@ struct MainSidebarView: View {
     @Binding var isShowingPreferences: Bool
     @Binding var isShowingStorageManager: Bool
 
+    @State private var albumSearchText = ""
+    @State private var albumFilter = "すべて"
+    @FocusState private var isAlbumSearchFocused: Bool
+
     @State private var isShowingAddAlbumSheet = false
     @State private var newAlbumName = ""
     @State private var newAlbumType: AlbumType = .video
@@ -45,8 +49,8 @@ struct MainSidebarView: View {
     // キャッシュなしだと「アルバムをクリックするたびにライブラリ全件を再集計する」状態になっていた。
     // dataManager.videos / .albums が実際に変化したときだけ refreshSidebarCaches() で更新する。
     private let sidebarContentPadding: CGFloat = 10
-    private let sidebarTopPadding: CGFloat = 42
-    private let sidebarRowHeight: CGFloat = 28
+    private let sidebarTopPadding: CGFloat = 12
+    private let sidebarRowHeight: CGFloat = 32
     private let sidebarRowCornerRadius: CGFloat = 7
     private let sidebarIconWidth: CGFloat = 16
     // 行の左余白。アイコンが左端ギリギリに見えないよう、右側の余白より少し広めにとる。
@@ -68,8 +72,13 @@ struct MainSidebarView: View {
 
     var body: some View {
         ZStack {
-            CommandDeckBackground()
-            sidebarList
+            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+            VStack(spacing: 0) {
+              productIdentity
+              albumSearchControls
+              Divider().padding(.horizontal, sidebarContentPadding)
+              sidebarList
+            }
             if isSidebarTargeted {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(NeomorphicTheme.accent.opacity(0.08))
@@ -144,7 +153,7 @@ struct MainSidebarView: View {
         let buttonsWidth: CGFloat = isAlbumSelectionMode ? 116 : 60
         return HStack(spacing: 0) {
             Text("アルバム")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(.system(size: 11, weight: .bold, design: .default))
                 .foregroundStyle(NeomorphicTheme.muted)
                 .padding(.leading, 10)
                 .frame(width: sidebarRowWidth - buttonsWidth, alignment: .leading)
@@ -204,6 +213,99 @@ struct MainSidebarView: View {
         }
     }
 
+    private var productIdentity: some View {
+      HStack(spacing: 11) {
+        Image(systemName: "play.rectangle.fill")
+          .font(.system(size: 21, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 42, height: 42)
+          .background(NeomorphicTheme.accent.gradient, in: RoundedRectangle(cornerRadius: 12))
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Mac Media Server")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(NeomorphicTheme.ink)
+          Text("あなたのメディアを，このMacから")
+            .font(.system(size: 11))
+            .foregroundStyle(NeomorphicTheme.muted)
+        }
+        Spacer(minLength: 0)
+      }
+      .frame(width: sidebarRowWidth)
+      .padding(.horizontal, sidebarContentPadding)
+      .padding(.top, 20)
+      .padding(.bottom, 8)
+      .accessibilityElement(children: .combine)
+    }
+
+    /// スクロールしても検索の入口が隠れないように固定します．
+    private var albumSearchControls: some View {
+      VStack(spacing: 10) {
+        HStack(spacing: 8) {
+          Image(systemName: "magnifyingglass")
+            .foregroundStyle(NeomorphicTheme.muted)
+          TextField("アルバム・フォルダを検索", text: $albumSearchText)
+            .textFieldStyle(.plain)
+            .focused($isAlbumSearchFocused)
+            .onSubmit { openFirstAlbumSearchResult() }
+            .onExitCommand {
+              albumSearchText = ""
+              isAlbumSearchFocused = false
+            }
+            .help("名前やフォルダ名で検索します．Enterで先頭の結果を開き，Escで検索を解除します．")
+            .accessibilityLabel("アルバム・フォルダを検索")
+          if !albumSearchText.isEmpty {
+            Button {
+              albumSearchText = ""
+              isAlbumSearchFocused = true
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .help("アルバム検索を解除")
+            .accessibilityLabel("アルバム検索を解除")
+          }
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        Picker("アルバムの種類", selection: $albumFilter) {
+          Text("すべて").tag("すべて")
+          Text("動画").tag("動画")
+          Text("画像").tag("画像")
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+      }
+      .frame(width: sidebarRowWidth)
+      .padding(.horizontal, sidebarContentPadding)
+      .padding(.top, 12)
+      .padding(.bottom, 12)
+    }
+
+    private func openFirstAlbumSearchResult() {
+      guard !isAlbumSelectionMode, !normalizedAlbumQuery.isEmpty,
+            let album = matchingAlbums.first else { return }
+      selection = .album(album.id)
+      isAlbumSearchFocused = false
+    }
+
+    private var normalizedAlbumQuery: String {
+      albumSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// フルパスを検索するため，閉じたフォルダの中も検索対象になります．
+    private var matchingAlbums: [Album] {
+      let terms = normalizedAlbumQuery.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+      return dataManager.albums.filter { album in
+        guard album.name != LibraryViewModel.allVideosAlbumName,
+              album.name != LibraryViewModel.allPhotosAlbumName else { return false }
+        guard albumFilter == "すべて" || (albumFilter == "画像" ? album.type == .photo : album.type != .photo) else {
+          return false
+        }
+        return terms.allSatisfy { album.name.localizedStandardContains($0) }
+      }
+      .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
     private var sidebarList: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 10) {
@@ -227,16 +329,56 @@ struct MainSidebarView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     albumSectionHeader
 
-                    // 動画アルバムと画像アルバムは別々のツリーとして棲み分ける
-                    // （フォルダはアルバム名の "/" 区切りだけで表現されるため、混在すると
-                    // 同名フォルダで動画と画像が同じ階層に混ざって見えてしまう）。
-                    // ツリー自体は viewModel.videoAlbumNodes / viewModel.photoAlbumNodes （refreshSidebarCaches() で更新）を使う。
-                    ForEach(viewModel.videoAlbumNodes) { node in
-                        sidebarAlbumNodeRow(node, isPhotoTree: false)
-                    }
-
-                    ForEach(viewModel.photoAlbumNodes) { node in
-                        sidebarAlbumNodeRow(node, isPhotoTree: true)
+                    if !normalizedAlbumQuery.isEmpty {
+                      Text("\(matchingAlbums.count)件のアルバム · Enterで先頭を開く")
+                        .font(.caption)
+                        .foregroundStyle(NeomorphicTheme.muted)
+                        .padding(.leading, sidebarRowLeadingPadding)
+                      if matchingAlbums.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                          Text("一致するアルバムはありません")
+                            .font(.callout.weight(.semibold))
+                          Text("名前やフォルダ名を変えて検索してください．")
+                            .font(.caption)
+                            .foregroundStyle(NeomorphicTheme.muted)
+                          Button("検索と絞り込みを解除") {
+                            albumSearchText = ""
+                            albumFilter = "すべて"
+                          }
+                        }
+                        .padding(16)
+                        .frame(width: sidebarRowWidth, alignment: .leading)
+                      }
+                      ForEach(matchingAlbums) { album in
+                        VStack(alignment: .leading, spacing: 0) {
+                          sidebarAlbumRow(
+                            album: album,
+                            title: album.name.components(separatedBy: "/").last ?? album.name,
+                            systemImage: iconForAlbum(album)
+                          )
+                          Text(album.name)
+                            .font(.caption2)
+                            .foregroundStyle(NeomorphicTheme.muted)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.leading, sidebarRowLeadingPadding + sidebarIconWidth + 8)
+                            .frame(width: sidebarRowWidth, alignment: .leading)
+                        }
+                        .help(album.name)
+                      }
+                    } else {
+                      if albumFilter != "画像" {
+                        sidebarSectionTitle("動画アルバム")
+                        ForEach(viewModel.videoAlbumNodes) { node in
+                          sidebarAlbumNodeRow(node, isPhotoTree: false)
+                        }
+                      }
+                      if albumFilter != "動画" {
+                        sidebarSectionTitle("画像アルバム")
+                        ForEach(viewModel.photoAlbumNodes) { node in
+                          sidebarAlbumNodeRow(node, isPhotoTree: true)
+                        }
+                      }
                     }
                 }
             }
@@ -338,7 +480,7 @@ struct MainSidebarView: View {
                 .foregroundStyle(NeomorphicTheme.ink)
                 .frame(width: sidebarIconWidth)
             Text(title)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .default))
                 .foregroundStyle(NeomorphicTheme.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -358,19 +500,19 @@ struct MainSidebarView: View {
         .contentShape(RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous)
-                .fill(isActive ? NeomorphicTheme.accent.opacity(0.16) : Color.clear)
+                .fill(isActive ? NeomorphicTheme.selection : Color.clear)
         )
     }
 
     private func sidebarPlainLabel(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .font(.system(size: 12, weight: .semibold, design: .default))
             .foregroundStyle(NeomorphicTheme.ink)
     }
 
     private func sidebarSectionTitle(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .font(.system(size: 11, weight: .bold, design: .default))
             .foregroundStyle(NeomorphicTheme.muted)
             .padding(.leading, sidebarRowLeadingPadding)
             .padding(.trailing, sidebarRowTrailingPadding)
@@ -386,7 +528,7 @@ struct MainSidebarView: View {
                 .foregroundStyle(NeomorphicTheme.ink)
                 .frame(width: sidebarIconWidth)
             Text(title)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .default))
                 .foregroundStyle(NeomorphicTheme.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -407,9 +549,7 @@ struct MainSidebarView: View {
             .padding(.vertical, 2)
             .background(
                 Capsule()
-                    .fill(NeomorphicTheme.surface)
-                    .shadow(color: .white.opacity(0.8), radius: 2, x: -1, y: -1)
-                    .shadow(color: NeomorphicTheme.shadow.opacity(0.18), radius: 3, x: 2, y: 2)
+                    .fill(NeomorphicTheme.accent.opacity(0.07))
             )
     }
 
@@ -425,6 +565,7 @@ struct MainSidebarView: View {
 
         return AnyView(Button {
             selection = .album(album.id)
+            isAlbumSearchFocused = false
         } label: {
             sidebarRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album), isActive: selection == .album(album.id))
         }
@@ -459,7 +600,6 @@ struct MainSidebarView: View {
     /// ドラッグ&ドロップやフォルダの識別（ハイライト用キー）を型ごとに分離するために使う。
     private func sidebarAlbumNodeRow(_ node: SidebarAlbumNode, isPhotoTree: Bool) -> AnyView {
         if node.children.isEmpty, let album = node.album {
-            guard nonTrashedCount(in: album) > 0 else { return AnyView(EmptyView()) }
             return sidebarAlbumRow(album: album, title: node.name, systemImage: iconForAlbum(album))
         } else {
             let key = dropKey(forPath: node.id, isPhotoTree: isPhotoTree)

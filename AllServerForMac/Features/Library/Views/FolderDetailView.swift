@@ -56,6 +56,10 @@ struct FolderDetailView: View {
         )
 
         return VStack(spacing: 0) {
+            LibraryPageHeader(
+              title: path.components(separatedBy: "/").last ?? path,
+              subtitle: "フォルダ · \(path)", count: context.entries.count
+            )
             if node == nil {
                 ContentUnavailableView(
                     "フォルダが見つかりません",
@@ -153,7 +157,7 @@ struct FolderDetailView: View {
     private func sectionTitle(_ title: String, count: Int) -> some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(.system(size: 12, weight: .bold, design: .default))
                 .foregroundStyle(.secondary)
             Text("\(count)")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -186,7 +190,7 @@ struct FolderDetailView: View {
                     )
                 } label: {
                     Text(part)
-                        .font(.system(size: 12, weight: isLast ? .bold : .medium, design: .rounded))
+                        .font(.system(size: 12, weight: isLast ? .bold : .medium, design: .default))
                         .foregroundStyle(isLast ? Color.primary : Color.secondary)
                 }
                 .buttonStyle(.plain)
@@ -454,7 +458,7 @@ struct FolderEntryTile: View {
         .padding(MediaGridLayout.itemInset)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isHovering ? Color.primary.opacity(0.06) : Color.clear)
+                .fill(isHovering ? NeomorphicTheme.hover : Color.clear)
         )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { isHovering = $0 }

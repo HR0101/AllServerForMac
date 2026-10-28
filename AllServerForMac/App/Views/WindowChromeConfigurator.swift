@@ -34,9 +34,8 @@ final class WindowChromeView: NSView {
     window.appearance = NSAppearance(
       named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua
     )
-    window.backgroundColor = NeomorphicTheme.isDarkBase
-      ? NSColor(red: 0.08, green: 0.085, blue: 0.09, alpha: 1.0)
-      : NSColor(red: 0.89, green: 0.92, blue: 0.93, alpha: 1.0)
+    window.isOpaque = false
+    window.backgroundColor = .clear
     window.toolbarStyle = .unifiedCompact
     window.toolbar?.isVisible = !isToolbarHidden
   }

@@ -38,8 +38,14 @@ struct ContentView: View {
             // ライブラリ画面を外した瞬間に素の（＝黒い）ウィンドウ背景が覗かないよう、
             // 常駐する下地を1枚敷いておく。上端の黒帯対策の要はこの下地とウィンドウ設定であって、
             // ライブラリ画面を出しっぱなしにすることではない。
-            NeomorphicTheme.background
+            if shouldShowLibraryView {
+              GlassWindowBackground()
+                .overlay(appSettings.neomorphicDarkBase ? Color.black.opacity(NeomorphicTheme.darkGlassTintOpacity) : Color.white.opacity(NeomorphicTheme.lightGlassTintOpacity))
+                .id(appSettings.neomorphicDarkBase)
                 .ignoresSafeArea()
+            } else {
+              Color.black.ignoresSafeArea()
+            }
 
             if let error = dataManager.storageInitializationError {
                 LibraryStorageInitializationErrorView(error: error)
@@ -66,7 +72,7 @@ struct ContentView: View {
         // ウィンドウのクロム設定はライブラリ画面の有無に関わらず効かせる必要があるため、
         // ライブラリ画面ではなくこの常駐の階層に付ける。
         .toolbar(isToolbarHidden ? .hidden : .automatic, for: .windowToolbar)
-        .toolbarBackground(NeomorphicTheme.background, for: .windowToolbar)
+        .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
         .toolbarBackground(
             isToolbarHidden ? .hidden : .visible,
             for: .windowToolbar

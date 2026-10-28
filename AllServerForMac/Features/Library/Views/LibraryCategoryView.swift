@@ -126,6 +126,24 @@ struct LibraryCategoryView: View {
         Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
     }
 
+    private var pageTitle: String {
+      switch kind {
+      case .favorites: return "お気に入り"
+      case .continueWatching: return "続きを見る"
+      case .history: return "再生履歴"
+      case .trash: return "ゴミ箱"
+      }
+    }
+
+    private var pageSubtitle: String {
+      switch kind {
+      case .favorites: return "もう一度楽しみたいメディアを，ひとつの場所に．"
+      case .continueWatching: return "前回の続きから，再生できます．"
+      case .history: return "最近再生した順に並んでいます．"
+      case .trash: return "削除したメディアを確認・復元できます．"
+      }
+    }
+
     var body: some View {
         // displayedItems（フィルタ＋ソート）は1回の描画につき1回だけ計算し、toolbar/sheetも含めて使い回す。
         let items = displayedItems
@@ -133,6 +151,7 @@ struct LibraryCategoryView: View {
         let selectedItems = items.filter { selectedVideoIDs.contains($0.id) && $0.mediaType == .video }
 
         return VStack(spacing: 0) {
+            LibraryPageHeader(title: pageTitle, subtitle: pageSubtitle, count: items.count)
             ZStack {
                 Color.clear
                     .contentShape(Rectangle())
@@ -805,13 +824,26 @@ struct LibraryCategoryView: View {
         }
     }
 
+    @ViewBuilder
     private var emptyState: some View {
+      if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        ContentUnavailableView {
+          Label("該当する項目がありません", systemImage: "magnifyingglass")
+        } description: {
+          Text("「\(searchText)」に一致するタイトルは見つかりませんでした．")
+        } actions: {
+          Button("検索を解除") { searchText = "" }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
         ContentUnavailableView(
-            emptyStateTitle,
-            systemImage: emptyStateSymbol,
-            description: Text(emptyStateDescription)
+          emptyStateTitle,
+          systemImage: emptyStateSymbol,
+          description: Text(emptyStateDescription)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
     }
 
     private var emptyStateTitle: String {

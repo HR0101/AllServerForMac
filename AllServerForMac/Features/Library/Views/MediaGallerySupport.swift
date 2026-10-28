@@ -4,9 +4,9 @@ import UniformTypeIdentifiers
 
 /// サムネイル一覧の余白。密度を高めつつ，選択枠とホバー状態を見分けられる最小限の間隔を保つ。
 enum MediaGridLayout {
-    static let spacing: CGFloat = 3
-    static let itemInset: CGFloat = 1
-    static let contentInset: CGFloat = 5
+    static let spacing: CGFloat = 10
+    static let itemInset: CGFloat = 4
+    static let contentInset: CGFloat = 16
 }
 
 /// 一覧グリッドの矢印キー移動。アルバム詳細とお気に入り/ゴミ箱の両方、

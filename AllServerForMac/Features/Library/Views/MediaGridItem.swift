@@ -133,7 +133,8 @@ struct MediaGridItem: View {
                 VStack(alignment: .leading, spacing: 2) {
                     if showTitle {
                         Text(video.originalFilename)
-                            .font(.caption)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(NeomorphicTheme.ink)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -151,8 +152,8 @@ struct MediaGridItem: View {
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(isSelected
-                      ? Color.accentColor.opacity(0.12)
-                      : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
+                      ? NeomorphicTheme.selection
+                      : (isHovering ? NeomorphicTheme.hover : Color.clear))
         )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering in
