@@ -26,8 +26,11 @@ struct FolderDetailView: View {
     @State private var pendingMoveVideoIDs: [UUID] = []
 
     private var columnCount: Int {
-        max(2, Int(appSettings.columnCount))
+        MediaGridLayout.columnCount(requested: appSettings.columnCount, availableWidth: gridWidth)
     }
+
+    /// グリッドを置く領域の幅。狭いウィンドウで列を自動的に減らすために測る。
+    @State private var gridWidth: CGFloat = 0
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
@@ -64,13 +67,13 @@ struct FolderDetailView: View {
                 ContentUnavailableView(
                     "フォルダが見つかりません",
                     systemImage: "questionmark.folder",
-                    description: Text("「\(path)」は移動または名前変更された可能性があります。")
+                    description: Text("「\(path)」は移動または名前変更された可能性があります．")
                 )
             } else if context.entries.isEmpty && context.directMedia.isEmpty {
                 ContentUnavailableView(
                     "このフォルダは空です",
                     systemImage: "folder",
-                    description: Text("アルバムをこのフォルダへドラッグすると、ここに表紙が並びます。")
+                    description: Text("アルバムをこのフォルダへドラッグすると，ここに表紙が並びます．")
                 )
             } else {
                 content(context)
@@ -105,7 +108,7 @@ struct FolderDetailView: View {
                 newAlbumNameForMove = ""
             }
         } message: {
-            Text("\(pendingMoveVideoIDs.count)件を新しく作るアルバムへ移動します。")
+            Text("\(pendingMoveVideoIDs.count)件を新しく作るアルバムへ移動します．")
         }
         .onDisappear {
             // 表紙のためにデコードした画像を持ち越さない（ディスクキャッシュは残るので戻れば即表示される）。
@@ -146,6 +149,7 @@ struct FolderDetailView: View {
             .padding(MediaGridLayout.contentInset)
             .padding(.bottom, 12)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
         .background(
             // 背景クリックで選択解除
             Color.clear
@@ -171,9 +175,23 @@ struct FolderDetailView: View {
     private var breadcrumb: some View {
         let parts = path.components(separatedBy: "/").filter { !$0.isEmpty }
         return HStack(spacing: 4) {
-            Image(systemName: isPhoto ? "photo.stack" : "film.stack")
-                .font(.system(size: 11, weight: .semibold))
+            // 一番左は「アルバム一覧」へ戻る入口。フォルダを掘ったあとに最上位へ一気に戻れる。
+            Button {
+                selection = .albums
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isPhoto ? "photo.stack" : "film.stack")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("アルバム")
+                        .font(.system(size: 12, weight: .medium, design: .default))
+                }
                 .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("アルバム一覧へ戻る")
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.tertiary)
 
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 if index > 0 {
@@ -325,11 +343,14 @@ struct FolderEntry: Identifiable {
 
     let id: String
     let title: String
-    let count: Int
-    /// 表紙モザイクに使う代表メディア（最大4件）。
-    let coverItems: [VideoItem]
     let isFolder: Bool
     let kind: Kind
+    /// 本数・合計時間・表紙など。サイドバーやアルバム一覧ページと同じ集計を使う。
+    let summary: AlbumSummary
+
+    var count: Int { summary.mediaCount }
+    /// 表紙モザイクに使う代表メディア（最大4件）。
+    var coverItems: [VideoItem] { summary.coverItems }
 }
 
 /// 1回の描画で必要なものをまとめて1度だけ計算する（body の中で何度も再計算しないため）。
@@ -337,7 +358,7 @@ struct FolderContent {
     let entries: [FolderEntry]
     let directMedia: [VideoItem]
 
-    static let coverLimit = 4
+    static let coverLimit = AlbumSummary.coverLimit
 
     init(
         node: SidebarAlbumNode?,
@@ -353,66 +374,42 @@ struct FolderContent {
             return
         }
 
-        var itemByID: [UUID: VideoItem] = [:]
-        itemByID.reserveCapacity(videos.count)
-        for video in videos where !video.isInTrash {
-            itemByID[video.id] = video
-        }
-
-        entries = node.children.compactMap { child in
-            let count = Self.mediaCount(of: child, itemByID: itemByID)
-            guard count > 0 else { return nil }
-
-            let covers = Self.coverItems(of: child, itemByID: itemByID)
-            if child.children.isEmpty, let album = child.album {
-                return FolderEntry(
-                    id: child.id,
-                    title: child.name,
-                    count: count,
-                    coverItems: covers,
-                    isFolder: false,
-                    kind: .album(album.id)
-                )
-            }
-            return FolderEntry(
-                id: child.id,
-                title: child.name,
-                count: count,
-                coverItems: covers,
-                isFolder: true,
-                kind: .folder(path: child.id)
-            )
-        }
+        let itemByID = AlbumSummary.itemIndex(videos)
+        entries = Self.entries(for: node.children, itemByID: itemByID, includeEmpty: false)
 
         directMedia = (node.album?.videoIDs ?? [])
             .compactMap { itemByID[$0] }
             .sorted(by: sortOrder, reversed: sortReversed, lastPlayed: lastPlayed, metadata: metadata)
     }
 
-    /// ゴミ箱を除いた、そのノード配下の総メディア数。
-    private static func mediaCount(of node: SidebarAlbumNode, itemByID: [UUID: VideoItem]) -> Int {
-        let own = (node.album?.videoIDs ?? []).reduce(0) { $0 + (itemByID[$1] == nil ? 0 : 1) }
-        return node.children.reduce(own) { $0 + mediaCount(of: $1, itemByID: itemByID) }
-    }
+    /// 子ノードをタイル1件ずつにする。アルバム一覧ページ（最上位）とフォルダ画面で同じ組み立てを使う。
+    /// includeEmpty が false だと、中身のないアルバム／フォルダは出さない。
+    static func entries(
+        for nodes: [SidebarAlbumNode],
+        itemByID: [UUID: VideoItem],
+        includeEmpty: Bool
+    ) -> [FolderEntry] {
+        nodes.compactMap { child in
+            let summary = AlbumSummary.of(node: child, itemByID: itemByID)
+            guard includeEmpty || summary.mediaCount > 0 else { return nil }
 
-    /// 表紙用の代表メディア。自分のアルバムを先に、足りなければ子孫を順に辿る
-    /// （サーバー・iOSクライアントの coverVideoID と同じ「先頭から」の考え方）。
-    private static func coverItems(of node: SidebarAlbumNode, itemByID: [UUID: VideoItem]) -> [VideoItem] {
-        var result: [VideoItem] = []
-
-        func collect(_ node: SidebarAlbumNode) {
-            for id in node.album?.videoIDs ?? [] {
-                guard result.count < coverLimit else { return }
-                if let item = itemByID[id] { result.append(item) }
+            if child.children.isEmpty, let album = child.album {
+                return FolderEntry(
+                    id: child.id,
+                    title: child.name,
+                    isFolder: false,
+                    kind: .album(album.id),
+                    summary: summary
+                )
             }
-            for child in node.children {
-                guard result.count < coverLimit else { return }
-                collect(child)
-            }
+            return FolderEntry(
+                id: child.id,
+                title: child.name,
+                isFolder: true,
+                kind: .folder(path: child.id),
+                summary: summary
+            )
         }
-
-        collect(node)
-        return result
     }
 }
 
@@ -423,6 +420,8 @@ struct FolderEntryTile: View {
     let entry: FolderEntry
     let dataManager: LibraryViewModel
     var showTitle: Bool = true
+    /// 名前の下に「動画 12本 · 38分」のような要約を出すか。
+    var showDetail: Bool = true
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -448,11 +447,20 @@ struct FolderEntryTile: View {
                 }
 
             if showTitle {
-                Text(entry.title)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 4)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.title)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if showDetail {
+                        Text(entry.summary.detailText(isFolder: entry.isFolder))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .padding(.horizontal, 4)
             }
         }
         .padding(MediaGridLayout.itemInset)
@@ -463,7 +471,10 @@ struct FolderEntryTile: View {
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { isHovering = $0 }
         .onTapGesture { onOpen() }
-        .help(entry.isFolder ? "フォルダ「\(entry.title)」を開く" : "アルバム「\(entry.title)」を開く")
+        .help(
+            (entry.isFolder ? "フォルダ「\(entry.title)」を開く" : "アルバム「\(entry.title)」を開く")
+                + "\n" + entry.summary.detailText(isFolder: entry.isFolder)
+        )
     }
 
     private func badge(systemImage: String) -> some View {
@@ -544,7 +555,7 @@ struct AlbumCoverMosaicView: View {
 
 /// モザイクの1マス。グリッドのセルと同じキャッシュから画像を取るので、
 /// 一度表示したメディアの表紙は生成し直しにならない。
-private struct CoverThumbnail: View {
+struct CoverThumbnail: View {
     let item: VideoItem
     let dataManager: LibraryViewModel
 

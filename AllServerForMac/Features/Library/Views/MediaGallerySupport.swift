@@ -7,6 +7,18 @@ enum MediaGridLayout {
     static let spacing: CGFloat = 10
     static let itemInset: CGFloat = 4
     static let contentInset: CGFloat = 16
+    /// これより細いタイルは名前も再生時間も読めないので、列を減らして幅を確保する。
+    static let minTileWidth: CGFloat = 120
+
+    /// 実際に並べる列数。設定の列数を上限に、ウィンドウが狭いときは入る分だけに減らす。
+    /// 幅がまだ測れていない（0）ときは設定値をそのまま使う。
+    static func columnCount(requested: Double, availableWidth: CGFloat) -> Int {
+        let requested = max(2, Int(requested))
+        let usable = availableWidth - contentInset * 2
+        guard usable > 0 else { return requested }
+        let fitting = Int((usable + spacing) / (minTileWidth + spacing))
+        return max(2, min(requested, fitting))
+    }
 }
 
 /// 一覧グリッドの矢印キー移動。アルバム詳細とお気に入り/ゴミ箱の両方、

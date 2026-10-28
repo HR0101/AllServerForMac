@@ -32,8 +32,14 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(neomorphicDarkBase, forKey: Keys.neomorphicDarkBase) }
     }
 
+    /// サイドバーのアルバム行に，表紙と「動画 12本 · 38分」の要約を出すか（false=従来の名前と件数だけ）。
+    @Published var sidebarShowsAlbumDetails: Bool {
+        didSet { defaults.set(sidebarShowsAlbumDetails, forKey: Keys.sidebarShowsAlbumDetails) }
+    }
+
     private let defaults = UserDefaults.standard
     private enum Keys {
+        static let sidebarShowsAlbumDetails = "sidebar.showsAlbumDetails"
         static let thumbnailOption = "library.thumbnailOption"
         static let customThumbnailTime = "library.customThumbnailTime"
         static let sortOrder = "library.sortOrder"
@@ -57,5 +63,6 @@ final class AppSettings: ObservableObject {
         // 新しい日付設定がまだ保存されていない場合は同じ状態を引き継ぐ。
         self.showImportDates = d.object(forKey: Keys.showImportDates) as? Bool ?? savedShowTitles
         self.neomorphicDarkBase = d.bool(forKey: Keys.neomorphicDarkBase)
+        self.sidebarShowsAlbumDetails = d.object(forKey: Keys.sidebarShowsAlbumDetails) as? Bool ?? true
     }
 }

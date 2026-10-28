@@ -111,6 +111,9 @@ extension LibraryViewModel {
                     // オフにしても30秒ごとにライブラリ全件走査が走り、UIが定期的に引っかかっていた。
                     // 状態表示は初回に一度だけ更新すれば足りるので、既にオフ表示なら何もしない。
                     if self.duplicateCheckStatus.statusMessage != "自動チェックはオフです" {
+                        // ただしアルバム一覧のキャッシュは一度作っておく。空のままだとホームの件数が 0/0 になり、
+                        // 自動チェックと独立して使えるはずの「今すぐすべてチェック」まで押せなくなる。
+                        self.refreshDuplicateCheckAlbumCaches()
                         self.duplicateCheckStatus.isAutoChecking = false
                         self.duplicateCheckStatus.currentAlbumName = nil
                         self.duplicateCheckStatus.progress = 0

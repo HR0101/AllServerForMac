@@ -119,8 +119,11 @@ struct LibraryCategoryView: View {
     /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
     /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
     private var columnCount: Int {
-        max(2, Int(appSettings.columnCount))
+        MediaGridLayout.columnCount(requested: appSettings.columnCount, availableWidth: gridWidth)
     }
+
+    /// グリッドを置く領域の幅。狭いウィンドウで列を自動的に減らすために測る。
+    @State private var gridWidth: CGFloat = 0
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
@@ -185,6 +188,11 @@ struct LibraryCategoryView: View {
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
+            if !isTrash {
+              ToolbarItem(placement: .primaryAction) {
+                LibraryTourMenu(videos: videoItems, dataManager: dataManager, beforePlay: { rememberGridState() })
+              }
+            }
             if isTrash {
                 ToolbarItem(placement: .primaryAction) {
                     if !dataManager.trashedVideos.isEmpty {
@@ -233,28 +241,38 @@ struct LibraryCategoryView: View {
                         .help("選択した動画から候補シーンを抽出します")
                     }
                 }
-                if selectedItems.count >= 2 {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startMultiPlayback(selectedItems) } label: {
-                            Label("同時再生", systemImage: "square.grid.2x2.fill")
+                // 複数選択時の再生方法は4種類あり，アイコンだけを並べると見分けにくいので1つのメニューにまとめる。
+                ToolbarItem(placement: .primaryAction) {
+                    if selectedItems.count >= 2 {
+                        Menu {
+                            Button {
+                                startMultiPlayback(selectedItems)
+                            } label: {
+                                Label("同時再生", systemImage: "square.grid.2x2.fill")
+                            }
+                            .help("選択した動画を同期再生（最大9本）")
+                            Button {
+                                startVariantSwitchPlayback(selectedItems)
+                            } label: {
+                                Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
+                            }
+                            .help("選択した動画を同期再生し，一定間隔／キー操作で見せる1本を切り替える（最大9本）")
+                            Button {
+                                startContentAlignedVariantPlayback(selectedItems)
+                            } label: {
+                                Label("類似点で合わせる", systemImage: "link")
+                            }
+                            .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
+                            Button {
+                                startSlideshowPlayback(selectedItems)
+                            } label: {
+                                Label("スライドショー", systemImage: "play.square.stack")
+                            }
+                            .help("選択した動画をスライドショー再生")
+                        } label: {
+                            Label("選択を再生", systemImage: "play.rectangle.on.rectangle")
                         }
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startVariantSwitchPlayback(selectedItems) } label: {
-                            Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
-                        }
-                        .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startContentAlignedVariantPlayback(selectedItems) } label: {
-                            Label("類似点で合わせる", systemImage: "link")
-                        }
-                        .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { startSlideshowPlayback(selectedItems) } label: {
-                            Label("スライドショー", systemImage: "play.square.stack")
-                        }
+                        .help("選択した動画を同時再生・差分切り替え・スライドショーなどで再生")
                     }
                 }
                 if selectedItems.count == 1, let video = selectedItems.first {
@@ -307,7 +325,7 @@ struct LibraryCategoryView: View {
             }
             Button("キャンセル", role: .cancel) {}
         } message: {
-            Text("動画そのものと「続きから」の視聴位置は消えません。ブラウザや iPhone の履歴からも消えます。")
+            Text("動画そのものと「続きから」の視聴位置は消えません．ブラウザや iPhone の履歴からも消えます．")
         }
         .alert("エクスポート完了", isPresented: $showExportResultAlert) {
             Button("OK", role: .cancel) { }
@@ -346,7 +364,7 @@ struct LibraryCategoryView: View {
             }
             Button("キャンセル", role: .cancel) { pendingMoveVideoIDs = [] }
         } message: {
-            Text("作成する新しいアルバム名を入力してください。")
+            Text("作成する新しいアルバム名を入力してください．")
         }
         .sheet(isPresented: $showSplitSheet) {
             VStack(spacing: 20) {
@@ -442,6 +460,7 @@ struct LibraryCategoryView: View {
                 .padding(MediaGridLayout.contentInset)
             }
             .scrollPosition(id: $scrollTargetMediaID, anchor: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
             // フォーカスはグリッド全体で1つだけ持つ。セルごとに .focusable() を付けると、
             // SwiftUI 標準の矢印キーによるフォーカス送りが自前の「index ± 列数」移動と同時に走り、
             // 1回の入力で二重に動いたり斜めに飛んだりする（列数によって挙動が変わって見える原因）。
@@ -789,8 +808,8 @@ struct LibraryCategoryView: View {
             }
             isExporting = false
             exportResultMessage = result.failedCount > 0
-                ? "\(result.successCount)件を書き出しました。\(result.failedCount)件は失敗しました。"
-                : "\(result.successCount)件を書き出しました。"
+                ? "\(result.successCount)件を書き出しました．\(result.failedCount)件は失敗しました．"
+                : "\(result.successCount)件を書き出しました．"
             showExportResultAlert = true
         }
     }

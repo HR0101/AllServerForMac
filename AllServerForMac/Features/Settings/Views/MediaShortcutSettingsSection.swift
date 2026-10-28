@@ -42,7 +42,7 @@ struct MediaShortcutSettingsSection: View {
             }
 
             if hasDuplicateAssignments {
-                Label("同じキーが複数の操作に割り当てられています。画面ごとの先に判定された操作が優先されます。", systemImage: "exclamationmark.triangle")
+                Label("同じキーが複数の操作に割り当てられています．画面ごとの先に判定された操作が優先されます．", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -108,7 +108,7 @@ private struct MediaShortcutAssignmentRow: View {
                     .font(.caption)
             }
             .buttonStyle(.borderless)
-            .help(isCapturing ? "登録したいキーを押してください。Escでキャンセルします。" : "キーを押して追加")
+            .help(isCapturing ? "登録したいキーを押してください．Escでキャンセルします．" : "キーを押して追加")
         }
         .padding(.vertical, 2)
         .focusable()

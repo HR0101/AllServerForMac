@@ -78,12 +78,22 @@ struct HomeView: View {
         .sheet(isPresented: $isShowingAccessLog) {
             AccessLogView(webServerManager: webServerManager)
         }
+        // 重複チェックの件数キャッシュは自動チェックのループ（起動から90秒後に開始，オフなら初回のみ）でしか
+        // 作られないため，それまでホームが 0/0 のままになり「今すぐすべてチェック」も押せない．
+        // ホームを開いたとき・ライブラリの読み込みが終わったときに一度作っておく．
+        .onAppear(perform: refreshDuplicateCheckCountsIfNeeded)
+        .onChange(of: dataManager.isLibraryLoaded) { refreshDuplicateCheckCountsIfNeeded() }
         .sheet(isPresented: $isShowingStorageManager) {
             StorageManagerView(dataManager: dataManager)
         }
     }
 
     // MARK: 重複チェックカード
+    private func refreshDuplicateCheckCountsIfNeeded() {
+        guard dataManager.isLibraryLoaded, !dataManager.isDuplicateCheckRunning else { return }
+        dataManager.refreshDuplicateCheckAlbumCaches()
+    }
+
     private var duplicateCheckCard: some View {
         let checkedAlbums = duplicateCheckStatus.checkedAlbums
         let uncheckedAlbums = duplicateCheckStatus.uncheckedAlbums
@@ -98,7 +108,7 @@ struct HomeView: View {
             }
             .toggleStyle(.switch)
             .controlSize(.small)
-            .help("オフにすると、インポート後などにバックグラウンドで自動実行される重複チェックを停止します。アルバム内の「重複チェック」ボタンによる手動実行には影響しません。")
+            .help("オフにすると，インポート後などにバックグラウンドで自動実行される重複チェックを停止します．アルバム内の「重複チェック」ボタンによる手動実行には影響しません．")
 
             HStack(spacing: 10) {
                 DuplicateCheckCountBadge(title: "チェック済み", count: checkedAlbums.count, tint: .green)
@@ -106,7 +116,7 @@ struct HomeView: View {
             }
 
             if totalCount == 0 {
-                Text("対象アルバムはありません。")
+                Text("対象アルバムはありません．")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -136,12 +146,12 @@ struct HomeView: View {
             .buttonStyle(.borderedProminent)
             .tint(NeomorphicTheme.accent)
             .disabled(duplicateCheckStatus.isAutoChecking || dataManager.isDuplicateCheckRunning || totalCount == 0)
-            .help("自動チェックのオン/オフに関わらず、対象アルバムの重複をまとめて今すぐチェックします。")
+            .help("自動チェックのオン/オフに関わらず，対象アルバムの重複をまとめて今すぐチェックします．")
 
             Divider()
 
-            duplicateAlbumList(title: "未チェック", albums: uncheckedAlbums, emptyMessage: "未チェックのアルバムはありません。")
-            duplicateAlbumList(title: "チェック済み", albums: checkedAlbums, emptyMessage: "チェック済みのアルバムはありません。")
+            duplicateAlbumList(title: "未チェック", albums: uncheckedAlbums, emptyMessage: "未チェックのアルバムはありません．")
+            duplicateAlbumList(title: "チェック済み", albums: checkedAlbums, emptyMessage: "チェック済みのアルバムはありません．")
         }
         .dashboardCard()
     }
@@ -162,7 +172,7 @@ struct HomeView: View {
             if status.isScanning {
                 linkedFolderScanProgress(status)
             } else {
-                Text("紐づけたフォルダに追加・削除したメディアは、下のボタンを押したときに取り込まれます。")
+                Text("紐づけたフォルダに追加・削除したメディアは，下のボタンを押したときに取り込まれます．")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -193,7 +203,7 @@ struct HomeView: View {
             .disabled(status.isScanning || count == 0)
 
             if count == 0 {
-                Text("フォルダを紐づけるには、アルバムを開いてツールバーの「フォルダ紐づけ」を使ってください。")
+                Text("フォルダを紐づけるには，アルバムを開いてツールバーの「フォルダ紐づけ」を使ってください．")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -433,7 +443,7 @@ struct HomeView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(NeomorphicTheme.accent)
 
-                Text("適用時に管理者パスワードの入力を求められます（スリープからの自動起床設定のため）。停止時刻になるとアプリは完全終了します。")
+                Text("適用時に管理者パスワードの入力を求められます（スリープからの自動起床設定のため）．停止時刻になるとアプリは完全終了します．")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -461,7 +471,7 @@ struct HomeView: View {
             }
             .toggleStyle(.switch)
             .controlSize(.small)
-            .help("オンにすると、Web・iOSアプリからのアクセスにPINが必要になります。")
+            .help("オンにすると，Web・iOSアプリからのアクセスにPINが必要になります．")
 
             if webServerManager.authEnabled {
                 SettingRow(label: "接続PIN") {
@@ -478,14 +488,14 @@ struct HomeView: View {
                         .help("PINを再生成する")
                     }
                 }
-                Text("このPINをiPhoneアプリ・ブラウザで入力してください。")
+                Text("このPINをiPhoneアプリ・ブラウザで入力してください．")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    Text("認証が無効です。同じWi-Fi内の誰でもアクセスできます。")
+                    Text("認証が無効です．同じWi-Fi内の誰でもアクセスできます．")
                         .font(.system(size: 11))
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)

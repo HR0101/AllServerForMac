@@ -63,11 +63,20 @@ struct AlbumDetailView: View {
     /// 実際に並べる列数。グリッドの組み立てと矢印キーの上下移動が必ず同じ値を見るように、
     /// ここだけで決める（ズレると下キーが斜めに飛ぶ）。
     private var columnCount: Int {
-        max(2, Int(appSettings.columnCount))
+        MediaGridLayout.columnCount(requested: appSettings.columnCount, availableWidth: gridWidth)
     }
+
+    /// グリッドを置く領域の幅。狭いウィンドウで列を自動的に減らすために測る。
+    @State private var gridWidth: CGFloat = 0
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: MediaGridLayout.spacing), count: columnCount)
+    }
+
+    /// ツールバーの「整理」メニューに出せる項目が1つでもあるか。
+    private var hasOrganizeTools: Bool {
+        canRemoveItemsFromCurrentAlbum || displayedItems.count >= 2
+            || displayedItems.contains(where: { $0.mediaType == .photo })
     }
 
     private var currentAlbum: Album {
@@ -115,9 +124,7 @@ struct AlbumDetailView: View {
 
         return VStack(spacing: 0) {
             LibraryPageHeader(
-              title: album.name == LibraryViewModel.allVideosAlbumName ? "すべての動画"
-                : album.name == LibraryViewModel.allPhotosAlbumName ? "すべての画像"
-                : album.name.components(separatedBy: "/").last ?? album.name,
+              title: album.displayTitle,
               subtitle: canRemoveItemsFromCurrentAlbum ? "アルバム · \(album.name)" : "ライブラリに登録したメディア",
               count: items.count
             )
@@ -199,6 +206,9 @@ struct AlbumDetailView: View {
         .searchable(text: $searchText, placement: .toolbar, prompt: "タイトルを検索")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+              LibraryTourMenu(videos: videoItems, dataManager: dataManager, beforePlay: { rememberGridState() })
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button(action: importFilesViaDialog) {
                     Label("インポート", systemImage: "plus.circle")
                 }
@@ -215,63 +225,63 @@ struct AlbumDetailView: View {
                 }
             }
 
-            // 重複チェックはアルバム単位でのみ意味を持つ（すべての動画/画像には全アルバムのメディアが
-            // 集まっているため、ここで実行すると別アルバム同士のメディアまで重複扱いになってしまう）。
-            if canRemoveItemsFromCurrentAlbum {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: runDuplicateCheck) {
-                        Label("重複チェック", systemImage: "checkmark.seal")
-                    }
-                    .help("このアルバム内の重複メディアを検出してゴミ箱へ移動")
-                    .disabled(isCheckingDuplicates || dataManager.isDuplicateCheckRunning || items.isEmpty)
-                }
-            }
-
-            // ラフ画・線画の抽出（画像がある場合のみ）
+            // 重複チェック・似ているもの・差分動画などの整理系ツールは，アイコンだけを5つ並べると
+            // 見分けがつかないため，名前付きの1つのメニューにまとめる。
             ToolbarItem(placement: .primaryAction) {
-                if items.contains(where: { $0.mediaType == .photo }) {
-                    Button {
-                        showSketchCleanup = true
-                    } label: {
-                        Label("ラフ画・線画", systemImage: "scribble.variable")
-                    }
-                    .help("このアルバムの画像からラフ画・線画を自動で拾い出して、確認してから削除します")
-                }
-            }
+                if hasOrganizeTools {
+                    Menu {
+                        // 重複チェックはアルバム単位でのみ意味を持つ（すべての動画/画像には全アルバムのメディアが
+                        // 集まっているため、ここで実行すると別アルバム同士のメディアまで重複扱いになってしまう）。
+                        if canRemoveItemsFromCurrentAlbum {
+                            Button(action: runDuplicateCheck) {
+                                Label("重複チェック", systemImage: "checkmark.seal")
+                            }
+                            .help("このアルバム内の重複メディアを検出してゴミ箱へ移動")
+                            .disabled(isCheckingDuplicates || dataManager.isDuplicateCheckRunning || items.isEmpty)
+                        }
 
-            // 似ているメディアの整理（重複チェックと違い、完全一致でなくても拾う）
-            ToolbarItem(placement: .primaryAction) {
-                if items.count >= 2 {
-                    Button {
-                        showSimilarMedia = true
-                    } label: {
-                        Label("似ているものを探す", systemImage: "square.on.square.dashed")
-                    }
-                    .help("見た目が似ているメディアをまとめて表示し、残す1件を選んで残りを削除します")
-                }
-            }
+                        // 似ているメディアの整理（重複チェックと違い、完全一致でなくても拾う）
+                        if items.count >= 2 {
+                            Button {
+                                showSimilarMedia = true
+                            } label: {
+                                Label("似ているものを探す", systemImage: "square.on.square.dashed")
+                            }
+                            .help("見た目が似ているメディアをまとめて表示し，残す1件を選んで残りを削除します")
+                        }
 
-            // 差分動画（同じ尺・同じ動きで絵だけ違う書き出し）を探して切り替え再生へ渡す
-            ToolbarItem(placement: .primaryAction) {
-                if videoItems.count >= 2 {
-                    Button {
-                        openVariantFinder(alignmentMode: .sameTime)
-                    } label: {
-                        Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
-                    }
-                    .help("尺が揃っていて絵だけが違う動画を束にして、選んだぶんを切り替えながら再生します")
-                }
-            }
+                        // ラフ画・線画の抽出（画像がある場合のみ）
+                        if items.contains(where: { $0.mediaType == .photo }) {
+                            Button {
+                                showSketchCleanup = true
+                            } label: {
+                                Label("ラフ画・線画を探す", systemImage: "scribble.variable")
+                            }
+                            .help("このアルバムの画像からラフ画・線画を自動で拾い出して，確認してから削除します")
+                        }
 
-            // 尺が違っても，動画内の一部に同じ場面が続く強制差分候補を探す
-            ToolbarItem(placement: .primaryAction) {
-                if videoItems.count >= 2 {
-                    Button {
-                        openVariantFinder(alignmentMode: .content)
+                        if videoItems.count >= 2 {
+                            Divider()
+                            // 差分動画（同じ尺・同じ動きで絵だけ違う書き出し）を探して切り替え再生へ渡す
+                            Button {
+                                openVariantFinder(alignmentMode: .sameTime)
+                            } label: {
+                                Label("差分動画を探す", systemImage: "rectangle.on.rectangle.angled")
+                            }
+                            .help("尺が揃っていて絵だけが違う動画を束にして，選んだぶんを切り替えながら再生します")
+
+                            // 尺が違っても，動画内の一部に同じ場面が続く強制差分候補を探す
+                            Button {
+                                openVariantFinder(alignmentMode: .content)
+                            } label: {
+                                Label("強制差分候補を探す", systemImage: "link.badge.plus")
+                            }
+                            .help("尺が大きく違っても，一部に同じ場面が続く動画を探します")
+                        }
                     } label: {
-                        Label("強制差分候補を探す", systemImage: "link.badge.plus")
+                        Label("整理", systemImage: "wand.and.stars")
                     }
-                    .help("尺が大きく違っても，一部に同じ場面が続く動画を探します")
+                    .help("重複チェック・似ているもの・差分動画など，アルバムを整理する機能")
                 }
             }
 
@@ -287,7 +297,7 @@ struct AlbumDetailView: View {
                     } label: {
                         Label("ランダム同時再生", systemImage: "square.grid.2x2")
                     }
-                    .help("このアルバムの動画から、選んだ本数だけ無作為に選んで同時再生します")
+                    .help("このアルバムの動画から，選んだ本数だけ無作為に選んで同時再生します")
                 }
             }
 
@@ -319,44 +329,38 @@ struct AlbumDetailView: View {
                         .help("選択した動画から候補シーンを抽出します")
                     }
                 }
+                // 複数選択時の再生方法は4種類あり，アイコンだけを並べると見分けにくいので1つのメニューにまとめる。
                 ToolbarItem(placement: .primaryAction) {
                     if selectedItems.count >= 2 {
-                        Button {
-                            startMultiPlayback(selectedItems)
+                        Menu {
+                            Button {
+                                startMultiPlayback(selectedItems)
+                            } label: {
+                                Label("同時再生", systemImage: "square.grid.2x2.fill")
+                            }
+                            .help("選択した動画を同期再生（最大9本）")
+                            Button {
+                                startVariantSwitchPlayback(selectedItems)
+                            } label: {
+                                Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
+                            }
+                            .help("選択した動画を同期再生し，一定間隔／キー操作で見せる1本を切り替える（最大9本）")
+                            Button {
+                                startContentAlignedVariantPlayback(selectedItems)
+                            } label: {
+                                Label("類似点で合わせる", systemImage: "link")
+                            }
+                            .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
+                            Button {
+                                startSlideshowPlayback(selectedItems)
+                            } label: {
+                                Label("スライドショー", systemImage: "play.square.stack")
+                            }
+                            .help("選択した動画をスライドショー再生")
                         } label: {
-                            Label("同時再生", systemImage: "square.grid.2x2.fill")
+                            Label("選択を再生", systemImage: "play.rectangle.on.rectangle")
                         }
-                        .help("選択した動画を同期再生（最大9本）")
-                    }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if selectedItems.count >= 2 {
-                        Button {
-                            startVariantSwitchPlayback(selectedItems)
-                        } label: {
-                            Label("差分切り替え再生", systemImage: "rectangle.on.rectangle.angled")
-                        }
-                        .help("選択した動画を同期再生し、一定間隔／キー操作で見せる1本を切り替える（最大9本）")
-                    }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if selectedItems.count >= 2 {
-                        Button {
-                            startContentAlignedVariantPlayback(selectedItems)
-                        } label: {
-                            Label("類似点で合わせる", systemImage: "link")
-                        }
-                        .help("動画内の類似場面を探し，最初に共通位置へ一度だけ合わせて再生する（最大9本）")
-                    }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if selectedItems.count >= 2 {
-                        Button {
-                            startSlideshowPlayback(selectedItems)
-                        } label: {
-                            Label("スライドショー", systemImage: "play.square.stack")
-                        }
-                        .help("選択した動画をスライドショー再生")
+                        .help("選択した動画を同時再生・差分切り替え・スライドショーなどで再生")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -432,7 +436,7 @@ struct AlbumDetailView: View {
             }
             Button("キャンセル", role: .cancel) { pendingFolderURL = nil }
         } message: {
-            Text("\(mixedContentInfo)\n指定したタイプ (\(album.type.displayName)) 以外のファイルは無視されます。")
+            Text("\(mixedContentInfo)\n指定したタイプ (\(album.type.displayName)) 以外のファイルは無視されます．")
         }
         .alert("重複チェック完了", isPresented: $showDuplicateCheckResultAlert) {
             Button("OK", role: .cancel) { }
@@ -457,7 +461,7 @@ struct AlbumDetailView: View {
             }
             Button("キャンセル", role: .cancel) { pendingMoveVideoIDs = [] }
         } message: {
-            Text("移動先の新しいアルバム名を入力してください。")
+            Text("移動先の新しいアルバム名を入力してください．")
         }
         .sheet(isPresented: $showSplitSheet) {
             VStack(spacing: 20) {
@@ -567,6 +571,7 @@ struct AlbumDetailView: View {
                 .padding(MediaGridLayout.contentInset)
             }
             .scrollPosition(id: $scrollTargetMediaID, anchor: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
             // フォーカスはグリッド全体で1つだけ持つ。セルごとに .focusable() を付けると、
             // SwiftUI 標準の矢印キーによるフォーカス送りが自前の「index ± 列数」移動と同時に走り、
             // 1回の入力で二重に動いたり斜めに飛んだりする（列数によって挙動が変わって見える原因）。
@@ -882,7 +887,7 @@ struct AlbumDetailView: View {
         func loadNextProvider(at index: Int) {
             guard index < providers.count else {
                 if loadedURLs.count != providers.count {
-                    print("⚠️ [DROP] \(providers.count)件中\(loadedURLs.count)件のURLを取得しました。")
+                    print("⚠️ [DROP] \(providers.count)件中\(loadedURLs.count)件のURLを取得しました．")
                 }
                 completion(loadedURLs)
                 return
@@ -966,8 +971,8 @@ struct AlbumDetailView: View {
             }
             isExporting = false
             exportResultMessage = result.failedCount > 0
-                ? "\(result.successCount)件を書き出しました。\(result.failedCount)件は失敗しました。"
-                : "\(result.successCount)件を書き出しました。"
+                ? "\(result.successCount)件を書き出しました．\(result.failedCount)件は失敗しました．"
+                : "\(result.successCount)件を書き出しました．"
             showExportResultAlert = true
         }
     }
@@ -998,9 +1003,9 @@ struct AlbumDetailView: View {
     private func duplicateCheckMessage(for result: DuplicateCheckResult) -> String {
         var lines: [String]
         if result.duplicateCount > 0 {
-            lines = ["\(result.duplicateCount)件の重複メディアをゴミ箱へ移動しました。"]
+            lines = ["\(result.duplicateCount)件の重複メディアをゴミ箱へ移動しました．"]
         } else {
-            lines = ["重複メディアは見つかりませんでした。"]
+            lines = ["重複メディアは見つかりませんでした．"]
         }
 
         lines.append("確認した項目: \(result.checkedCount)件")
@@ -1229,5 +1234,17 @@ struct AlbumDetailView: View {
     private func startSplitPlayback(video: VideoItem, splitCount: Int) {
         rememberGridState(opening: video.id)
         coordinator.playSplit(video: video, splitCount: splitCount)
+    }
+}
+
+extension Album {
+    /// 画面に出すアルバム名。システムアルバムの内部名（ALL VIDEOS など）は日本語にし，
+    /// 階層付きの名前は末尾だけにする。ページ見出しとウィンドウタイトルで同じ表記を使う。
+    @MainActor var displayTitle: String {
+        switch name {
+        case LibraryViewModel.allVideosAlbumName: return "すべての動画"
+        case LibraryViewModel.allPhotosAlbumName: return "すべての画像"
+        default: return name.components(separatedBy: "/").last ?? name
+        }
     }
 }

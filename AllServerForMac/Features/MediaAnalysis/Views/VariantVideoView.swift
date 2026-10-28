@@ -111,7 +111,7 @@ struct VariantVideoView: View {
                 Label("探し直す", systemImage: "arrow.clockwise")
             }
             .disabled(model.isScanning)
-            .help("取り込み直したファイルを拾わせたいときに、フレームの照合をやり直します")
+            .help("取り込み直したファイルを拾わせたいときに，フレームの照合をやり直します")
             Button("閉じる") { onClose() }
                 // 背後の View に付いたショートカットもプレイヤー越しに反応するため、
                 // 再生中は外して Esc が探索画面まで閉じないようにする。
@@ -201,7 +201,7 @@ struct VariantVideoView: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                    .help("絵の差はフレームどうしのハミング距離（小さいほど似ている）、名前の近さは 0〜1。名前の近さはしきい値を上下させる補助に使っています")
+                    .help("絵の差はフレームどうしのハミング距離（小さいほど似ている），名前の近さは 0〜1．名前の近さはしきい値を上下させる補助に使っています")
             } else if let score = group.partialMatchScore {
                 Text(String(format: "一部一致の絵の差 %.1f ・ 小さいほど近い", score))
                     .font(.caption2.monospacedDigit())
@@ -363,13 +363,13 @@ struct VariantVideoView: View {
     /// 名前が近いほど「似ている度合い」を何点ぶん甘く見るか、を実際の数字で見せる。
     private var titleInfluenceHint: String {
         guard model.titleInfluence > 0 else {
-            return "0 ならファイル名を見ず、絵だけで判定します"
+            return "0 ならファイル名を見ず，絵だけで判定します"
         }
         let loose = VariantVideoDetector.effectiveThreshold(
             base: model.maxAverageDistance, titleSimilarity: 1, influence: model.titleInfluence)
         let tight = VariantVideoDetector.effectiveThreshold(
             base: model.maxAverageDistance, titleSimilarity: 0, influence: model.titleInfluence)
-        return String(format: "名前がそっくりなら %.0f まで、まるで違えば %.0f までに絞ります", loose, tight)
+        return String(format: "名前がそっくりなら %.0f まで，まるで違えば %.0f までに絞ります", loose, tight)
     }
 
     private func evidenceText(_ stats: VariantVideoDetector.GroupStats) -> String {

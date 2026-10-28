@@ -10,6 +10,8 @@ enum NavigationSelection: Hashable {
   case history
   case trash
   case sceneExtraction
+  /// 動画・画像のアルバムを表紙つきで一覧するページ。
+  case albums
   case album(UUID)
   /// アルバム名の "/" 区切りで表現されるフォルダ。実体を持たないためIDではなく
   /// パス文字列で指す。動画ツリーと画像ツリーは別建てで同名フォルダが両立しうるので、

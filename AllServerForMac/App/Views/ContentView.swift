@@ -196,9 +196,13 @@ struct ContentView: View {
                 currentVideo: current,
                 dataManager: dataManager,
                 watchState: viewModel.watchState,
-                settings: viewModel.playbackSettings
+                settings: viewModel.playbackSettings,
+                initialStartTime: playbackCoordinator.singleStartTime
             )
                 .id(current.id)
+        case .tour(let session):
+            PlaybackTourView(session: session, dataManager: dataManager)
+                .id(session.id)
         case .multi(let videos):
             MultiVideoPlayerView(videos: videos, dataManager: dataManager)
                 .ignoresSafeArea()
@@ -288,6 +292,12 @@ struct ContentView: View {
                             viewModel: viewModel.sceneExtraction,
                             onClose: viewModel.closeSceneExtraction
                         )
+                    case .albums:
+                        AlbumOverviewView(
+                            dataManager: dataManager,
+                            selection: $viewModel.selection
+                        )
+                            .navigationTitle("アルバム一覧")
                     case .album(let albumID):
                         if let album = dataManager.albums.first(
                             where: { $0.id == albumID }
@@ -297,7 +307,7 @@ struct ContentView: View {
                                 dataManager: dataManager,
                                 onAnalyzeScenes: viewModel.openSceneExtraction
                             )
-                                .navigationTitle(album.name)
+                                .navigationTitle(album.displayTitle)
                         } else {
                             ContentUnavailableView("アルバムが見つかりません", systemImage: "questionmark.folder")
                         }

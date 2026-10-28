@@ -51,6 +51,9 @@ struct MainSidebarView: View {
     private let sidebarContentPadding: CGFloat = 10
     private let sidebarTopPadding: CGFloat = 12
     private let sidebarRowHeight: CGFloat = 32
+    /// 表紙と2行目（要約）つきの行の高さ。
+    private let sidebarDetailRowHeight: CGFloat = 46
+    private let sidebarCoverSize: CGFloat = 34
     private let sidebarRowCornerRadius: CGFloat = 7
     private let sidebarIconWidth: CGFloat = 16
     // 行の左余白。アイコンが左端ギリギリに見えないよう、右側の余白より少し広めにとる。
@@ -143,7 +146,7 @@ struct MainSidebarView: View {
             }
             Button("キャンセル", role: .cancel) { pendingSidebarFolderURL = nil }
         } message: {
-            Text("\(sidebarMixedContentInfo)\nどちらのタイプのアルバムとして作成しますか？指定したタイプ以外のファイルは無視されます。")
+            Text("\(sidebarMixedContentInfo)\nどちらのタイプのアルバムとして作成しますか？指定したタイプ以外のファイルは無視されます．")
         }
     }
 
@@ -320,13 +323,16 @@ struct MainSidebarView: View {
                 if let allPhotos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allPhotosAlbumName }) {
                     sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
                 }
+                    sidebarNavigationButton(.albums, title: "アルバム一覧", systemImage: "square.grid.2x2.fill", count: viewModel.albumCount)
                     sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
                     sidebarNavigationButton(.continueWatching, title: "続きを見る", systemImage: "play.circle.fill", count: continueWatchingCount)
                     sidebarNavigationButton(.history, title: "再生履歴", systemImage: "clock.arrow.circlepath", count: historyCount)
                     sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
                 }
 
-                VStack(alignment: .leading, spacing: 5) {
+                // 表紙つきの行は数百件になりうるので、画面に入った行だけ作る（表紙の読み込みも遅延される）。
+                // 幅は他の行と同じ固定値にそろえる（貪欲な幅のままだと、行が左に寄って検索欄とずれる）。
+                LazyVStack(alignment: .leading, spacing: 5) {
                     albumSectionHeader
 
                     if !normalizedAlbumQuery.isEmpty {
@@ -356,13 +362,19 @@ struct MainSidebarView: View {
                             title: album.name.components(separatedBy: "/").last ?? album.name,
                             systemImage: iconForAlbum(album)
                           )
-                          Text(album.name)
-                            .font(.caption2)
-                            .foregroundStyle(NeomorphicTheme.muted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .padding(.leading, sidebarRowLeadingPadding + sidebarIconWidth + 8)
-                            .frame(width: sidebarRowWidth, alignment: .leading)
+                          // 表紙つきの行は2行目に要約を出すので、フォルダの階層があるときだけ場所を補足する
+                          // （最上位のアルバムでは名前の繰り返しになる）。
+                          if !appSettings.sidebarShowsAlbumDetails || album.name.contains("/") {
+                            Text(album.name)
+                              .font(.caption2)
+                              .foregroundStyle(NeomorphicTheme.muted)
+                              .lineLimit(1)
+                              .truncationMode(.middle)
+                              .padding(.leading, appSettings.sidebarShowsAlbumDetails
+                                ? sidebarRowLeadingPadding - 4 + sidebarCoverSize + 10
+                                : sidebarRowLeadingPadding + sidebarIconWidth + 8)
+                              .frame(width: sidebarRowWidth, alignment: .leading)
+                          }
                         }
                         .help(album.name)
                       }
@@ -381,6 +393,7 @@ struct MainSidebarView: View {
                       }
                     }
                 }
+                .frame(width: sidebarRowWidth, alignment: .leading)
             }
             .padding(.horizontal, sidebarContentPadding)
             .padding(.top, sidebarTopPadding)
@@ -434,14 +447,14 @@ struct MainSidebarView: View {
             Button("作成", action: createFolderFromSelection)
             Button("キャンセル", role: .cancel) { newFolderNameForSelection = "" }
         } message: {
-            Text("選択した\(selectedAlbumIDs.count)件のアルバムをこのフォルダの中に移動します。")
+            Text("選択した\(selectedAlbumIDs.count)件のアルバムをこのフォルダの中に移動します．")
         }
         .alert("新規アルバムに取り込む", isPresented: $isShowingSidebarFileImportAlbumNameAlert) {
             TextField("アルバム名", text: $newAlbumNameForSidebarFileImport)
             Button("作成して取り込む", action: importSidebarDroppedFiles)
             Button("キャンセル", role: .cancel) { pendingSidebarFileURLs = []; newAlbumNameForSidebarFileImport = "" }
         } message: {
-            Text("ドロップした\(pendingSidebarFileURLs.count)件のファイルを、新しく作るアルバムに取り込みます。")
+            Text("ドロップした\(pendingSidebarFileURLs.count)件のファイルを，新しく作るアルバムに取り込みます．")
         }
     }
 
@@ -504,6 +517,80 @@ struct MainSidebarView: View {
         )
     }
 
+    /// 表紙と2行目（「動画 12本 · 38分」など）つきの行。名前だけでは中身が分からないアルバムを
+    /// 見分けやすくするための表示で、設定でオフにすると従来の `sidebarRowLabel` に戻る。
+    /// 幅は他の行と同じく固定値で指定する（上の sidebarRowWidth のコメント参照）。
+    private func sidebarDetailRowLabel(
+        _ title: String,
+        summary: AlbumSummary?,
+        isFolder: Bool,
+        isActive: Bool,
+        isExpanded: Bool? = nil,
+        selected: Bool? = nil
+    ) -> some View {
+        HStack(spacing: 10) {
+            if let selected {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? NeomorphicTheme.accent : NeomorphicTheme.muted)
+            }
+            sidebarCover(summary, isFolder: isFolder)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium, design: .default))
+                    .foregroundStyle(NeomorphicTheme.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(summary?.detailText(isFolder: isFolder) ?? " ")
+                    .font(.system(size: 10))
+                    .foregroundStyle(NeomorphicTheme.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            if let isExpanded {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(NeomorphicTheme.muted)
+                    .frame(width: 12)
+            }
+        }
+        .padding(.leading, sidebarRowLeadingPadding - 4)
+        .padding(.trailing, sidebarRowTrailingPadding)
+        .frame(width: sidebarRowWidth, height: sidebarDetailRowHeight, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: sidebarRowCornerRadius, style: .continuous)
+                .fill(isActive ? NeomorphicTheme.selection : Color.clear)
+        )
+        .help(summary.map { "\(title)\n\($0.detailText(isFolder: isFolder))" } ?? title)
+    }
+
+    /// 行の左の表紙。中身がなければフォルダ／アルバムのアイコンを出す。
+    /// フォルダは右下に小さなフォルダ印を重ねて、アルバムと見分けられるようにする。
+    private func sidebarCover(_ summary: AlbumSummary?, isFolder: Bool) -> some View {
+        ZStack {
+            Color.primary.opacity(0.08)
+            if let item = summary?.coverItems.first {
+                CoverThumbnail(item: item, dataManager: dataManager)
+            } else {
+                Image(systemName: isFolder ? "folder.fill" : "rectangle.stack")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(NeomorphicTheme.muted)
+            }
+        }
+        .frame(width: sidebarCoverSize, height: sidebarCoverSize)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(alignment: .bottomTrailing) {
+            if isFolder {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(3)
+                    .background(Circle().fill(.black.opacity(0.6)))
+                    .offset(x: 3, y: 3)
+            }
+        }
+    }
+
     private func sidebarPlainLabel(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
             .font(.system(size: 12, weight: .semibold, design: .default))
@@ -554,11 +641,23 @@ struct MainSidebarView: View {
     }
 
     private func sidebarAlbumRow(album: Album, title: String, systemImage: String) -> AnyView {
+        let showsDetails = appSettings.sidebarShowsAlbumDetails
+
         if isAlbumSelectionMode {
             return AnyView(Button {
                 toggleAlbumSelection(album.id)
             } label: {
-                sidebarSelectableRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album), isSelected: selectedAlbumIDs.contains(album.id))
+                if showsDetails {
+                    sidebarDetailRowLabel(
+                        title,
+                        summary: viewModel.albumSummaries[album.id],
+                        isFolder: false,
+                        isActive: false,
+                        selected: selectedAlbumIDs.contains(album.id)
+                    )
+                } else {
+                    sidebarSelectableRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album), isSelected: selectedAlbumIDs.contains(album.id))
+                }
             }
             .buttonStyle(.plain))
         }
@@ -567,7 +666,16 @@ struct MainSidebarView: View {
             selection = .album(album.id)
             isAlbumSearchFocused = false
         } label: {
-            sidebarRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album), isActive: selection == .album(album.id))
+            if showsDetails {
+                sidebarDetailRowLabel(
+                    title,
+                    summary: viewModel.albumSummaries[album.id],
+                    isFolder: false,
+                    isActive: selection == .album(album.id)
+                )
+            } else {
+                sidebarRowLabel(title, systemImage: systemImage, count: nonTrashedCount(in: album), isActive: selection == .album(album.id))
+            }
         }
         .buttonStyle(.plain)
         .draggable(AlbumDragPayload(albumIDs: [album.id], sourceFolderPath: nil))
@@ -703,34 +811,54 @@ struct MainSidebarView: View {
             }
             isExportingFromSidebar = false
             sidebarExportResultMessage = result.failedCount > 0
-                ? "\(result.successCount)件を書き出しました。\(result.failedCount)件は失敗しました。"
-                : "\(result.successCount)件を書き出しました。"
+                ? "\(result.successCount)件を書き出しました．\(result.failedCount)件は失敗しました．"
+                : "\(result.successCount)件を書き出しました．"
             showSidebarExportResultAlert = true
         }
     }
 
     private func dropKey(forPath path: String, isPhotoTree: Bool) -> String {
-        (isPhotoTree ? "photo:" : "video:") + path
+        SidebarViewModel.folderKey(path: path, isPhoto: isPhotoTree)
     }
 
     @ViewBuilder
     private func folderRowLabel(_ node: SidebarAlbumNode, isPhotoTree: Bool) -> some View {
         let key = dropKey(forPath: node.id, isPhotoTree: isPhotoTree)
+        let showsDetails = appSettings.sidebarShowsAlbumDetails
+        let summary = viewModel.folderSummaries[key]
         Group {
             if isAlbumSelectionMode {
-                sidebarSelectableRowLabel(node.name, systemImage: "folder.fill", count: nonTrashedCount(in: node), isSelected: isAlbumNodeSelected(node))
+                Group {
+                    if showsDetails {
+                        sidebarDetailRowLabel(node.name, summary: summary, isFolder: true, isActive: false, selected: isAlbumNodeSelected(node))
+                    } else {
+                        sidebarSelectableRowLabel(node.name, systemImage: "folder.fill", count: nonTrashedCount(in: node), isSelected: isAlbumNodeSelected(node))
+                    }
+                }
                     .contentShape(Rectangle())
                     .onTapGesture {
                         toggleAlbumNodeSelection(node)
                     }
             } else {
-                sidebarRowLabel(
-                    node.name,
-                    systemImage: "folder.fill",
-                    count: nonTrashedCount(in: node),
-                    isActive: selection == .folder(path: node.id, isPhoto: isPhotoTree),
-                    isExpanded: expandedFolderIDs.contains(key)
-                )
+                Group {
+                    if showsDetails {
+                        sidebarDetailRowLabel(
+                            node.name,
+                            summary: summary,
+                            isFolder: true,
+                            isActive: selection == .folder(path: node.id, isPhoto: isPhotoTree),
+                            isExpanded: expandedFolderIDs.contains(key)
+                        )
+                    } else {
+                        sidebarRowLabel(
+                            node.name,
+                            systemImage: "folder.fill",
+                            count: nonTrashedCount(in: node),
+                            isActive: selection == .folder(path: node.id, isPhoto: isPhotoTree),
+                            isExpanded: expandedFolderIDs.contains(key)
+                        )
+                    }
+                }
                     .contentShape(Rectangle())
                     // 標準の「＞」だけだと当たり判定が小さいため、タイトル行全体のクリックでも開閉できるようにする。
                     // 併せて右ペインにこのフォルダの中身（子フォルダ・子アルバムの表紙）を出す。
@@ -990,7 +1118,7 @@ struct MainSidebarView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .help("フォルダを選ぶと、そのフォルダ名でアルバムを作成し中身を一括インポートします")
+            .help("フォルダを選ぶと，そのフォルダ名でアルバムを作成し中身を一括インポートします")
         }
         .padding(24)
         .frame(width: 320)
@@ -1014,7 +1142,7 @@ struct MainSidebarView: View {
             panel.message = "アルバムとしてインポートするフォルダを選択してください"
 
             guard panel.runModal() == .OK, let folderURL = panel.url else {
-                print("⚠️ [IMPORT-BTN] パネルがキャンセルされたか、フォルダURLが取得できませんでした")
+                print("⚠️ [IMPORT-BTN] パネルがキャンセルされたか，フォルダURLが取得できませんでした")
                 return
             }
             print("📥 [IMPORT-BTN] フォルダ選択: \(folderURL.path)")
@@ -1115,7 +1243,7 @@ struct MainSidebarView: View {
         func loadNextProvider(at index: Int) {
             guard index < providers.count else {
                 if loadedURLs.count != providers.count {
-                    print("⚠️ [DROP] \(providers.count)件中\(loadedURLs.count)件のURLを取得しました。")
+                    print("⚠️ [DROP] \(providers.count)件中\(loadedURLs.count)件のURLを取得しました．")
                 }
                 completion(loadedURLs)
                 return

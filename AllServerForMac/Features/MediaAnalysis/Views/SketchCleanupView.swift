@@ -76,8 +76,8 @@ struct SketchCleanupView: View {
                 "該当する画像はありません",
                 systemImage: "checkmark.circle",
                 description: Text(model.candidates.isEmpty
-                    ? "このアルバムには判定できる画像がありませんでした。"
-                    : "「きびしさ」を下げると候補が増えます。")
+                    ? "このアルバムには判定できる画像がありませんでした．"
+                    : "「きびしさ」を下げると候補が増えます．")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
