@@ -38,8 +38,8 @@ struct ResourceGauge: View {
             Gauge(value: min(max(value, 0), 100), in: 0...100) {
                 Text(label)
             } currentValueLabel: {
-                Text("\(Int(value))")
-                    .font(.system(size: 13, weight: .bold))
+                Text("\(Int(value))％")
+                    .font(.system(size: 11, weight: .bold))
                     .monospacedDigit()
             }
             .gaugeStyle(.accessoryCircularCapacity)

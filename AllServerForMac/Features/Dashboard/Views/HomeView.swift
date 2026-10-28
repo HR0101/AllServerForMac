@@ -25,15 +25,28 @@ struct HomeView: View {
     var body: some View {
         ZStack {
             NeomorphicHomeBackground()
-            ScrollView {
+            ScrollViewReader { scrollProxy in
+              ScrollView {
                 VStack(spacing: DS.cardSpacing) {
-                    ServerHeroCard(webServerManager: webServerManager)
+                    LibraryPageHeader(title: "ホーム", subtitle: "このMacから，メディアを楽しむための準備を．")
+                      .padding(.horizontal, -24)
+
+                    ServerHeroCard(
+                      webServerManager: webServerManager,
+                      showConnectionSettings: {
+                        withAnimation { scrollProxy.scrollTo("connectionSettings", anchor: .top) }
+                      },
+                      showSecuritySettings: {
+                        withAnimation { scrollProxy.scrollTo("securitySettings", anchor: .top) }
+                      },
+                      showAccessLog: { isShowingAccessLog = true }
+                    )
 
                     // カードごとの高さが異なるため，行の高さを強制するLazyVGridは使わない。
                     // 左右のカラムを独立して積むことで，縦長カードの横に空白が残らない。
                     HStack(alignment: .top, spacing: DS.cardSpacing) {
                         VStack(spacing: DS.cardSpacing) {
-                            connectionCard
+                            connectionCard.id("connectionSettings")
                             scheduleCard
                             duplicateCheckCard
                             storageCard
@@ -41,7 +54,7 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity, alignment: .top)
 
                         VStack(spacing: DS.cardSpacing) {
-                            securityCard
+                            securityCard.id("securitySettings")
                             resourcesCard
                             linkedFolderCard
                             if !dataManager.linkedFolderConflicts.isEmpty {
@@ -56,6 +69,7 @@ struct HomeView: View {
                 .padding(.horizontal, 30)
                 .padding(.vertical, 30)
                 .frame(maxWidth: .infinity)
+              }
             }
         }
         .tint(NeomorphicTheme.accent)
@@ -76,7 +90,7 @@ struct HomeView: View {
         let totalCount = checkedAlbums.count + uncheckedAlbums.count
 
         return VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "checkmark.seal.fill", tint: .mint, title: "素材検品", subtitle: "DUPLICATE INSPECTION")
+            CardHeader(icon: "checkmark.seal.fill", tint: NeomorphicTheme.accent, title: "重複メディアの確認", subtitle: "同じファイルがないかアルバムごとに確認")
 
             Toggle(isOn: $dataManager.isAutoDuplicateCheckEnabled) {
                 Text("バックグラウンドで自動チェック")
@@ -101,7 +115,7 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ProgressView(value: duplicateCheckStatus.progress, total: 1.0)
                         .progressViewStyle(.linear)
-                        .tint(.mint)
+                        .tint(NeomorphicTheme.accent)
                     Text(duplicateCheckStatus.statusMessage)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -120,7 +134,7 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.mint)
+            .tint(NeomorphicTheme.accent)
             .disabled(duplicateCheckStatus.isAutoChecking || dataManager.isDuplicateCheckRunning || totalCount == 0)
             .help("自動チェックのオン/オフに関わらず、対象アルバムの重複をまとめて今すぐチェックします。")
 
@@ -137,10 +151,10 @@ struct HomeView: View {
         let count = dataManager.linkedFolderCount
         let status = linkedFolderScanStatus
         return VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "folder.badge.gearshape", tint: .cyan, title: "素材搬入", subtitle: "INGEST FOLDERS")
+            CardHeader(icon: "folder.badge.gearshape", tint: NeomorphicTheme.accent, title: "リンクフォルダ", subtitle: "元フォルダの変更をライブラリへ反映")
 
             SettingRow(label: "リンク中のフォルダ") {
-                Text("\(count)")
+                Text("\(count)フォルダ")
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
@@ -175,7 +189,7 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.cyan)
+            .tint(NeomorphicTheme.accent)
             .disabled(status.isScanning || count == 0)
 
             if count == 0 {
@@ -207,7 +221,7 @@ struct HomeView: View {
 
             ProgressView(value: Double(status.processedCount), total: Double(max(status.totalCount, 1)))
                 .progressViewStyle(.linear)
-                .tint(.cyan)
+                .tint(NeomorphicTheme.accent)
 
             if let name = status.currentFolderName {
                 HStack(spacing: 6) {
@@ -338,7 +352,7 @@ struct HomeView: View {
     // MARK: 接続設定カード
     private var connectionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "network", tint: .blue, title: "送出設定", subtitle: "PORT / AUTO STOP")
+            CardHeader(icon: "network", tint: .blue, title: "接続・自動停止の設定", subtitle: "ポート番号とアプリを終了するまでの時間")
 
             SettingRow(label: "ポート番号") {
                 HStack(spacing: 6) {
@@ -357,6 +371,12 @@ struct HomeView: View {
                 }
             }
 
+            if webServerManager.isRunning {
+              Text("接続・自動停止の設定は，サーバーを停止すると変更できます．")
+                .font(.caption)
+                .foregroundStyle(NeomorphicTheme.muted)
+            }
+
             Divider()
 
             Toggle(isOn: $webServerManager.autoStopEnabled) {
@@ -368,7 +388,7 @@ struct HomeView: View {
             .disabled(webServerManager.isRunning)
 
             if webServerManager.autoStopEnabled {
-                SettingRow(label: "停止までの時間") {
+                SettingRow(label: "サーバー開始から終了まで") {
                     HStack(spacing: 5) {
                         TextField("分", value: $webServerManager.autoStopIntervalMinutes, format: .number)
                             .textFieldStyle(.roundedBorder)
@@ -389,7 +409,7 @@ struct HomeView: View {
     // MARK: スケジュールカード
     private var scheduleCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "calendar.badge.clock", tint: .purple, title: "放送予定", subtitle: "DAILY SCHEDULE")
+            CardHeader(icon: "calendar.badge.clock", tint: NeomorphicTheme.accent, title: "起動・停止スケジュール", subtitle: "毎日決まった時刻に自動で起動・終了")
 
             Toggle(isOn: $webServerManager.scheduleEnabled) {
                 Text("毎日決まった時間に起動/停止")
@@ -411,7 +431,7 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.purple)
+                .tint(NeomorphicTheme.accent)
 
                 Text("適用時に管理者パスワードの入力を求められます（スリープからの自動起床設定のため）。停止時刻になるとアプリは完全終了します。")
                     .font(.system(size: 10))
@@ -433,7 +453,7 @@ struct HomeView: View {
     // MARK: セキュリティカード
     private var securityCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "lock.shield.fill", tint: .green, title: "アクセス制御", subtitle: "PIN / ACCESS LOG")
+            CardHeader(icon: "lock.shield.fill", tint: .green, title: "PIN認証", subtitle: "接続する端末に入力する6桁の番号")
 
             Toggle(isOn: $webServerManager.authEnabled) {
                 Text("PIN認証を必須にする")
@@ -474,7 +494,7 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.orange.opacity(0.12))
+                        .fill(NeomorphicTheme.accent.opacity(0.12))
                 )
             }
 
@@ -503,10 +523,10 @@ struct HomeView: View {
     // MARK: システムリソースカード
     private var resourcesCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "gauge.with.dots.needle.50percent", tint: .orange, title: "送出機器", subtitle: "CPU / MEMORY LEVEL")
+            CardHeader(icon: "gauge.with.dots.needle.50percent", tint: .orange, title: "Macの使用状況", subtitle: "Mac全体のCPU・メモリ使用率")
 
             HStack(spacing: 24) {
-                ResourceGauge(label: "CPU", value: systemMonitor.cpuUsage, tint: .orange)
+                ResourceGauge(label: "CPU", value: systemMonitor.cpuUsage, tint: NeomorphicTheme.accent)
                 ResourceGauge(label: "メモリ", value: systemMonitor.memoryUsage, tint: .blue)
                 Spacer()
             }
@@ -518,7 +538,7 @@ struct HomeView: View {
                         y: .value("CPU(%)", point.value)
                     )
                     .interpolationMethod(.catmullRom)
-                    .foregroundStyle(Color.orange)
+                    .foregroundStyle(NeomorphicTheme.accent)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
 
                     AreaMark(
@@ -528,7 +548,7 @@ struct HomeView: View {
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(
                         LinearGradient(
-                            gradient: Gradient(colors: [Color.orange.opacity(0.35), Color.orange.opacity(0.0)]),
+                            gradient: Gradient(colors: [NeomorphicTheme.accent.opacity(0.35), NeomorphicTheme.accent.opacity(0.0)]),
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -545,6 +565,10 @@ struct HomeView: View {
                 }
             }
             .frame(height: 90)
+
+            Text("CPU使用率の推移（0〜100％）")
+              .font(.caption)
+              .foregroundStyle(NeomorphicTheme.muted)
         }
         .dashboardCard()
     }
@@ -552,10 +576,10 @@ struct HomeView: View {
     // MARK: ストレージカード
     private var storageCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            CardHeader(icon: "internaldrive.fill", tint: .indigo, title: "素材庫", subtitle: "MEDIA INVENTORY")
+            CardHeader(icon: "internaldrive.fill", tint: NeomorphicTheme.accent, title: "ライブラリの容量", subtitle: "登録済みメディアの件数と合計サイズ")
 
             SettingRow(label: "総アイテム数") {
-                Text("\(dataManager.videos.count)")
+                Text("\(dataManager.videos.count)件")
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
@@ -580,7 +604,7 @@ struct HomeView: View {
     private var logsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                CardHeader(icon: "network.badge.shield.half.filled", tint: .teal, title: "回線ログ", subtitle: "LIVE ACCESS LOG")
+                CardHeader(icon: "network.badge.shield.half.filled", tint: NeomorphicTheme.accent, title: "最近のアクセス", subtitle: "端末からの通信履歴（接続台数ではありません）")
                 Spacer()
                 Button("すべて見る") { isShowingAccessLog = true }
                     .font(.system(size: 11, weight: .semibold))
