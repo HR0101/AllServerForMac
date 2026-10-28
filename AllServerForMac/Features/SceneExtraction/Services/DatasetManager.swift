@@ -137,24 +137,46 @@ nonisolated struct DatasetManager: Sendable {
 /// 読み込みエラー時は上書きせず，呼び出し元へエラーを返します．
 @MainActor
 enum AcceptedSceneStore {
-  static let defaultsKey = "playback.acceptedScenes.v1"
+  nonisolated static let defaultsKey = "playback.acceptedScenes.v1"
 
   static func sourceKey(_ url: URL) -> String {
     url.standardizedFileURL.resolvingSymlinksInPath().path
   }
 
-  static func load(defaults: UserDefaults = .standard) throws -> [String: [CandidateSegment]] {
-    guard let data = defaults.data(forKey: defaultsKey) else { return [:] }
+  static func load(defaults: UserDefaults = .standard, key: String = defaultsKey) throws -> [String: [CandidateSegment]] {
+    guard let data = defaults.data(forKey: key) else { return [:] }
     return try JSONDecoder().decode([String: [CandidateSegment]].self, from: data)
   }
 
-  static func save(url: URL, candidates: [CandidateSegment], defaults: UserDefaults = .standard) throws {
-    var stored = try load(defaults: defaults)
+  static func save(url: URL, candidates: [CandidateSegment], defaults: UserDefaults = .standard, key: String = defaultsKey) throws {
+    var stored = try load(defaults: defaults, key: key)
     stored[sourceKey(url)] = candidates.filter {
       $0.userLabel == .accepted && $0.startTime.isFinite && $0.endTime.isFinite
         && $0.startTime >= 0 && $0.endTime > $0.startTime
     }
     let data = try JSONEncoder().encode(stored)
-    defaults.set(data, forKey: defaultsKey)
+    defaults.set(data, forKey: key)
+  }
+}
+
+/// 採用シーンとは別に，視聴中に気になった場面を保存します．
+@MainActor
+enum HighlightStore {
+  nonisolated static let defaultsKey = "playback.highlights.v1"
+  static let beforeSeconds = 10.0
+  static let afterSeconds = 10.0
+
+  static func capture(url: URL, time: Double, duration: Double, defaults: UserDefaults = .standard) throws {
+    guard time.isFinite, duration.isFinite, duration > 0 else { throw PlaybackTourError.invalidRange }
+    let start = max(0, time - beforeSeconds)
+    let end = min(duration, time + afterSeconds)
+    guard end > start else { throw PlaybackTourError.invalidRange }
+    let stored = try AcceptedSceneStore.load(defaults: defaults, key: defaultsKey)
+    var scenes = stored[AcceptedSceneStore.sourceKey(url)] ?? []
+    guard !scenes.contains(where: { abs($0.peakTime - time) < 1 }) else { return }
+    scenes.append(CandidateSegment(startTime: start, endTime: end, peakTime: time,
+      score: 1, audioScore: 0, visualScore: 0, transitionScore: 0,
+      reason: ["再生中にストック"], userLabel: .accepted))
+    try AcceptedSceneStore.save(url: url, candidates: scenes, defaults: defaults, key: defaultsKey)
   }
 }

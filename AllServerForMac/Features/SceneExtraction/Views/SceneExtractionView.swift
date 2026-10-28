@@ -165,6 +165,9 @@ struct SceneExtractionView: View {
         } label: {
           Label("候補を解析", systemImage: "waveform.path.ecg")
         }
+        // この画面の主役の操作なので、ここだけ青の塗りにする。
+        .buttonStyle(.borderedProminent)
+        .tint(NeomorphicTheme.accent)
         .disabled(viewModel.videoDocument == nil || viewModel.isLoadingVideo)
       }
 

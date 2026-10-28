@@ -8,7 +8,7 @@ struct ServerHeroCard: View {
   @ObservedObject var webServerManager: ServerViewModel
 
   var body: some View {
-    NeomorphicTile(padding: 24) {
+    NeomorphicTile(padding: DS.cardPadding) {
       VStack(alignment: .leading, spacing: 18) {
         CardHeader(icon: "network", tint: NeomorphicTheme.accent, title: "サーバーの状態")
         statusRow

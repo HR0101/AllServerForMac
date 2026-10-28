@@ -70,6 +70,71 @@ enum NeomorphicTheme {
     static var shadow: Color {
         Color.black.opacity(isDarkBase ? 0.5 : 0.12)
     }
+    /// 稼働中・許可の目印（状態ドットと同じ落ち着いた緑）
+    static let online = Color(red: 0.30, green: 0.78, blue: 0.45)
+    /// 拒否・削除・エラーの目印（ハートや破壊的な操作と同じ赤）
+    static let negative = Color(red: 1.0, green: 0.27, blue: 0.23)
+    /// 「どちらとも言えない」「注意」の目印（強い黄・橙ではなく、落ち着いた琥珀）
+    static let caution = Color(red: 0.96, green: 0.68, blue: 0.22)
+}
+
+// MARK: - 見出しつきのカード
+
+/// 標準の GroupBox の代わりに使う、平らなカード。見出しは控えめな文字だけで、枠や色は付けない。
+struct SectionCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(NeomorphicTheme.muted)
+            content
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(GlassCardSurface())
+    }
+}
+
+// MARK: - シート共通
+
+extension View {
+    /// シートの下地を、アプリ本体と同じ中立の単色にそろえる。
+    /// 何も指定しないと OS 標準の半透明になり、デスクトップの色で青や緑に濁る。
+    func appSheet() -> some View {
+        self
+            .foregroundStyle(NeomorphicTheme.ink)
+            .background(NeomorphicTheme.canvas)
+            .tint(NeomorphicTheme.accent)
+    }
+}
+
+/// シート上部の見出し。色付きのタイルは使わず、細い無彩色のアイコンと文字だけにする。
+struct SheetHeader: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(NeomorphicTheme.muted)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(NeomorphicTheme.muted)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
 }
 
 // MARK: - コマンドデッキ背景
@@ -287,10 +352,30 @@ struct SettingRow<Content: View>: View {
     var body: some View {
         HStack {
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
             Spacer()
             content
         }
+    }
+}
+
+/// ラベルを左、スイッチを右端に置く設定行（macOS のシステム設定と同じ並び）。
+/// スイッチをラベルのすぐ隣に置くと、行ごとに位置がばらついて見える。
+struct SettingToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13))
+            Spacer(minLength: 12)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+        .contentShape(Rectangle())
     }
 }
 

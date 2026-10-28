@@ -98,10 +98,13 @@ struct AnalysisPlayerView: View {
       Spacer()
 
       Text("\(timeText(viewModel.currentTime)) / \(timeText(viewModel.duration))")
-        .font(.system(.body, design: .monospaced))
-        .foregroundStyle(.secondary)
+        .font(.system(size: 13, design: .monospaced))
+        .foregroundStyle(NeomorphicTheme.muted)
     }
     .buttonStyle(.borderless)
+    // 操作アイコンは青でなく文字色にする（青は進捗・選択の目印だけに使う）。
+    .tint(NeomorphicTheme.ink)
+    .foregroundStyle(NeomorphicTheme.ink)
     .disabled(viewModel.videoDocument == nil)
   }
 

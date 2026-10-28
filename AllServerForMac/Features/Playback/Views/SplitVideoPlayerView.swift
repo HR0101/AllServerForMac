@@ -272,27 +272,29 @@ struct SplitVideoPlayerView: View {
     // MARK: - コントロール
     private var controls: some View {
         HStack {
-            Button {
+            // 通常再生と同じ、白い丸の再生/一時停止ボタン。
+            PlayerPlayButton(
+                isPlaying: viewModel.isPlaying,
+                help: viewModel.isPlaying ? "一時停止（Space）" : "再生（Space）"
+            ) {
                 togglePlayPause()
-            } label: {
-                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16))
-                    .frame(width: 20)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.isPlaying ? "一時停止（Space）" : "再生（Space）")
-            .accessibilityLabel(viewModel.isPlaying ? "一時停止" : "再生")
 
             Text(formatTime(viewModel.commonCurrentTime))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .trailing)
             Slider(
                 value: $viewModel.commonCurrentTime,
                 in: 0...max(viewModel.commonDuration, 0.1)
             ) { isEditing in
                 viewModel.commonSliderEditingChanged(isEditing: isEditing)
             }
+            .tint(.white.opacity(0.92))
             Text(formatTime(viewModel.commonDuration))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .leading)
         }
         .padding()
         .background(Color(white: 0.09))

@@ -20,8 +20,8 @@ struct CandidateTimelineView: View {
       let width = geometry.size.width
 
       ZStack(alignment: .leading) {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-          .fill(.black.opacity(0.3))
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(NeomorphicTheme.control)
 
         timelineTicks(width: width)
 
@@ -62,8 +62,8 @@ struct CandidateTimelineView: View {
           .fill(.white.opacity(0.2))
           .frame(width: 1, height: 28)
         Text(timeText(tickTime))
-          .font(.system(size: 9, design: .monospaced))
-          .foregroundStyle(.white.opacity(0.65))
+          .font(.system(size: 10, design: .monospaced))
+          .foregroundStyle(NeomorphicTheme.muted)
       }
       .offset(x: max(0, xPosition(for: tickTime, width: width) - 18))
       .allowsHitTesting(false)
@@ -100,13 +100,14 @@ struct CandidateTimelineView: View {
   private func markerColor(for candidate: CandidateSegment) -> Color {
     switch candidate.userLabel {
     case .accepted:
-      return .green
+      return NeomorphicTheme.online
     case .rejected:
-      return .red
+      return NeomorphicTheme.negative
     case .uncertain:
-      return .yellow
+      return NeomorphicTheme.caution
     case nil:
-      return .orange
+      // 未判定の候補は色を付けず、判定済みの色（緑・赤・琥珀）だけが目立つようにする。
+      return NeomorphicTheme.ink.opacity(0.65)
     }
   }
 

@@ -84,16 +84,16 @@ struct MediaDeletionConfirmationSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(spacing: 10) {
         Label("削除方法を選んでください", systemImage: "trash")
-          .font(.title3.weight(.semibold))
+          .font(.system(size: 17, weight: .semibold))
         Spacer()
-        Text("\(items.count)件を選択中")
-          .font(.subheadline.monospacedDigit())
-          .foregroundStyle(.secondary)
+        Text("\(items.count.formatted())件を選択中")
+          .font(.system(size: 13).monospacedDigit())
+          .foregroundStyle(NeomorphicTheme.muted)
       }
 
       Text("下のサムネイルが削除対象です．アプリ内のゴミ箱は復元できます．Macのゴミ箱へ移動すると，リンク元を含む実ファイルも移動します．")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .font(.system(size: 13))
+        .foregroundStyle(NeomorphicTheme.muted)
 
       Divider()
 
@@ -103,7 +103,8 @@ struct MediaDeletionConfirmationSheet: View {
             VStack(alignment: .leading, spacing: 6) {
               MacVideoThumbnailView(
                 videoItem: item,
-                dataManager: dataManager
+                dataManager: dataManager,
+                showsPlayGlyph: false
               )
               .overlay(alignment: .topTrailing) {
                 Image(systemName: "checkmark.circle.fill")
@@ -114,7 +115,7 @@ struct MediaDeletionConfirmationSheet: View {
               }
 
               Text(item.originalFilename)
-                .font(.caption)
+                .font(.system(size: 12))
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -148,14 +149,17 @@ struct MediaDeletionConfirmationSheet: View {
         Button("完全に削除", role: .destructive) {
           perform(onDeleteCompletely)
         }
+        .tint(Color(red: 1.0, green: 0.27, blue: 0.23))
 
         Button("実ファイルをMacのゴミ箱へ移動", role: .destructive) {
           perform(onMoveToSystemTrash)
         }
+        .tint(Color(red: 1.0, green: 0.27, blue: 0.23))
       }
     }
     .padding(20)
     .frame(width: Self.sheetWidth)
+    .appSheet()
   }
 
   private func perform(_ action: () -> Void) {

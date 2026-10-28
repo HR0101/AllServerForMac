@@ -1258,6 +1258,7 @@ final class PlaybackTourViewModel: ObservableObject {
   @Published var isMuted: Bool {
     didSet { player.isMuted = isMuted }
   }
+  @Published private(set) var channelEntry: PlaybackTourEntry?
   @Published private(set) var index = 0
   @Published private(set) var currentTime = 0.0
   @Published private(set) var isPlaying = false
@@ -1285,7 +1286,18 @@ final class PlaybackTourViewModel: ObservableObject {
   }
 
   var currentEntry: PlaybackTourEntry? {
-    session.entries.indices.contains(index) ? session.entries[index] : nil
+    channelEntry ?? (session.entries.indices.contains(index) ? session.entries[index] : nil)
+  }
+
+  var isChannelMode: Bool { session.kind == .channels }
+
+  var channelName: String? {
+    session.channels.indices.contains(index) ? session.channels[index].name : nil
+  }
+
+  var sessionRemaining: Double {
+    guard session.kind == .timed else { return remaining }
+    return remaining + session.entries.dropFirst(index + 1).reduce(0) { $0 + $1.end - $1.start }
   }
 
   var progress: Double {
@@ -1315,6 +1327,12 @@ final class PlaybackTourViewModel: ObservableObject {
   }
 
   func next() {
+    if isChannelMode {
+      index = (index + 1) % session.entries.count
+      channelEntry = nil
+      loadCurrentEntry()
+      return
+    }
     guard index + 1 < session.entries.count else {
       finish()
       return
@@ -1324,6 +1342,12 @@ final class PlaybackTourViewModel: ObservableObject {
   }
 
   func previous() {
+    if isChannelMode {
+      index = (index + session.entries.count - 1) % session.entries.count
+      channelEntry = nil
+      loadCurrentEntry()
+      return
+    }
     guard index > 0 else { return }
     index -= 1
     loadCurrentEntry()
@@ -1331,6 +1355,7 @@ final class PlaybackTourViewModel: ObservableObject {
 
   func restart() {
     index = 0
+    channelEntry = nil
     loadCurrentEntry()
   }
 
@@ -1348,6 +1373,15 @@ final class PlaybackTourViewModel: ObservableObject {
     playbackObserver = nil
     player.replaceCurrentItem(with: nil)
     isPlaying = false
+  }
+
+  private func advanceChannelProgram() {
+    guard session.channels.indices.contains(index) else { finish(); return }
+    let videos = session.channels[index].videos
+    let alternatives = videos.filter { $0.id != currentEntry?.video.id }
+    guard let video = (alternatives.isEmpty ? videos : alternatives).randomElement() else { finish(); return }
+    channelEntry = PlaybackTourEntry(id: UUID(), video: video, start: 0, end: video.duration)
+    loadCurrentEntry()
   }
 
   private func finish() {
@@ -1396,7 +1430,8 @@ final class PlaybackTourViewModel: ObservableObject {
           .receive(on: DispatchQueue.main)
           .sink { [weak self] _ in
             guard let self, self.generation == token else { return }
-            self.next()
+            if self.isChannelMode { self.advanceChannelProgram() }
+            else { self.next() }
           }
         self.statusObserver = item.publisher(for: \.status)
           .receive(on: DispatchQueue.main)

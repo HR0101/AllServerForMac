@@ -202,28 +202,28 @@ struct SceneExtractionTutorialView: View {
       }
     }
     .frame(width: sheetWidth, height: sheetHeight)
-    .background(NeomorphicTheme.background)
+    .appSheet()
   }
 
   private var header: some View {
     HStack(spacing: 16) {
       VStack(alignment: .leading, spacing: 3) {
         Text("シーン抽出の使い方")
-          .font(.title2.bold())
+          .font(.system(size: 20, weight: .semibold))
         Text("操作手順と用語の意味をいつでも確認できます．")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(.system(size: 12))
+          .foregroundStyle(NeomorphicTheme.muted)
       }
 
       Spacer()
 
-      Picker("表示内容", selection: $selectedSection) {
-        ForEach(SceneExtractionTutorialSection.allCases) { section in
-          Text(section.rawValue).tag(section)
-        }
-      }
-      .pickerStyle(.segmented)
-      .frame(width: 240)
+      FlatSegmentedControl(
+        options: Array(SceneExtractionTutorialSection.allCases),
+        title: { $0.rawValue },
+        selection: $selectedSection,
+        width: 240
+      )
+      .accessibilityLabel("表示内容")
 
       Button("閉じる") {
         dismiss()
@@ -246,20 +246,20 @@ struct SceneExtractionTutorialView: View {
         VStack(alignment: .leading, spacing: 22) {
           HStack(alignment: .top, spacing: 18) {
             Image(systemName: step.systemImage)
-              .font(.system(size: 36, weight: .semibold))
-              .foregroundStyle(Color.accentColor)
+              .font(.system(size: 30, weight: .light))
+              .foregroundStyle(NeomorphicTheme.ink)
               .frame(width: 58, height: 58)
-              .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+              .background(NeomorphicTheme.control, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             VStack(alignment: .leading, spacing: 7) {
               Text("STEP \(step.id)")
-                .font(.caption.bold())
-                .foregroundStyle(Color.accentColor)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NeomorphicTheme.muted)
               Text(step.title)
-                .font(.title.bold())
+                .font(.system(size: 24, weight: .semibold))
               Text(step.summary)
-                .font(.title3)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 15))
+                .foregroundStyle(NeomorphicTheme.muted)
             }
           }
 
@@ -268,26 +268,27 @@ struct SceneExtractionTutorialView: View {
               Label {
                 Text(detail)
               } icon: {
-                Image(systemName: "checkmark.circle.fill")
-                  .foregroundStyle(Color.accentColor)
+                Image(systemName: "checkmark.circle")
+                  .foregroundStyle(NeomorphicTheme.muted)
               }
             }
           }
-          .font(.body)
+          .font(.system(size: 14))
 
           HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lightbulb.fill")
-              .foregroundStyle(.yellow)
+            Image(systemName: "lightbulb")
+              .foregroundStyle(NeomorphicTheme.caution)
             VStack(alignment: .leading, spacing: 3) {
               Text("ヒント")
-                .font(.headline)
+                .font(.system(size: 14, weight: .semibold))
               Text(step.tip)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+                .foregroundStyle(NeomorphicTheme.muted)
             }
           }
           .padding(14)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Color.yellow.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+          .background(NeomorphicTheme.control, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .padding(28)
       }
@@ -307,13 +308,15 @@ struct SceneExtractionTutorialView: View {
             Text("\(step.id)")
               .font(.caption.bold())
               .frame(width: 28, height: 28)
+              // いまの手順は白い丸に暗い数字（再生ボタンと同じ表し方）、ほかは薄い面。
               .background(
-                index == selectedStepIndex ? Color.accentColor : Color.secondary.opacity(0.15),
+                index == selectedStepIndex ? NeomorphicTheme.ink : NeomorphicTheme.control,
                 in: Circle()
               )
-              .foregroundStyle(index == selectedStepIndex ? Color.white : Color.primary)
+              .foregroundStyle(index == selectedStepIndex ? NeomorphicTheme.canvas : NeomorphicTheme.muted)
             Text(step.title)
-              .font(.system(size: 9))
+              .font(.system(size: 11))
+              .foregroundStyle(index == selectedStepIndex ? NeomorphicTheme.ink : NeomorphicTheme.muted)
               .lineLimit(1)
           }
           .frame(maxWidth: .infinity)
@@ -322,7 +325,7 @@ struct SceneExtractionTutorialView: View {
 
         if index < SceneExtractionTutorialContent.steps.count - 1 {
           Rectangle()
-            .fill(Color.secondary.opacity(0.2))
+            .fill(NeomorphicTheme.separator)
             .frame(width: 18, height: 1)
         }
       }
@@ -339,8 +342,8 @@ struct SceneExtractionTutorialView: View {
       Spacer()
 
       Text("\(selectedStepIndex + 1) / \(SceneExtractionTutorialContent.steps.count)")
-        .font(.caption.monospacedDigit())
-        .foregroundStyle(.secondary)
+        .font(.system(size: 12).monospacedDigit())
+        .foregroundStyle(NeomorphicTheme.muted)
 
       Spacer()
 
@@ -370,6 +373,7 @@ struct SceneExtractionTutorialView: View {
             Text(category.rawValue).tag(category)
           }
         }
+        .tint(NeomorphicTheme.ink)
         .frame(width: 160)
       }
       .padding(16)
@@ -407,27 +411,28 @@ struct SceneExtractionTutorialView: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack {
         Text(glossaryTerm.term)
-          .font(.headline)
+          .font(.system(size: 14, weight: .semibold))
         Text(glossaryTerm.category.rawValue)
-          .font(.caption2.bold())
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(NeomorphicTheme.muted)
           .padding(.horizontal, 7)
           .padding(.vertical, 3)
-          .background(Color.accentColor.opacity(0.12), in: Capsule())
+          .background(NeomorphicTheme.control, in: Capsule())
         Spacer()
         if let relatedSetting = glossaryTerm.relatedSetting {
           Label(relatedSetting, systemImage: "slider.horizontal.3")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(.system(size: 12))
+            .foregroundStyle(NeomorphicTheme.muted)
         }
       }
       Text(glossaryTerm.shortDefinition)
-        .font(.body.weight(.medium))
+        .font(.system(size: 14, weight: .medium))
       Text(glossaryTerm.detail)
-        .font(.callout)
-        .foregroundStyle(.secondary)
+        .font(.system(size: 13))
+        .foregroundStyle(NeomorphicTheme.muted)
     }
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
   }
 }

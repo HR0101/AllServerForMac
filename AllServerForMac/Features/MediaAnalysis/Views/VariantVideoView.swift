@@ -104,6 +104,7 @@ struct VariantVideoView: View {
                 Text("一部一致").tag(VariantVideoViewModel.SearchMode.partial)
             }
             .pickerStyle(.segmented)
+            .tint(NeomorphicTheme.ink)
             .frame(width: 190)
             Button {
                 model.rescan()
@@ -191,7 +192,7 @@ struct VariantVideoView: View {
                 Button("すべて選ぶ") { model.selectAll(inGroupAt: index) }
                     .font(.caption)
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(NeomorphicTheme.ink)
                     .disabled(selectedCount == group.items.count)
             }
 
@@ -241,7 +242,7 @@ struct VariantVideoView: View {
     private func candidateCell(_ item: VideoItem, group: VariantVideoViewModel.Group, groupIndex: Int) -> some View {
         let isSelected = group.selectedIDs.contains(item.id)
         return VStack(spacing: 5) {
-            MacVideoThumbnailView(videoItem: item, dataManager: dataManager)
+            MacVideoThumbnailView(videoItem: item, dataManager: dataManager, showsPlayGlyph: false)
                 .frame(maxWidth: .infinity)
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))

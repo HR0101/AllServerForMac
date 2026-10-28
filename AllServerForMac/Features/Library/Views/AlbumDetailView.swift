@@ -170,9 +170,10 @@ struct AlbumDetailView: View {
                             .foregroundColor(.white)
                             .font(.subheadline)
                     }
-                    .padding()
-                    .background(.thickMaterial)
-                    .cornerRadius(12)
+                    .padding(20)
+                    .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5))
+                    .environment(\.colorScheme, NeomorphicTheme.isDarkBase ? .dark : .light)
                 }
 
                 // フォルダの中身が多いと動画の尺・撮影日時の読み込みに時間がかかるため、
@@ -187,9 +188,10 @@ struct AlbumDetailView: View {
                             .foregroundColor(.white)
                             .font(.subheadline)
                     }
-                    .padding()
-                    .background(.thickMaterial)
-                    .cornerRadius(12)
+                    .padding(20)
+                    .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5))
+                    .environment(\.colorScheme, NeomorphicTheme.isDarkBase ? .dark : .light)
                 }
 
                 if isExporting {
@@ -204,9 +206,10 @@ struct AlbumDetailView: View {
                             .foregroundColor(.white)
                             .font(.subheadline)
                     }
-                    .padding()
-                    .background(.thickMaterial)
-                    .cornerRadius(12)
+                    .padding(20)
+                    .background(NeomorphicTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5))
+                    .environment(\.colorScheme, NeomorphicTheme.isDarkBase ? .dark : .light)
                 }
             }
 
@@ -477,7 +480,7 @@ struct AlbumDetailView: View {
         .sheet(isPresented: $showSplitSheet) {
             VStack(spacing: 20) {
                 Text("分割再生")
-                    .font(.headline)
+                    .font(.system(size: 17, weight: .semibold))
                 if let video = splitTargetVideo {
                     Text(video.originalFilename)
                         .font(.subheadline)
@@ -504,6 +507,7 @@ struct AlbumDetailView: View {
             }
             .padding(30)
             .frame(minWidth: 320)
+            .appSheet()
         }
         // 他のアルバムに移動したら、このアルバムのデコード済みサムネイルはメモリから解放する。
         // ディスクキャッシュは消さないので、戻ってきたときの再表示は速いまま。
@@ -809,7 +813,7 @@ struct AlbumDetailView: View {
     private var dropOverlay: some View {
         ZStack {
             Rectangle()
-                .fill(.ultraThinMaterial)
+                .fill(NeomorphicTheme.canvas.opacity(0.88))
             VStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 44))

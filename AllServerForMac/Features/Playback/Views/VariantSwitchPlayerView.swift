@@ -290,7 +290,6 @@ struct VariantSwitchPlayerView: View {
         .padding(.vertical, 10)
         .playerPanel(cornerRadius: 14)
         .environment(\.colorScheme, .dark)
-        .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
         .padding(16)
         .frame(maxWidth: 1200)
     }
@@ -449,13 +448,18 @@ struct VariantSwitchPlayerView: View {
             .accessibilityLabel("削除モード")
 
             Text(formatTime(viewModel.commonCurrentTime))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .trailing)
             Slider(value: $viewModel.commonCurrentTime, in: 0...max(viewModel.commonDuration, 0.1)) { isEditing in
                 viewModel.sliderEditingChanged(isEditing: isEditing)
             }
+            .tint(.white.opacity(0.92))
             .frame(minWidth: 160)
             Text(formatTime(viewModel.commonDuration))
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 44, alignment: .leading)
         }
     }
 

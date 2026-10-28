@@ -80,7 +80,7 @@ struct MediaPreviewView: View {
                 }) {
                     Text(isMangaMode ? "漫画モード" : "通常モード")
                         .font(.system(size: 11))
-                        .foregroundColor(isMangaMode ? .accentColor : .primary)
+                        .foregroundColor(.primary)
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 8)
