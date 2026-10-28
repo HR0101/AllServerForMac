@@ -42,18 +42,10 @@ private struct PlaybackVideoStrip: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("他の動画")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.82))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PlayerChrome.icon)
                 Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .symbolRenderingMode(.hierarchical)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.78))
-                .help("動画一覧を閉じる")
-                .accessibilityLabel("動画一覧を閉じる")
+                PlayerRoundButton(systemImage: "xmark", help: "動画一覧を閉じる", action: onClose)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -73,11 +65,7 @@ private struct PlaybackVideoStrip: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-        )
+        .playerPanel()
         .padding(.horizontal, 30)
     }
 
@@ -529,13 +517,13 @@ struct VideoPlayerView: View {
             // 再生中の動画名。タイトルバーが出ない画面なので，ここに出さないと何を見ているか分からない。
             // 右上の操作と同じタイミングで出し入れし，右側は操作群と重ならないよう空けておく。
             Text(viewModel.currentVideo.originalFilename)
-                .font(.headline)
-                .foregroundStyle(.white)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(PlayerChrome.icon)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Capsule().fill(.black.opacity(0.45)))
+                .frame(height: 32)
+                .playerPanel(cornerRadius: 16)
                 .padding()
                 .padding(.top, PlayerCornerControls.titlebarClearance)
                 .padding(.trailing, 300)
@@ -746,12 +734,11 @@ struct VideoPlayerView: View {
             Image(systemName: "clock.arrow.circlepath")
             Text(notice)
         }
-        .font(.callout.weight(.medium))
-        .foregroundStyle(.white)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(PlayerChrome.icon)
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Capsule().fill(.black.opacity(0.62)))
-        .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .frame(height: 34)
+        .playerPanel(cornerRadius: 17)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .transition(.opacity)
@@ -836,45 +823,37 @@ struct VideoPlayerView: View {
 
     /// AVKit標準の暗転を避けるための通常再生用コントロール。
     private var playbackControls: some View {
-        HStack(spacing: 12) {
-            Button {
+        HStack(spacing: 10) {
+            PlayerIconButton(
+                systemImage: "backward.end",
+                help: "前の動画",
+                accessibilityLabel: "前の動画"
+            ) {
                 viewModel.playPreviousVideo()
-            } label: {
-                Image(systemName: "backward.end.fill")
-                    .font(.system(size: 15))
-                    .frame(width: playbackControlButtonWidth)
             }
-            .buttonStyle(.plain)
             .disabled(!viewModel.canPlayPreviousVideo)
-            .help("前の動画")
-            .accessibilityLabel("前の動画")
 
-            Button {
+            // 主役の再生/一時停止だけを白い丸にして目立たせる。
+            PlayerPlayButton(
+                isPlaying: viewModel.isPlaybackPlaying,
+                help: viewModel.isPlaybackPlaying ? "一時停止（Space）" : "再生（Space）"
+            ) {
                 viewModel.playPause()
-            } label: {
-                Image(systemName: viewModel.isPlaybackPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16))
-                    .frame(width: playbackControlButtonWidth)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.isPlaybackPlaying ? "一時停止（Space）" : "再生（Space）")
-            .accessibilityLabel(viewModel.isPlaybackPlaying ? "一時停止" : "再生")
 
-            Button {
+            PlayerIconButton(
+                systemImage: "forward.end",
+                help: "次の動画",
+                accessibilityLabel: "次の動画"
+            ) {
                 viewModel.playNextVideo()
-            } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 15))
-                    .frame(width: playbackControlButtonWidth)
             }
-            .buttonStyle(.plain)
             .disabled(!viewModel.canPlayNextVideo)
-            .help("次の動画")
-            .accessibilityLabel("次の動画")
 
             Text(formatTime(viewModel.currentTime))
-                .font(.callout.monospacedDigit().weight(.medium))
-                .frame(minWidth: 52, alignment: .trailing)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 48, alignment: .trailing)
 
             Slider(
                 value: $viewModel.currentTime,
@@ -882,6 +861,7 @@ struct VideoPlayerView: View {
             ) { isEditing in
                 viewModel.playbackSliderEditingChanged(isEditing: isEditing)
             }
+            .tint(.white.opacity(0.92))
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { seekBarWidth = $0 }
             .onContinuousHover(coordinateSpace: .local) { phase in
                 handleSeekBarHover(phase)
@@ -894,84 +874,72 @@ struct VideoPlayerView: View {
             }
 
             Text(formatTime(viewModel.duration))
-                .font(.callout.monospacedDigit().weight(.medium))
-                .frame(minWidth: 52, alignment: .leading)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(PlayerChrome.iconMuted)
+                .frame(minWidth: 48, alignment: .leading)
 
-            Divider().frame(height: 18)
+            Rectangle()
+                .fill(PlayerChrome.panelBorder)
+                .frame(width: 1, height: 16)
 
-            Button {
+            PlayerIconButton(
+                systemImage: "shuffle",
+                isActive: settings.isShuffleEnabled,
+                help: settings.isShuffleEnabled ? "シャッフル: オン" : "シャッフル: オフ",
+                accessibilityLabel: "シャッフル"
+            ) {
                 settings.isShuffleEnabled.toggle()
-            } label: {
-                Image(systemName: "shuffle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: playbackControlButtonWidth)
-                    .foregroundStyle(settings.isShuffleEnabled ? Color.accentColor : Color.primary)
             }
-            .buttonStyle(.plain)
-            .help(settings.isShuffleEnabled ? "シャッフル: オン" : "シャッフル: オフ")
-            .accessibilityLabel("シャッフル")
 
-            Button {
+            PlayerIconButton(
+                systemImage: settings.repeatMode.symbolName,
+                isActive: settings.repeatMode != .off,
+                help: viewModel.loopAnalysisNotice ?? settings.repeatMode.title,
+                accessibilityLabel: settings.repeatMode.title
+            ) {
                 settings.repeatMode = settings.repeatMode.next
-            } label: {
-                Image(systemName: settings.repeatMode.symbolName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: playbackControlButtonWidth)
-                    .foregroundStyle(settings.repeatMode == .off ? Color.primary : Color.accentColor)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.loopAnalysisNotice ?? settings.repeatMode.title)
-            .accessibilityLabel(settings.repeatMode.title)
 
-            Button {
+            PlayerIconButton(
+                systemImage: viewModel.isCurrentVideoFavorite ? "heart.fill" : "heart",
+                isActive: viewModel.isCurrentVideoFavorite,
+                help: viewModel.isCurrentVideoFavorite ? "お気に入りから外す" : "お気に入りに追加",
+                accessibilityLabel: "お気に入り"
+            ) {
                 viewModel.toggleCurrentVideoFavorite()
-            } label: {
-                Image(systemName: viewModel.isCurrentVideoFavorite ? "heart.fill" : "heart")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: playbackControlButtonWidth)
-                    .foregroundStyle(viewModel.isCurrentVideoFavorite ? Color.accentColor : Color.primary)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.isCurrentVideoFavorite ? "お気に入りから外す" : "お気に入りに追加")
-            .accessibilityLabel("お気に入り")
 
-            Button {
+            PlayerIconButton(
+                systemImage: viewModel.fillsScreen
+                    ? "arrow.down.right.and.arrow.up.left"
+                    : "arrow.up.left.and.arrow.down.right",
+                isActive: viewModel.fillsScreen,
+                help: viewModel.fillsScreen ? "全体が収まる表示に戻す" : "画面いっぱいに広げる（黒帯を切り落とす）",
+                accessibilityLabel: "画面いっぱい"
+            ) {
                 viewModel.toggleFillsScreen()
-            } label: {
-                Image(systemName: viewModel.fillsScreen
-                      ? "arrow.down.right.and.arrow.up.left"
-                      : "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: playbackControlButtonWidth)
-                    .foregroundStyle(viewModel.fillsScreen ? Color.accentColor : Color.primary)
             }
-            .buttonStyle(.plain)
-            .help(viewModel.fillsScreen ? "全体が収まる表示に戻す" : "画面いっぱいに広げる（黒帯を切り落とす）")
-            .accessibilityLabel("画面いっぱい")
 
             if PictureInPictureCoordinator.isSupported {
-                Button {
+                PlayerIconButton(
+                    systemImage: pictureInPicture.isActive ? "pip.exit" : "pip.enter",
+                    isActive: pictureInPicture.isActive,
+                    help: pictureInPicture.isActive ? "小窓をやめて戻す" : "ピクチャインピクチャ（P）",
+                    accessibilityLabel: "ピクチャインピクチャ"
+                ) {
                     pictureInPicture.toggle()
-                } label: {
-                    Image(systemName: pictureInPicture.isActive
-                          ? "pip.exit"
-                          : "pip.enter")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: playbackControlButtonWidth)
-                        .foregroundStyle(pictureInPicture.isActive ? Color.accentColor : Color.primary)
                 }
-                .buttonStyle(.plain)
                 .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
-                .help(pictureInPicture.isActive ? "小窓をやめて戻す" : "ピクチャインピクチャ（P）")
-                .accessibilityLabel("ピクチャインピクチャ")
             }
 
             playbackOptionsMenu
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .frame(maxWidth: playbackControlsMaxWidth)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .playerPanel()
+        // 暗い面に白で組むので、スライダーやメニューも暗い外観で描かせる。
+        .environment(\.colorScheme, .dark)
         .padding(.horizontal, playbackControlsHorizontalPadding)
         .padding(.bottom, playbackControlsBottomPadding)
     }
@@ -1011,14 +979,19 @@ struct VideoPlayerView: View {
         } label: {
             HStack(spacing: 4) {
                 if viewModel.selectedSubtitleIndex != VideoPlayerViewModel.MediaTrackChoice.offIndex {
-                    Image(systemName: "captions.bubble.fill")
-                        .font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "captions.bubble")
+                        .font(.system(size: 11, weight: .regular))
                 }
                 Text(settings.rateLabel)
-                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
             }
+            .foregroundStyle(PlayerChrome.icon)
+            .padding(.horizontal, 6)
+            .frame(height: 30)
         }
         .menuStyle(.borderlessButton)
+        // メニューの文字がアクセントの青になるのを避け、他のボタンと同じ白にそろえる。
+        .tint(PlayerChrome.icon)
         .fixedSize()
         .help("再生速度・音声・字幕・自動再生")
         .accessibilityLabel("再生の設定")
@@ -1049,7 +1022,7 @@ struct VideoPlayerView: View {
                 .foregroundStyle(.white)
         }
         .padding(5)
-        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .playerPanel(cornerRadius: 8)
         .allowsHitTesting(false)
     }
 
@@ -1133,7 +1106,7 @@ struct VideoPlayerView: View {
                 .padding(8)
             }
             .frame(width: sidebarWidth)
-            .background(.regularMaterial)
+            .background(Color(white: 0.07))
             .offset(x: isSidebarVisible ? 0 : -sidebarWidth + triggerWidth)
         }
         .frame(width: isSidebarVisible ? sidebarWidth : triggerWidth)

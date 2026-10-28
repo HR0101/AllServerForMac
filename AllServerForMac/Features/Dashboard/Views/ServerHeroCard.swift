@@ -1,135 +1,176 @@
+import AppKit
 import SwiftUI
 
 // MARK: - サーバーの状態と接続案内
+/// ホームの先頭に置く、開始/停止と接続のしかたをまとめたカード。
+/// 停止中は「どう接続するか」の手順を、稼働中は「いまの接続先」をそのまま使える形で見せる。
 struct ServerHeroCard: View {
   @ObservedObject var webServerManager: ServerViewModel
 
-  var showConnectionSettings: () -> Void
-  var showSecuritySettings: () -> Void
-  var showAccessLog: () -> Void
-
   var body: some View {
-    ViewThatFits(in: .horizontal) {
-      // 下に続くホームの2カラム（左右とも均等幅）と縦のラインを揃えるため，こちらも均等に割る．
-      // 高さも揃えて，短い方のカードの下に空白が残らないようにする．
-      HStack(alignment: .top, spacing: DS.cardSpacing) {
-        serverStatusCard.frame(minWidth: 380, maxWidth: .infinity)
-        settingsSummaryCard.frame(minWidth: 380, maxWidth: .infinity)
-      }
-      .fixedSize(horizontal: false, vertical: true)
-      VStack(spacing: DS.cardSpacing) {
-        serverStatusCard
-        settingsSummaryCard
-      }
-    }
-  }
-
-  private var serverStatusCard: some View {
     NeomorphicTile(padding: 24) {
       VStack(alignment: .leading, spacing: 18) {
         CardHeader(icon: "network", tint: NeomorphicTheme.accent, title: "サーバーの状態")
-        HStack(spacing: 12) {
-          Image(systemName: webServerManager.isRunning ? "dot.radiowaves.left.and.right" : "pause.circle")
-            .foregroundStyle(webServerManager.isRunning ? NeomorphicTheme.accent : NeomorphicTheme.muted)
-          Text(webServerManager.isRunning ? "配信中" : "停止中")
-            .font(.system(size: 30, weight: .bold, design: .default))
-          Spacer()
-          Button(action: toggleServer) {
-            Label(webServerManager.isRunning ? "停止" : "開始", systemImage: "power")
-              .font(.headline)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 5)
-          }
-          .buttonStyle(.borderedProminent)
-          .accessibilityLabel(webServerManager.isRunning ? "サーバーを停止" : "サーバーを開始")
-        }
+        statusRow
+
         Text(webServerManager.isRunning
-          ? "同じWi-Fi内の端末から動画・画像を閲覧できます．"
+          ? "同じWi-Fi内の端末から，動画・画像を閲覧できます．"
           : "「開始」を押すと，iPhoneやブラウザから接続できます．")
-          .font(.callout)
+          .font(.system(size: 13))
           .foregroundStyle(NeomorphicTheme.muted)
           .fixedSize(horizontal: false, vertical: true)
 
         if !webServerManager.statusMessage.isEmpty,
            webServerManager.statusMessage.contains("❌") || webServerManager.statusMessage.contains("⚠️") {
           Label(webServerManager.statusMessage, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout)
+            .font(.system(size: 13))
             .foregroundStyle(.orange)
             .fixedSize(horizontal: false, vertical: true)
         }
 
-        Divider()
-        VStack(alignment: .leading, spacing: 10) {
-          Label("接続方法", systemImage: "iphone.and.arrow.forward")
-            .font(.headline)
-          Text("1．端末をMacと同じWi-Fiに接続します．")
-          Text("2．iPhoneアプリでこのMacを選ぶか，ブラウザで接続先を開きます．")
-          Text(webServerManager.authEnabled
-            ? "3．下の「PIN認証」に表示される6桁のPINを入力します．"
-            : "PIN認証は無効です．同じWi-Fi内の端末はPINなしで接続できます．")
-          if webServerManager.isRunning, let url = webServerManager.serverURL {
-            Text("ブラウザの接続先（クリックでコピー）")
-              .font(.caption)
+        Rectangle().fill(NeomorphicTheme.separator).frame(height: 0.5)
+
+        if webServerManager.isRunning {
+          runningDetails
+        } else {
+          connectionSteps
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+  }
+
+  // MARK: 状態と開始/停止
+
+  private var statusRow: some View {
+    HStack(spacing: 12) {
+      StatusDot(active: webServerManager.isRunning)
+      Text(webServerManager.isRunning ? "配信中" : "停止中")
+        .font(.system(size: 30, weight: .bold, design: .default))
+      if webServerManager.isRunning {
+        // 稼働時間は補足なので、状態の文字より小さく控えめに添える。
+        Text("稼働 \(webServerManager.uptimeString)")
+          .font(.system(size: 13).monospacedDigit())
+          .foregroundStyle(NeomorphicTheme.muted)
+          .padding(.top, 8)
+      }
+      Spacer()
+      if webServerManager.isRunning {
+        // 停止は主役の操作ではない（誤って押したくもない）ので、塗りつぶさない。
+        Button(action: toggleServer) {
+          Label("停止", systemImage: "stop.fill")
+            .font(.system(size: 13, weight: .medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+        }
+        .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
+        .accessibilityLabel("サーバーを停止")
+      } else {
+        Button(action: toggleServer) {
+          Label("開始", systemImage: "power")
+            .font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.borderedProminent)
+        .accessibilityLabel("サーバーを開始")
+      }
+    }
+  }
+
+  // MARK: 稼働中：いまの接続先
+
+  private var runningDetails: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("ブラウザの接続先")
+          .font(.system(size: 12))
+          .foregroundStyle(NeomorphicTheme.muted)
+
+        if let url = webServerManager.serverURL {
+          HStack(spacing: 12) {
+            // 読み取り・入力しやすいよう大きめの等幅にして、クリックでコピーできるようにする。
+            CopyableText(
+              text: url,
+              font: .system(size: 17, weight: .medium, design: .monospaced),
+              tint: NeomorphicTheme.ink
+            )
+            Spacer(minLength: 8)
+            Button {
+              if let target = URL(string: url) { NSWorkspace.shared.open(target) }
+            } label: {
+              Label("開く", systemImage: "arrow.up.forward.app")
+                .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .tint(NeomorphicTheme.ink)
+            .help("このMacのブラウザで接続先を開く")
+          }
+          .padding(.horizontal, 14)
+          .padding(.vertical, 12)
+          .background(NeomorphicTheme.control, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+          Text("接続先を取得しています…")
+            .font(.system(size: 13))
+            .foregroundStyle(NeomorphicTheme.muted)
+        }
+      }
+
+      // スマホのカメラで読み取るための QR コード。URL を打ち込まずに接続できる。
+      // QR に入れるのは接続先の URL だけで、PIN は含めない（画面を見られても PIN が漏れないようにする）。
+      if let url = webServerManager.serverURL {
+        HStack(alignment: .center, spacing: 16) {
+          QRCodeView(text: url, size: 96)
+          VStack(alignment: .leading, spacing: 6) {
+            Text("スマホで読み取る")
+              .font(.system(size: 13, weight: .semibold))
+            Text(webServerManager.authEnabled
+              ? "カメラで読み取ると，ブラウザで接続先が開きます．開いたら「PIN認証」の6桁のPINを入力します．"
+              : "カメラで読み取ると，ブラウザで接続先が開きます．（PIN認証は無効です）")
+              .font(.system(size: 12))
               .foregroundStyle(NeomorphicTheme.muted)
-            CopyableText(text: url, font: .system(.body, design: .monospaced), tint: NeomorphicTheme.accent)
-            Text("稼働時間：\(webServerManager.uptimeString)")
+              .fixedSize(horizontal: false, vertical: true)
+            Text("iPhoneアプリは，このMacを自動で見つけます．")
+              .font(.system(size: 12))
               .foregroundStyle(NeomorphicTheme.muted)
-          } else {
-            Text("接続先のURLはサーバー開始後に表示されます．")
-              .foregroundStyle(NeomorphicTheme.muted)
+              .fixedSize(horizontal: false, vertical: true)
           }
         }
-        .font(.callout)
-        .fixedSize(horizontal: false, vertical: true)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
   }
 
-  private var settingsSummaryCard: some View {
-    NeomorphicTile(padding: 22) {
-      VStack(alignment: .leading, spacing: 14) {
-        CardHeader(icon: "slider.horizontal.3", tint: NeomorphicTheme.accent,
-          title: "設定の概要", subtitle: "項目を押すと設定やログを開きます")
-        summaryButton("接続設定", value: "ポート \(webServerManager.targetPort)",
-          detail: "接続に使う番号を確認・変更", icon: "network", action: showConnectionSettings)
-        summaryButton("PIN認証", value: webServerManager.authEnabled ? "PINが必要" : "PINなしで接続可能",
-          detail: "接続用PINと認証設定を確認", icon: "lock.shield", action: showSecuritySettings)
-        summaryButton("自動停止", value: webServerManager.autoStopEnabled
-          ? "開始から\(webServerManager.autoStopIntervalMinutes)分で終了" : "自動では停止しません",
-          detail: "サーバー開始からアプリ終了までの時間", icon: "timer", action: showConnectionSettings)
-        summaryButton("アクセスログ", value: "直近\(webServerManager.accessLogs.count)件のリクエスト",
-          detail: "接続端末からの通信履歴を開く", icon: "list.bullet.rectangle", action: showAccessLog)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  // MARK: 停止中：接続の手順
+
+  private var connectionSteps: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("接続方法")
+        .font(.system(size: 13, weight: .semibold))
+      step(1, "端末をMacと同じWi-Fiに接続します．")
+      step(2, "iPhoneアプリでこのMacを選ぶか，ブラウザで接続先を開きます．")
+      step(3, webServerManager.authEnabled
+        ? "「PIN認証」に表示される6桁のPINを入力します．"
+        : "PIN認証は無効です．同じWi-Fi内の端末はPINなしで接続できます．")
+      Text("接続先のURLは，サーバー開始後にここへ表示されます．")
+        .font(.system(size: 12))
+        .foregroundStyle(NeomorphicTheme.muted)
+        .padding(.top, 2)
     }
   }
 
-  private func summaryButton(_ title: String, value: String, detail: String,
-    icon: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      HStack(alignment: .center, spacing: 12) {
-        Image(systemName: icon)
-          .font(.title3)
-          .foregroundStyle(NeomorphicTheme.accent)
-          .frame(width: 28)
-        VStack(alignment: .leading, spacing: 5) {
-          Text(title).font(.callout.weight(.semibold))
-          Text(value).font(.body.weight(.semibold))
-          Text(detail).font(.caption).foregroundStyle(NeomorphicTheme.muted)
-        }
+  /// 番号を小さな丸に入れた手順1行分。
+  private func step(_ number: Int, _ text: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      Text("\(number)")
+        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+        .foregroundStyle(NeomorphicTheme.muted)
+        .frame(width: 20, height: 20)
+        .background(Circle().fill(NeomorphicTheme.control))
+      Text(text)
+        .font(.system(size: 13))
         .fixedSize(horizontal: false, vertical: true)
-        Spacer(minLength: 4)
-        Image(systemName: "chevron.right")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(NeomorphicTheme.muted)
-      }
-      .padding(12)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(NeomorphicTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-      .contentShape(RoundedRectangle(cornerRadius: 12))
     }
-    .buttonStyle(.plain)
   }
 
   private func toggleServer() {

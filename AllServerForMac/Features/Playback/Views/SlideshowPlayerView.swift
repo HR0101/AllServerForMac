@@ -187,7 +187,7 @@ private struct SlideshowContentView: View {
                 SlideshowChapterRow(chapter: chapter).tag(chapter.id)
             }
             .frame(width: sidebarWidth)
-            .background(.regularMaterial)
+            .background(Color(white: 0.07))
             .offset(x: isSidebarVisible ? 0 : -sidebarWidth + triggerWidth)
             .onHover { hovering in isSidebarVisible = hovering }
 

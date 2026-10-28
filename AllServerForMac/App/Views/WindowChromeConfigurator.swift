@@ -34,8 +34,9 @@ final class WindowChromeView: NSView {
     window.appearance = NSAppearance(
       named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua
     )
-    window.isOpaque = false
-    window.backgroundColor = .clear
+    // 下地は単色なので、透過ウィンドウにはしない（角の表示も安定する）。
+    window.isOpaque = true
+    window.backgroundColor = NSColor(NeomorphicTheme.canvas)
     window.toolbarStyle = .unifiedCompact
     window.toolbar?.isVisible = !isToolbarHidden
   }

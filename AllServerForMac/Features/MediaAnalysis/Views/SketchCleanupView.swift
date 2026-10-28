@@ -125,7 +125,7 @@ struct SketchCleanupView: View {
                 .opacity(isSelected ? 1 : 0.55)
 
             Text(candidate.item.originalFilename)
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: thumbnailSide)

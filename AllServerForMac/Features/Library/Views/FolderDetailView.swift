@@ -61,7 +61,9 @@ struct FolderDetailView: View {
         return VStack(spacing: 0) {
             LibraryPageHeader(
               title: path.components(separatedBy: "/").last ?? path,
-              subtitle: "フォルダ · \(path)", count: context.entries.count
+              // 件数は、子フォルダ・子アルバムのカードと、このフォルダ直下のメディアの合計にする
+              // （カードだけを数えると、メディアだけのフォルダが「0件」に見える）。
+              subtitle: "フォルダ · \(path)", count: context.entries.count + context.directMedia.count
             )
             if node == nil {
                 ContentUnavailableView(
@@ -217,7 +219,7 @@ struct FolderDetailView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
+        .background(NeomorphicTheme.canvas)
     }
 
     private func mediaCell(_ video: VideoItem, in items: [VideoItem]) -> some View {
@@ -429,6 +431,11 @@ struct FolderEntryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             AlbumCoverMosaicView(items: entry.coverItems, dataManager: dataManager, isFolder: entry.isFolder)
+                // 縁線は常時ごく細く、カーソルを乗せると少し濃く太くして「押せる」ことを示す（塗りではなく線で示す）。
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(isHovering ? 0.30 : 0.10), lineWidth: isHovering ? 1.5 : 0.5)
+                )
                 .overlay(alignment: .topLeading) {
                     if entry.isFolder {
                         badge(systemImage: "folder.fill")
@@ -449,12 +456,12 @@ struct FolderEntryTile: View {
             if showTitle {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.title)
-                        .font(.caption.weight(.medium))
+                        .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if showDetail {
                         Text(entry.summary.detailText(isFolder: entry.isFolder))
-                            .font(.caption2)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -464,10 +471,6 @@ struct FolderEntryTile: View {
             }
         }
         .padding(MediaGridLayout.itemInset)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isHovering ? NeomorphicTheme.hover : Color.clear)
-        )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { isHovering = $0 }
         .onTapGesture { onOpen() }
@@ -498,7 +501,7 @@ struct AlbumCoverMosaicView: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay { mosaic }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder

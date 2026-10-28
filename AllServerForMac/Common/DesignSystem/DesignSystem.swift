@@ -7,14 +7,6 @@ enum DS {
     static let cardCornerRadius: CGFloat = 16
     static let cardPadding: CGFloat = 20
     static let cardSpacing: CGFloat = 20
-    static let cyan = Color(red: 0.18, green: 0.86, blue: 1.0)
-    static let violet = Color(red: 0.52, green: 0.42, blue: 1.0)
-    static let lime = Color(red: 0.42, green: 1.0, blue: 0.63)
-    static let signalRed = Color(red: 1.0, green: 0.19, blue: 0.18)
-    static let signalAmber = Color(red: 1.0, green: 0.65, blue: 0.16)
-    static let tallyGreen = Color(red: 0.49, green: 0.9, blue: 0.13)
-    static let surface = Color.black
-    static let surfaceRaised = Color(white: 0.028)
 }
 
 /// ガラス風テーマの色です．既存の外観設定キーを引き継ぎます．
@@ -22,40 +14,61 @@ enum DS {
 enum NeomorphicTheme {
     static let darkBaseDefaultsKey = "appearance.neomorphicDarkBase"
 
+    /// 未設定のときは黒基調。動画・画像が主役のアプリなので、作品の色が映える暗い下地を既定にする。
     static var isDarkBase: Bool {
-        UserDefaults.standard.bool(forKey: darkBaseDefaultsKey)
+        UserDefaults.standard.object(forKey: darkBaseDefaultsKey) as? Bool ?? true
     }
 
-    static let glassBlurOpacity: CGFloat = 0.80
-    static let lightGlassTintOpacity = 0.07
-    static let darkGlassTintOpacity = 0.52
+    // 配色の考え方：色味のない中立のグレーだけで面を作り、強弱は面の明るさと文字の濃淡でつける。
+    // 色（アクセント）は、主要ボタン・スイッチ・選択中の枠のような「操作の目印」にだけ使う。
 
-    static var background: Color {
-        isDarkBase ? Color(red: 0.08, green: 0.085, blue: 0.09) : Color(red: 0.89, green: 0.92, blue: 0.93)
+    /// 内容側の下地。
+    static var canvas: Color {
+        isDarkBase ? Color(white: 0.105) : Color(white: 0.965)
     }
+    /// サイドバー・カードの面。下地よりわずかに明るい（黒基調）／白（明るい側）。
+    static var sidebar: Color {
+        isDarkBase ? Color(white: 0.150) : Color(white: 0.925)
+    }
+    static var card: Color {
+        isDarkBase ? Color(white: 0.150) : Color.white
+    }
+    /// 入力欄・検索欄・セグメントのような、面の上に置く操作部品の地。
+    static var control: Color {
+        isDarkBase ? Color.white.opacity(0.085) : Color.black.opacity(0.055)
+    }
+    /// セグメントの選ばれている側。地（control）より一段はっきりさせる。
+    static var controlSelected: Color {
+        isDarkBase ? Color.white.opacity(0.17) : Color.white
+    }
+    static var cardBorder: Color {
+        isDarkBase ? Color.white.opacity(0.06) : Color.black.opacity(0.07)
+    }
+    static var background: Color { canvas }
     static var surface: Color {
-        isDarkBase ? Color.white.opacity(0.08) : Color.white.opacity(0.45)
+        isDarkBase ? Color.white.opacity(0.06) : Color.black.opacity(0.04)
     }
     static var ink: Color {
-        isDarkBase ? Color(red: 0.90, green: 0.92, blue: 0.93) : Color(red: 0.16, green: 0.18, blue: 0.19)
+        isDarkBase ? Color(white: 0.93) : Color(white: 0.10)
     }
     static var muted: Color {
-        isDarkBase ? Color(red: 0.73, green: 0.77, blue: 0.82) : Color(red: 0.30, green: 0.35, blue: 0.42)
+        isDarkBase ? Color(white: 0.62) : Color(white: 0.42)
     }
     static var accent: Color {
-        isDarkBase ? Color(red: 0.38, green: 0.66, blue: 1.0) : Color(red: 0.0, green: 0.38, blue: 0.88)
+        isDarkBase ? Color(red: 0.33, green: 0.60, blue: 1.0) : Color(red: 0.0, green: 0.40, blue: 0.92)
     }
     static var separator: Color {
-      ink.opacity(isDarkBase ? 0.16 : 0.09)
+        isDarkBase ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
     }
+    /// 選択中の行・セグメント。色を付けず、面を一段明るく（暗く）するだけにする。
     static var selection: Color {
-      accent.opacity(isDarkBase ? 0.25 : 0.12)
+        isDarkBase ? Color.white.opacity(0.11) : Color.black.opacity(0.08)
     }
     static var hover: Color {
-      accent.opacity(0.06)
+        isDarkBase ? Color.white.opacity(0.06) : Color.black.opacity(0.045)
     }
     static var shadow: Color {
-        isDarkBase ? Color(red: 0.0, green: 0.0, blue: 0.0) : Color(red: 0.62, green: 0.67, blue: 0.69)
+        Color.black.opacity(isDarkBase ? 0.5 : 0.12)
     }
 }
 
@@ -66,45 +79,24 @@ enum NeomorphicTheme {
 /// 動きはカードへのホバーやサーバーの稼働状態など，意味のある箇所だけで見せます。
 struct CommandDeckBackground: View {
   var body: some View {
-    LinearGradient(
-      colors: [NeomorphicTheme.accent.opacity(0.06), .clear],
-      startPoint: .topLeading,
-      endPoint: .bottomTrailing
-    )
-    .ignoresSafeArea()
-    .allowsHitTesting(false)
+    NeomorphicTheme.canvas
+      .ignoresSafeArea()
+      .allowsHitTesting(false)
   }
 }
 
-/// デスクトップの色を取り込むmacOS標準のぼかしです．
-/// OSの「透明度を下げる」にも標準マテリアルが追従します．
-struct GlassWindowBackground: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSVisualEffectView {
-    let view = NSVisualEffectView()
-    view.blendingMode = .behindWindow
-    view.material = .sidebar
-    view.alphaValue = NeomorphicTheme.glassBlurOpacity
-    view.state = .followsWindowActiveState
-    return view
-  }
-
-  func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-    nsView.appearance = NSAppearance(named: NeomorphicTheme.isDarkBase ? .darkAqua : .aqua)
-  }
-}
-
-/// ホーム・管理画面で共通の，控えめなガラス面です．
+/// ホーム・管理画面で共通の、平らなカードの面です。
 struct GlassCardSurface: View {
   var isHovering = false
 
   var body: some View {
+    // 影は付けず、面の明るさの差だけで下地から浮かせる（平らで静かな見た目にする）。
     RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-      .fill(.thinMaterial)
+      .fill(NeomorphicTheme.card)
       .overlay {
         RoundedRectangle(cornerRadius: DS.cardCornerRadius, style: .continuous)
-          .strokeBorder(NeomorphicTheme.separator, lineWidth: 1)
+          .strokeBorder(NeomorphicTheme.cardBorder, lineWidth: 0.5)
       }
-      .shadow(color: .black.opacity(isHovering ? 0.07 : 0.035), radius: 12, x: 0, y: 4)
   }
 }
 
@@ -141,6 +133,44 @@ struct LibraryPageHeader: View {
   }
 }
 
+// MARK: - 平らなセグメント（絞り込み用）
+
+/// 標準のセグメントは選択中が青い塊になって目立ちすぎるので、色を付けない薄い選択表示にした版。
+/// 幅は呼び出し側が指定する（サイドバーでは「広がるだけ広がる」指定が使えないため、固定幅で組む）。
+struct FlatSegmentedControl<Option: Hashable>: View {
+    let options: [Option]
+    let title: (Option) -> String
+    @Binding var selection: Option
+    let width: CGFloat
+
+    var body: some View {
+        let inner = width - 4
+        let segment = inner / CGFloat(max(options.count, 1))
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                let isSelected = option == selection
+                Button {
+                    selection = option
+                } label: {
+                    Text(title(option))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(isSelected ? NeomorphicTheme.ink : NeomorphicTheme.muted)
+                        .frame(width: segment, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(isSelected ? NeomorphicTheme.controlSelected : Color.clear)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .frame(width: width)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(NeomorphicTheme.control))
+    }
+}
+
 // MARK: - カード
 
 struct CardBackground: ViewModifier {
@@ -171,7 +201,11 @@ struct CardHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            IconTile(icon: icon, tint: NeomorphicTheme.accent)
+            // 角丸のタイルで囲まず、アイコンだけを置く（カードごとに青いタイルが並ぶとテンプレート然として見えるため）。
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(NeomorphicTheme.muted)
+                .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.system(size: 15, weight: .semibold))
@@ -228,16 +262,15 @@ struct StatusDot: View {
         ZStack {
             if active {
                 Circle()
-                    .fill(Color.green.opacity(0.35))
+                    .fill(Color(red: 0.30, green: 0.78, blue: 0.45).opacity(0.35))
                     .frame(width: 16, height: 16)
                     .scaleEffect(pulse ? 1.6 : 0.8)
                     .opacity(pulse ? 0 : 0.8)
                     .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulse)
             }
             Circle()
-                .fill(active ? Color.green : Color.secondary.opacity(0.5))
+                .fill(active ? Color(red: 0.30, green: 0.78, blue: 0.45) : Color.secondary.opacity(0.5))
                 .frame(width: 9, height: 9)
-                .shadow(color: active ? .green.opacity(0.6) : .clear, radius: 3)
         }
         .frame(width: 18, height: 18)
         .onAppear { pulse = active }
@@ -340,7 +373,7 @@ struct StatPill: View {
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 0) {
                 Text(label)
-                    .font(.system(size: 9))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Text(value)
                     .font(.system(size: 12, weight: .semibold))
@@ -351,7 +384,24 @@ struct StatPill: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(
-            Capsule().fill(DS.cyan.opacity(0.1))
+            Capsule().fill(NeomorphicTheme.accent.opacity(0.1))
         )
+    }
+}
+
+// MARK: - 入力欄の自動選択を外す
+
+/// 置かれたウィンドウの最初の入力欄の自動選択を，表示直後に一度だけ外す。
+struct InitialFirstResponderClearer: NSViewRepresentable {
+    func makeNSView(context: Context) -> ClearerView { ClearerView() }
+    func updateNSView(_ nsView: ClearerView, context: Context) {}
+
+    final class ClearerView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            // AppKit が初期の first responder を決めるのはウィンドウが key になった後なので，次のループで外す。
+            DispatchQueue.main.async { window.makeFirstResponder(nil) }
+        }
     }
 }

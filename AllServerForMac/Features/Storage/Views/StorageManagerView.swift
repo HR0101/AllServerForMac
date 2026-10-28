@@ -80,7 +80,7 @@ struct StorageManagerView: View {
                     .controlSize(.large)
 
                     Text("Mac上の元ファイルが削除されて「見つかりません」になったデータを一括整理します．")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
 
                     Button(action: viewModel.removeDuplicates) {
@@ -91,7 +91,7 @@ struct StorageManagerView: View {
                     .controlSize(.large)
 
                     Text("タイトルが違っても内容が完全に一致する動画を自動で整理します．")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 10) {

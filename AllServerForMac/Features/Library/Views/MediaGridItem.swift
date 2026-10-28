@@ -36,6 +36,9 @@ struct MediaGridItem: View {
 
     @EnvironmentObject private var watchState: WatchStateStore
 
+    /// サムネイルの角丸。フォルダ／アルバムの表紙（FolderEntryTile）と同じ値にそろえる。
+    static let thumbnailRadius: CGFloat = 10
+
     @State private var isHovering = false
     @State private var showDeleteConfirmation = false
 
@@ -64,7 +67,7 @@ struct MediaGridItem: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            MacVideoThumbnailView(videoItem: video, dataManager: dataManager)
+            MacVideoThumbnailView(videoItem: video, dataManager: dataManager, showsPlayGlyph: false)
                 // YouTube と同じ、サムネイル下端の視聴済みバー。
                 // サムネイル側が角丸で切り抜いているので、こちらでも同じ形で切り抜いて下端に沿わせる。
                 .overlay(alignment: .bottom) {
@@ -82,11 +85,28 @@ struct MediaGridItem: View {
                         .accessibilityLabel("視聴済み \(Int(watchedFraction * 100))パーセント")
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous))
+                // 明るい/暗い画像のどちらでも輪郭が立つよう、ごく細い縁線を引く。選択中はアクセント色の枠にする。
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous)
                         .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2.5)
                 )
+                // 再生ボタンは常時ではなく、カーソルを乗せたときだけ出す（全サムネイルに付くと画面がうるさい）。
+                .overlay {
+                    if isHovering && video.mediaType == .video {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .environment(\.colorScheme, .dark)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
@@ -99,13 +119,13 @@ struct MediaGridItem: View {
                 .overlay(alignment: .bottomTrailing) {
                     if video.mediaType == .video, video.duration > 0 {
                         Text(formatDuration(video.duration))
-                            .font(.caption2.weight(.semibold))
+                            .font(.system(size: 11, weight: .medium))
                             .monospacedDigit()
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
+                            .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(.black.opacity(0.65)))
-                            .padding(7)
+                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(.black.opacity(0.62)))
+                            .padding(6)
                     }
                 }
                 .overlay(alignment: .topLeading) {
@@ -141,7 +161,7 @@ struct MediaGridItem: View {
 
                     if showImportDate {
                         Text(MediaGridItem.itemFormatter.string(from: video.importDate))
-                            .font(.caption2)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -149,12 +169,7 @@ struct MediaGridItem: View {
             }
         }
         .padding(MediaGridLayout.itemInset)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isSelected
-                      ? NeomorphicTheme.selection
-                      : (isHovering ? NeomorphicTheme.hover : Color.clear))
-        )
+        // 選択はサムネイルのアクセント枠で示すので、セル全体の塗りは付けない（枠と塗りの二重で重く見えるため）。
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering in
             // アニメーション付きだとセルの出入りのたびにトランザクションが発生し、

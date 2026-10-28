@@ -67,6 +67,9 @@ nonisolated struct DecodedThumbnail: @unchecked Sendable {
 struct MacVideoThumbnailView: View {
     let videoItem: VideoItem
     let dataManager: LibraryViewModel
+    /// 動画の中央に再生ボタンを常時出すか。一覧のように大量に並ぶ場所では、全部に出るとうるさいので
+    /// false にして、呼び出し側でホバー時だけ出す。
+    var showsPlayGlyph: Bool = true
     @EnvironmentObject private var appSettings: AppSettings
     @State private var thumbnail: NSImage?
 
@@ -113,7 +116,7 @@ struct MacVideoThumbnailView: View {
                 }
             }
             .overlay {
-                if videoItem.mediaType == .video && thumbnail != nil {
+                if showsPlayGlyph && videoItem.mediaType == .video && thumbnail != nil {
                     Image(systemName: "play.fill")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
@@ -122,7 +125,7 @@ struct MacVideoThumbnailView: View {
                         .overlay(Circle().strokeBorder(.white.opacity(0.55), lineWidth: 1))
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             // 影とフェードインアニメーションはセルごとにオフスクリーン描画・アニメーショントランザクションを発生させ、
             // 大量枚数のグリッドではスクロールのカクつきに直結するため外している。
             .task { await generateThumbnail(forceRegenerate: false) }

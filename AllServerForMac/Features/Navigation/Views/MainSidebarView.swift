@@ -8,8 +8,6 @@ struct MainSidebarView: View {
     @EnvironmentObject var appSettings: AppSettings
     @EnvironmentObject private var watchState: WatchStateStore
     @Binding var selection: NavigationSelection?
-    @Binding var isShowingPreferences: Bool
-    @Binding var isShowingStorageManager: Bool
 
     @State private var albumSearchText = ""
     @State private var albumFilter = "すべて"
@@ -64,9 +62,11 @@ struct MainSidebarView: View {
     // `.overlay(alignment:)`、GeometryReader での実測、DisclosureGroup など、
     // 「利用可能な幅いっぱいに広げる」系のAPIを使うと、このビルド環境ではなぜか
     // 行の中身（アイコン・文字）が描画位置ごと画面外に飛んでしまう現象があった。
-    // そのため、ContentView 側で決めているサイドバー列の幅（300〜360pt、標準320pt）に
+    // そのため、ContentView 側で決めているサイドバー列の幅（320pt）に
     // 合わせた固定値を `.frame(width:)` に渡すことで回避している。
-    private let sidebarRowWidth: CGFloat = 300
+    // 行の幅は、列の幅から左右の余白（10）とスクロールバーの分（15）を引いた値にしてある。
+    private let sidebarColumnWidth: CGFloat = 320
+    private let sidebarRowWidth: CGFloat = 285
 
     /// 展開中のフォルダ（動画/画像ツリーで独立させるため dropKey と同じキーを使う）。
     /// DisclosureGroup 標準の「＞」は当たり判定が小さいため、タイトルをクリックしても
@@ -75,7 +75,7 @@ struct MainSidebarView: View {
 
     var body: some View {
         ZStack {
-            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+            NeomorphicTheme.sidebar.ignoresSafeArea()
             VStack(spacing: 0) {
               productIdentity
               albumSearchControls
@@ -115,20 +115,6 @@ struct MainSidebarView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(sidebarExportResultMessage)
-        }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button(action: { isShowingStorageManager = true }) {
-                    Label("ストレージ管理", systemImage: "internaldrive")
-                }
-                .help("ストレージの内訳とクリーンアップ")
-            }
-            ToolbarItem(placement: .automatic) {
-                Button(action: { isShowingPreferences = true }) {
-                    Label("詳細設定", systemImage: "gearshape")
-                }
-                .help("データの安全性・サーバー保護・パフォーマンスの設定")
-            }
         }
         .onDrop(of: [.fileURL], isTargeted: $isSidebarTargeted) { providers in
             handleDropOnSidebar(providers: providers)
@@ -235,7 +221,9 @@ struct MainSidebarView: View {
       }
       .frame(width: sidebarRowWidth)
       .padding(.horizontal, sidebarContentPadding)
-      .padding(.top, 20)
+      .frame(width: sidebarColumnWidth, alignment: .leading)
+      // 窓の上端まで伸びる面なので、信号機ボタンとツールバーの帯の下から始める。
+      .padding(.top, 54)
       .padding(.bottom, 8)
       .accessibilityElement(children: .combine)
     }
@@ -269,17 +257,18 @@ struct MainSidebarView: View {
           }
         }
         .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        Picker("アルバムの種類", selection: $albumFilter) {
-          Text("すべて").tag("すべて")
-          Text("動画").tag("動画")
-          Text("画像").tag("画像")
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
+        .background(NeomorphicTheme.control, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        FlatSegmentedControl(
+          options: ["すべて", "動画", "画像"],
+          title: { $0 },
+          selection: $albumFilter,
+          width: sidebarRowWidth
+        )
+        .accessibilityLabel("アルバムの種類")
       }
       .frame(width: sidebarRowWidth)
       .padding(.horizontal, sidebarContentPadding)
+      .frame(width: sidebarColumnWidth, alignment: .leading)
       .padding(.top, 12)
       .padding(.bottom, 12)
     }
@@ -312,7 +301,7 @@ struct MainSidebarView: View {
     private var sidebarList: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 10) {
-                sidebarNavigationButton(.home, title: "ホーム", systemImage: "house.fill")
+                sidebarNavigationButton(.home, title: "ホーム", systemImage: "house")
 
                 VStack(alignment: .leading, spacing: 5) {
                     sidebarSectionTitle("ライブラリ")
@@ -323,11 +312,11 @@ struct MainSidebarView: View {
                 if let allPhotos = dataManager.albums.first(where: { $0.name == LibraryViewModel.allPhotosAlbumName }) {
                     sidebarNavigationButton(.album(allPhotos.id), title: "すべての画像", systemImage: "photo.stack", count: nonTrashedCount(in: allPhotos))
                 }
-                    sidebarNavigationButton(.albums, title: "アルバム一覧", systemImage: "square.grid.2x2.fill", count: viewModel.albumCount)
-                    sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart.fill", count: dataManager.favoriteVideos.count)
-                    sidebarNavigationButton(.continueWatching, title: "続きを見る", systemImage: "play.circle.fill", count: continueWatchingCount)
+                    sidebarNavigationButton(.albums, title: "アルバム一覧", systemImage: "square.grid.2x2", count: viewModel.albumCount)
+                    sidebarNavigationButton(.favorites, title: "お気に入り", systemImage: "heart", count: dataManager.favoriteVideos.count)
+                    sidebarNavigationButton(.continueWatching, title: "続きを見る", systemImage: "play.circle", count: continueWatchingCount)
                     sidebarNavigationButton(.history, title: "再生履歴", systemImage: "clock.arrow.circlepath", count: historyCount)
-                    sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash.fill", count: dataManager.trashedVideos.count)
+                    sidebarNavigationButton(.trash, title: "ゴミ箱", systemImage: "trash", count: dataManager.trashedVideos.count)
                 }
 
                 // 表紙つきの行は数百件になりうるので、画面に入った行だけ作る（表紙の読み込みも遅延される）。
@@ -396,6 +385,8 @@ struct MainSidebarView: View {
                 .frame(width: sidebarRowWidth, alignment: .leading)
             }
             .padding(.horizontal, sidebarContentPadding)
+            // スクロールバーの有無で領域の幅が変わっても、行が中央寄せではみ出さず左端にそろうようにする。
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, sidebarTopPadding)
             .padding(.bottom, 14)
         }
@@ -488,12 +479,13 @@ struct MainSidebarView: View {
 
     private func sidebarRowLabel(_ title: String, systemImage: String, count: Int? = nil, isActive: Bool = false, isExpanded: Bool? = nil) -> some View {
         HStack(spacing: 8) {
+            // アイコンは線の細い無彩色にして、選ばれている行だけ濃くする（全部が濃いと名前が目立たない）。
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(NeomorphicTheme.ink)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(isActive ? NeomorphicTheme.ink : NeomorphicTheme.muted)
                 .frame(width: sidebarIconWidth)
             Text(title)
-                .font(.system(size: 12, weight: .medium, design: .default))
+                .font(.system(size: 13, weight: .regular, design: .default))
                 .foregroundStyle(NeomorphicTheme.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -536,12 +528,12 @@ struct MainSidebarView: View {
             sidebarCover(summary, isFolder: isFolder)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12, weight: .medium, design: .default))
+                    .font(.system(size: 13, weight: .regular, design: .default))
                     .foregroundStyle(NeomorphicTheme.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(summary?.detailText(isFolder: isFolder) ?? " ")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(NeomorphicTheme.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -599,7 +591,7 @@ struct MainSidebarView: View {
 
     private func sidebarSectionTitle(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 11, weight: .bold, design: .default))
+            .font(.system(size: 12, weight: .medium, design: .default))
             .foregroundStyle(NeomorphicTheme.muted)
             .padding(.leading, sidebarRowLeadingPadding)
             .padding(.trailing, sidebarRowTrailingPadding)
@@ -609,13 +601,13 @@ struct MainSidebarView: View {
     private func sidebarSelectableRowLabel(_ title: String, systemImage: String, count: Int, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isSelected ? NeomorphicTheme.accent : NeomorphicTheme.muted)
+                .foregroundStyle(isSelected ? NeomorphicTheme.ink : NeomorphicTheme.muted)
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(NeomorphicTheme.ink)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(NeomorphicTheme.muted)
                 .frame(width: sidebarIconWidth)
             Text(title)
-                .font(.system(size: 12, weight: .medium, design: .default))
+                .font(.system(size: 13, weight: .regular, design: .default))
                 .foregroundStyle(NeomorphicTheme.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -628,16 +620,12 @@ struct MainSidebarView: View {
     }
 
     private func sidebarCountBadge(_ count: Int, tint: Color) -> some View {
-        Text("\(count)")
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        // 件数は補足情報なので、色付きのカプセルにせず、控えめな数字だけにする
+        // （全行に青い太字のバッジが並ぶと、行の名前より数字が目立ってしまう）。
+        Text("\(count.formatted())")
+            .font(.system(size: 11, weight: .regular))
             .monospacedDigit()
-            .foregroundStyle(tint)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(NeomorphicTheme.accent.opacity(0.07))
-            )
+            .foregroundStyle(NeomorphicTheme.muted)
     }
 
     private func sidebarAlbumRow(album: Album, title: String, systemImage: String) -> AnyView {

@@ -127,13 +127,14 @@ struct SplitVideoPlayerView: View {
                     .font(.system(size: 10).monospacedDigit())
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.15))
+                    .background(PlayerChrome.hover)
                     .cornerRadius(4)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(.regularMaterial)
+        .background(Color(white: 0.09))
+        .environment(\.colorScheme, .dark)
     }
 
     // MARK: - グリッド（MultiVideoPlayerViewと同じレイアウト）
@@ -294,7 +295,8 @@ struct SplitVideoPlayerView: View {
                 .font(.caption.monospacedDigit())
         }
         .padding()
-        .background(.regularMaterial)
+        .background(Color(white: 0.09))
+        .environment(\.colorScheme, .dark)
     }
 
     // MARK: - キーボード

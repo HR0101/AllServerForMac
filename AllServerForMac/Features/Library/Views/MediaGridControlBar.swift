@@ -47,13 +47,16 @@ struct MediaGridControlBar: View {
         }
       }
       .font(.system(size: 12))
-      .tint(NeomorphicTheme.accent)
+      .tint(NeomorphicTheme.ink)
       .padding(.horizontal, 20)
       .padding(.vertical, 10)
-      .background(.thinMaterial)
+      // 下地と同じ不透明色にして、区切りは細い線だけにする（帯が浮くと画面が散らかって見える）。
+      .background(NeomorphicTheme.canvas)
       .overlay(alignment: .top) {
-        Rectangle().fill(NeomorphicTheme.separator).frame(height: 1)
+        Rectangle().fill(NeomorphicTheme.separator).frame(height: 0.5)
       }
+      // メニューのグレーの枠は付けず、文字とアイコンだけの軽い見た目にする。
+      .menuStyle(.borderlessButton)
     }
 
     @ViewBuilder

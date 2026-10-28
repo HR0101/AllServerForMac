@@ -111,6 +111,16 @@ struct AlbumDetailView: View {
         displayedItems.filter { selectedVideoIDs.contains($0.id) }
     }
 
+    private func headerSubtitle(for items: [VideoItem]) -> String {
+        var parts: [String] = []
+        let folders = album.name.components(separatedBy: "/").dropLast()
+        if canRemoveItemsFromCurrentAlbum, !folders.isEmpty {
+            parts.append(folders.joined(separator: " › "))
+        }
+        parts.append(AlbumSummary.of(items: items).detailText(isFolder: false))
+        return parts.joined(separator: " · ")
+    }
+
     private var canRemoveItemsFromCurrentAlbum: Bool {
         album.name != LibraryViewModel.allVideosAlbumName && album.name != LibraryViewModel.allPhotosAlbumName
     }
@@ -125,8 +135,9 @@ struct AlbumDetailView: View {
         return VStack(spacing: 0) {
             LibraryPageHeader(
               title: album.displayTitle,
-              subtitle: canRemoveItemsFromCurrentAlbum ? "アルバム · \(album.name)" : "ライブラリに登録したメディア",
-              count: items.count
+              // 2行目は「動画 12本 · 38分」のような中身の要約にする（以前は見出しと同じ名前の繰り返しだった）。
+              // 階層のあるアルバムは、場所が分かるよう親フォルダのパスを頭に付ける。
+              subtitle: headerSubtitle(for: items)
             )
             ZStack {
                 // 背景タップで選択解除（カードタップ時は内側のジェスチャーが優先される）

@@ -253,11 +253,12 @@ struct PhotoViewerView: View {
                 Button { isMangaMode.toggle() } label: {
                     Text(isMangaMode ? "漫画モード" : "通常モード")
                         .font(.system(size: 12))
-                        .foregroundColor(isMangaMode ? .accentColor : .white)
+                        .foregroundColor(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.12))
-                        .cornerRadius(4)
+                        // 入っているモードは面を一段明るくして示す（色は付けない）。
+                        .background(isMangaMode ? PlayerChrome.chip : PlayerChrome.hover)
+                        .cornerRadius(5)
                 }
                 .buttonStyle(.plain)
             }
@@ -437,7 +438,7 @@ struct PhotoViewerView: View {
             .frame(width: filmstripThumbSize, height: filmstripThumbSize)
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isCurrent ? Color.accentColor : .white.opacity(0.15), lineWidth: isCurrent ? 2.5 : 1)
+                    .strokeBorder(isCurrent ? Color.white.opacity(0.9) : .white.opacity(0.15), lineWidth: isCurrent ? 2 : 0.5)
             )
             .overlay(alignment: .topTrailing) {
                 if isCurrent {
@@ -446,7 +447,7 @@ struct PhotoViewerView: View {
                         .foregroundStyle(.black)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Color.white.opacity(0.9), in: Capsule())
                         .padding(6)
                 }
             }
