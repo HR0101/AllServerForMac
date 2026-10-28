@@ -12,6 +12,116 @@ import Testing
 
 struct AllServerForMacTests {
   @Test @MainActor
+  func localRepeatAdvancesPreparedItemsAndStopsWhenDisabled() async throws {
+    let fileManager = FileManager.default
+    let temporaryRoot = fileManager.temporaryDirectory.appendingPathComponent(
+      "LocalRepeatTests-\(UUID().uuidString)"
+    )
+    try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(at: temporaryRoot) }
+
+    let defaults = UserDefaults.standard
+    let settingsKeys = ["playback.repeatMode", "playback.autoPlayNext", "playback.rate"]
+    let savedSettings = settingsKeys.map { defaults.object(forKey: $0) }
+    defer {
+      for (key, value) in zip(settingsKeys, savedSettings) {
+        if let value {
+          defaults.set(value, forKey: key)
+        } else {
+          defaults.removeObject(forKey: key)
+        }
+      }
+    }
+
+    let clipDuration: TimeInterval = 0.4
+    let audioURL = temporaryRoot.appendingPathComponent("loop.wav")
+    try makeBeatTestAudio(url: audioURL, duration: clipDuration)
+    let video = VideoItem(
+      id: UUID(),
+      originalFilename: audioURL.lastPathComponent,
+      internalFilename: "",
+      duration: clipDuration,
+      importDate: Date(),
+      creationDate: nil,
+      fileHash: "",
+      externalFilePath: audioURL.path
+    )
+    // 実際のライブラリや視聴履歴には読み書きしない．
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil },
+      downloadsDirectory: { nil },
+      createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let watchState = WatchStateStore(store: WebSyncStore(
+      rootURL: temporaryRoot, persistenceEnabled: false
+    ))
+
+    for mode in [PlaybackRepeatMode.one, .all] {
+      let settings = PlaybackSettings()
+      settings.repeatMode = mode
+      settings.autoPlayNext = mode == .all
+      settings.rate = 1
+      let model = VideoPlayerViewModel(
+        videos: [video], currentVideo: video, dataManager: library,
+        watchState: watchState, settings: settings
+      )
+      defer { model.cleanup() }
+      model.setupPlayer()
+      try await waitForPlayback { model.player?.rate ?? 0 > 0 }
+      let queue = try #require(model.player as? AVQueuePlayer)
+      try await waitForPlayback { queue.items().count >= 3 }
+
+      // 終了後のシークではなく，準備済みの別項目へ継続的に進むことを確認する．
+      for _ in 0..<3 {
+        let previousItem = try #require(queue.currentItem)
+        try await waitForPlayback {
+          queue.currentItem != nil && queue.currentItem !== previousItem
+        }
+        #expect(queue.rate == 1)
+        #expect(model.currentVideo.id == video.id)
+      }
+
+      model.pause()
+      let pausedItem = queue.currentItem
+      model.applyRate(1.25)
+      model.seek(toSeconds: 0.1)
+      let pauseCheckNanoseconds: UInt64 = 100_000_000
+      try await Task.sleep(nanoseconds: pauseCheckNanoseconds)
+      #expect(queue.rate == 0)
+      #expect(queue.currentItem === pausedItem)
+      model.play()
+      try await waitForPlayback { queue.rate == 1.25 }
+      try await waitForPlayback { queue.currentItem !== pausedItem }
+
+      model.pause()
+      let finalItem = try #require(queue.currentItem)
+      model.seek(toSeconds: 0)
+      settings.repeatMode = .off
+      settings.autoPlayNext = false
+      try await waitForPlayback { queue.items().count == 1 }
+      #expect(queue.currentItem === finalItem)
+      model.play()
+      try await waitForPlayback { queue.rate == 0 }
+      #expect(queue.currentItem === finalItem)
+      #expect(!model.isPlaybackPlaying)
+      model.cleanup()
+      #expect(model.player == nil)
+    }
+  }
+
+  @MainActor
+  private func waitForPlayback(_ condition: () -> Bool) async throws {
+    let timeoutSeconds: TimeInterval = 5
+    let pollNanoseconds: UInt64 = 10_000_000
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while !condition(), Date() < deadline {
+      try await Task.sleep(nanoseconds: pollNanoseconds)
+    }
+    try #require(condition(), "再生状態が制限時間内に切り替わりませんでした")
+  }
+
+  @Test @MainActor
   func ignoresRandomPlaybackWhileVariantFinderIsOpen() {
     let videoID = UUID()
     let video = VideoItem(

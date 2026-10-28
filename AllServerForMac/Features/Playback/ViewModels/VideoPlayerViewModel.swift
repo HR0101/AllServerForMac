@@ -12,6 +12,8 @@ final class VideoPlayerViewModel: ObservableObject {
     @Published var currentTime: Double = 0
     @Published var duration: Double = 1.0
     @Published var isPlaybackPlaying = false
+    @Published private(set) var loopAnalysisNotice: String?
+    @Published private(set) var isAnalyzingLoopEdges = false
 
     /// 前後移動の対象となる動画リスト（動画のみ）
     let allVideos: [VideoItem]
@@ -35,6 +37,15 @@ final class VideoPlayerViewModel: ObservableObject {
     private var chapterGenerationTask: Task<Void, Never>?
     private var playerTimeObserver: Any?
     private weak var observedPlayer: AVPlayer?
+    private var monitoredItem: AVPlayerItem?
+    private var queuedLoopVideoID: UUID?
+    private let loopQueueItemCount = 3
+    private let loopForwardBufferDuration: TimeInterval = 3
+    private var loopAnalysisTask: Task<Void, Never>?
+    private var loopAnalysisVideoID: UUID?
+    private var loopAnalysisGeneration = 0
+    private var analyzedLoopVideoIDs = Set<UUID>()
+    private var loopPlaybackRanges: [UUID: CMTimeRange] = [:]
     private var cancellables = Set<AnyCancellable>()
     private var preloadTasks: [UUID: Task<Void, Never>] = [:]
     private var assetCache: [UUID: AVURLAsset] = [:]
@@ -135,7 +146,7 @@ final class VideoPlayerViewModel: ObservableObject {
         }
         // View 更新中に @Published を変更しないよう次のループで実行する
         Task { @MainActor in
-            let newPlayer = AVPlayer(playerItem: item)
+            let newPlayer = AVQueuePlayer(items: [item])
             newPlayer.automaticallyWaitsToMinimizeStalling = false
             // 終端で映像面を消さず，先頭フレームの準備中も最後のフレームを保持する．
             newPlayer.actionAtItemEnd = .none
@@ -197,6 +208,9 @@ final class VideoPlayerViewModel: ObservableObject {
         resumeNoticeTask?.cancel()
         resumeNotice = nil
         chapterGenerationTask?.cancel()
+        cancelLoopBlackFrameAnalysis()
+        analyzedLoopVideoIDs.removeAll()
+        loopPlaybackRanges.removeAll()
         cancelPendingPlaybackStart()
         if let observer = playerTimeObserver, let observedPlayer {
             observedPlayer.removeTimeObserver(observer)
@@ -212,7 +226,9 @@ final class VideoPlayerViewModel: ObservableObject {
         preloadTasks.removeAll()
         assetCache.removeAll()
         player?.pause()
+        clearLoopQueue()
         player = nil
+        monitoredItem = nil
         currentTime = 0
         duration = defaultDuration
         isPlaybackPlaying = false
@@ -292,6 +308,7 @@ final class VideoPlayerViewModel: ObservableObject {
     @discardableResult
     private func changeVideo(to newVideo: VideoItem, recordsPlayedStack: Bool = true) -> Bool {
         guard let newItem = playerItem(for: newVideo) else { return false }
+        cancelLoopBlackFrameAnalysis()
         isRestartingLoop = false
         // 切り替える前に、いま観ていた動画の位置を確定させる。
         commitProgress()
@@ -306,6 +323,7 @@ final class VideoPlayerViewModel: ObservableObject {
         self.currentTime = 0
         self.duration = defaultDuration
         self.isSliderEditing = false
+        clearLoopQueue()
         self.player?.replaceCurrentItem(with: newItem)
         if let player {
             // 再開位置のシークを先に出してから準備待ちへ入る。順序が逆だと
@@ -451,6 +469,7 @@ final class VideoPlayerViewModel: ObservableObject {
         selectedSubtitleIndex = legible
             .flatMap { group in selection.selectedMediaOption(in: group).flatMap(group.options.firstIndex(of:)) }
             ?? MediaTrackChoice.offIndex
+        updateLoopQueue()
     }
 
     private static func trackName(_ option: AVMediaSelectionOption, fallbackIndex: Int) -> String {
@@ -463,6 +482,7 @@ final class VideoPlayerViewModel: ObservableObject {
               group.options.indices.contains(index) else { return }
         item.select(group.options[index], in: group)
         selectedAudioIndex = index
+        updateLoopQueue()
     }
 
     func selectSubtitleTrack(index: Int) {
@@ -476,6 +496,7 @@ final class VideoPlayerViewModel: ObservableObject {
             return
         }
         selectedSubtitleIndex = index
+        updateLoopQueue()
     }
 
     // MARK: - コントロールセンター表示とメディアキー
@@ -514,6 +535,12 @@ final class VideoPlayerViewModel: ObservableObject {
     /// 「自動再生」が次へ進むかどうかの親スイッチで、「リストをリピート」は
     /// その上で末尾を先頭へ折り返すかを決める。1本リピートだけは進む話ではないので常に効く。
     private func handlePlaybackEnded() {
+        // 次の周回が予約済みなら，シークを挟まずキューの自動切り替えに任せる．
+        if queuedLoopVideoID == currentVideo.id,
+           let queuePlayer = player as? AVQueuePlayer,
+           queuePlayer.items().count > 1 {
+            return
+        }
         // 最後まで観たので視聴位置は捨てる（次に開いたら頭から）。
         watchState.markFinished(videoID: currentVideo.id)
         watchState.publishPendingChanges()
@@ -539,12 +566,13 @@ final class VideoPlayerViewModel: ObservableObject {
     private func restartCurrentVideoSmoothly() {
         guard let player, let currentItem = player.currentItem else { return }
         let playbackRate = Float(settings.rate)
-        currentTime = 0
+        let startTime = activeLoopPlaybackRange?.start ?? .zero
+        currentTime = startTime.seconds
         isRestartingLoop = true
         refreshNowPlaying()
 
         player.seek(
-            to: .zero,
+            to: startTime,
             toleranceBefore: .zero,
             toleranceAfter: .zero
         ) { [weak self, weak player] finished in
@@ -626,6 +654,15 @@ final class VideoPlayerViewModel: ObservableObject {
     /// プレイヤーを開いている間ずっと見ておくもの。
     private func observeSessionState() {
         sessionObservers.removeAll()
+
+        settings.$repeatMode.combineLatest(settings.$autoPlayNext)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.updateLoopQueue()
+                    self?.skipBlackLoopEdgesIfNeeded()
+                }
+            }
+            .store(in: &sessionObservers)
 
         // シャッフルを入れ直したら袋を作り直す。使いかけの袋を持ち越すと、
         // 入れ直した直後に「もう全部観た」と誤解して自動再生が止まる。
@@ -734,7 +771,15 @@ final class VideoPlayerViewModel: ObservableObject {
         refreshFavoriteState()
         refreshNowPlaying()
 
-        guard let resume = watchState.resumeSeconds(for: video.id, duration: video.duration) else {
+        let savedResume = watchState.resumeSeconds(for: video.id, duration: video.duration)
+        let resume: Double?
+        if let range = activeLoopPlaybackRange {
+            let requested = savedResume ?? 0
+            resume = requested >= range.end.seconds ? range.start.seconds : max(requested, range.start.seconds)
+        } else {
+            resume = savedResume
+        }
+        guard let resume, resume > 0 else {
             // 続きのない動画へ移ったら、前の動画のシークを待っていた蓋をここで外す。
             // 前の seek 完了は動画 ID で弾かれるため、ここで外さないと開かずじまいになり、
             // 時刻通知が素通しされて再生位置がまったく進まなくなる。
@@ -758,7 +803,7 @@ final class VideoPlayerViewModel: ObservableObject {
                 self.isRestoringPosition = false
             }
         }
-        showResumeNotice(seconds: resume)
+        if savedResume != nil { showResumeNotice(seconds: resume) }
     }
 
     /// 勝手に途中から始まったように見えないよう、再開位置を数秒だけ知らせる。
@@ -821,6 +866,7 @@ final class VideoPlayerViewModel: ObservableObject {
         }
         playerTimeObserver = nil
         observedPlayer = player
+        monitoredItem = player.currentItem
         cancellables.removeAll()
         currentTime = 0
         duration = defaultDuration
@@ -832,6 +878,32 @@ final class VideoPlayerViewModel: ObservableObject {
             .sink { [weak self] seconds in
                 Task { @MainActor [weak self] in
                     self?.duration = seconds
+                    self?.updateLoopQueue()
+                }
+            }
+            .store(in: &cancellables)
+
+        player.publisher(for: \.currentItem)
+            .compactMap { $0 }
+            .sink { [weak self, weak player] item in
+                Task { @MainActor [weak self, weak player] in
+                    guard let self, let player, self.player === player,
+                          player.currentItem === item else { return }
+                    let didAdvanceLoop = self.queuedLoopVideoID == self.currentVideo.id
+                        && self.monitoredItem != nil && self.monitoredItem !== item
+                        && self.monitoredItem?.asset === item.asset
+                    self.monitoredItem = item
+                    if didAdvanceLoop {
+                        self.watchState.markFinished(videoID: self.currentVideo.id)
+                        self.watchState.publishPendingChanges()
+                        self.isRestartingLoop = false
+                        if !self.isSliderEditing, !self.isRestoringPosition {
+                            let seconds = item.currentTime().seconds
+                            self.currentTime = seconds.isFinite ? max(0, seconds) : 0
+                        }
+                        self.refreshNowPlaying()
+                    }
+                    self.updateLoopQueue()
                 }
             }
             .store(in: &cancellables)
@@ -867,8 +939,10 @@ final class VideoPlayerViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, !self.isSliderEditing, !self.isRestoringPosition,
                       !self.isRestartingLoop,
-                      time.seconds.isFinite else { return }
-                self.currentTime = min(max(time.seconds, 0), self.duration)
+                      let seconds = self.player?.currentTime().seconds,
+                      seconds.isFinite else { return }
+                // 周回前に届いた通知でも，現在の項目の時刻を読み直して表示する．
+                self.currentTime = min(max(seconds, 0), self.duration)
                 // 保管庫側で間引くので、ここは毎回呼んでよい。
                 self.recordCurrentProgress(force: false)
             }
@@ -882,7 +956,10 @@ final class VideoPlayerViewModel: ObservableObject {
         isRestartingLoop = false
         let effectiveDuration = player.currentItem?.duration.seconds ?? duration
         let upperBound = effectiveDuration.isFinite && effectiveDuration > 0 ? effectiveDuration : duration
-        let clampedSeconds = min(max(seconds, 0), max(upperBound, 0))
+        let range = activeLoopPlaybackRange
+        let lowerBound = range?.start.seconds ?? 0
+        let loopUpperBound = range?.end.seconds ?? upperBound
+        let clampedSeconds = min(max(seconds, lowerBound), max(loopUpperBound, lowerBound))
         let targetTime = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
         currentTime = clampedSeconds
         player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -895,6 +972,173 @@ final class VideoPlayerViewModel: ObservableObject {
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 1
         return item
+    }
+
+    /// 現在の周回を再生している間に，次の周回の読み込みとデコードを準備する．
+    private func updateLoopQueue() {
+      guard let queuePlayer = player as? AVQueuePlayer,
+            let currentItem = queuePlayer.currentItem else { return }
+      updateLoopBlackFrameAnalysis()
+      let shouldLoop = settings.repeatMode == .one
+        || (settings.repeatMode == .all && settings.autoPlayNext && allVideos.count == 1)
+      guard shouldLoop, currentItem.status != .failed else {
+        clearLoopQueue(restoresFullRange: false)
+        configureLoopPlaybackRange(for: currentItem, preparesStart: false)
+        return
+      }
+      // 尺が確定する前や空の動画をキューに積むと，空の項目を繰り返してしまう．
+      let seconds = currentItem.duration.seconds
+      guard seconds.isFinite, seconds > 0 else { return }
+
+      queuedLoopVideoID = currentVideo.id
+      queuePlayer.actionAtItemEnd = .advance
+      configureLoopPlaybackRange(for: currentItem, preparesStart: false)
+      for item in queuePlayer.items() where item !== currentItem {
+        copyMediaSelections(from: currentItem, to: item)
+        configureLoopPlaybackRange(for: item, preparesStart: true)
+      }
+      while queuePlayer.items().count < loopQueueItemCount {
+        let nextItem = AVPlayerItem(asset: currentItem.asset)
+        nextItem.preferredForwardBufferDuration = loopForwardBufferDuration
+        copyMediaSelections(from: currentItem, to: nextItem)
+        guard queuePlayer.canInsert(nextItem, after: queuePlayer.items().last) else {
+          // 追加できない場合は，既存の終端処理で先頭へ戻れる状態を保つ．
+          if queuePlayer.items().count == 1 { clearLoopQueue() }
+          return
+        }
+        queuePlayer.insert(nextItem, after: queuePlayer.items().last)
+        configureLoopPlaybackRange(for: nextItem, preparesStart: true)
+      }
+    }
+
+    /// 再生中の項目と位置を維持し，先読みしていた周回だけを取り除く．
+    private func clearLoopQueue(restoresFullRange: Bool = true) {
+      queuedLoopVideoID = nil
+      guard let queuePlayer = player as? AVQueuePlayer else { return }
+      queuePlayer.actionAtItemEnd = .none
+      if restoresFullRange, let item = queuePlayer.currentItem, item.forwardPlaybackEndTime.isValid {
+        item.forwardPlaybackEndTime = .invalid
+      }
+      for item in queuePlayer.items() where item !== queuePlayer.currentItem {
+        queuePlayer.remove(item)
+      }
+    }
+
+    /// 音声・字幕の選択を次の周回へ引き継ぐ．
+    private func copyMediaSelections(from source: AVPlayerItem, to destination: AVPlayerItem) {
+      for group in [audibleGroup, legibleGroup].compactMap({ $0 }) {
+        let option = source.currentMediaSelection.selectedMediaOption(in: group)
+        if destination.currentMediaSelection.selectedMediaOption(in: group) != option {
+          destination.select(option, in: group)
+        }
+      }
+    }
+
+    private var activeLoopPlaybackRange: CMTimeRange? {
+      settings.repeatMode == .off ? nil : loopPlaybackRanges[currentVideo.id]
+    }
+
+    /// ループ開始時だけ解析し，同じ再生セッション内では結果を再利用します．
+    private func updateLoopBlackFrameAnalysis() {
+      guard settings.repeatMode != .off else {
+        cancelLoopBlackFrameAnalysis()
+        return
+      }
+      let videoID = currentVideo.id
+      guard !analyzedLoopVideoIDs.contains(videoID), loopAnalysisVideoID != videoID,
+            let asset = player?.currentItem?.asset else { return }
+      cancelLoopBlackFrameAnalysis()
+      loopAnalysisVideoID = videoID
+      isAnalyzingLoopEdges = true
+      loopAnalysisNotice = "ループ用に冒頭・末尾の黒画面を解析中…"
+      let generation = loopAnalysisGeneration
+      loopAnalysisTask = Task.detached(priority: .utility) { [weak self] in
+        do {
+          let range = try await LoopBlackFrameAnalyzer().analyze(asset: asset)
+          try Task.checkCancellation()
+          await self?.finishLoopBlackFrameAnalysis(
+            range: range, videoID: videoID, generation: generation, errorMessage: nil
+          )
+        } catch is CancellationError {
+          return
+        } catch {
+          guard !Task.isCancelled else { return }
+          await self?.finishLoopBlackFrameAnalysis(
+            range: nil, videoID: videoID, generation: generation,
+            errorMessage: error.localizedDescription
+          )
+        }
+      }
+    }
+
+    private func cancelLoopBlackFrameAnalysis() {
+      loopAnalysisGeneration &+= 1
+      loopAnalysisTask?.cancel()
+      loopAnalysisTask = nil
+      loopAnalysisVideoID = nil
+      isAnalyzingLoopEdges = false
+      loopAnalysisNotice = nil
+    }
+
+    private func finishLoopBlackFrameAnalysis(
+      range: CMTimeRange?, videoID: UUID, generation: Int, errorMessage: String?
+    ) {
+      guard loopAnalysisGeneration == generation, currentVideo.id == videoID,
+            settings.repeatMode != .off else { return }
+      loopAnalysisTask = nil
+      loopAnalysisVideoID = nil
+      isAnalyzingLoopEdges = false
+      analyzedLoopVideoIDs.insert(videoID)
+      loopPlaybackRanges[videoID] = range
+      if let errorMessage {
+        loopAnalysisNotice = "黒画面を省略せず再生します．\(errorMessage) ファイルの再生状態を確認してください．"
+      } else if let range {
+        let originalDuration = player?.currentItem?.duration.seconds ?? duration
+        let trimmedTail = max(0, originalDuration - range.end.seconds)
+        loopAnalysisNotice = String(
+          format: "ループ中は冒頭%.2f秒・末尾%.2f秒の黒画面をスキップします．",
+          range.start.seconds, trimmedTail
+        )
+      } else {
+        loopAnalysisNotice = "冒頭・末尾に省略できる黒画面はありません．"
+      }
+      updateLoopQueue()
+      skipBlackLoopEdgesIfNeeded()
+    }
+
+    private func skipBlackLoopEdgesIfNeeded() {
+      guard let range = activeLoopPlaybackRange, let player else { return }
+      let seconds = player.currentTime().seconds
+      if seconds.isFinite, seconds < range.start.seconds || seconds >= range.end.seconds {
+        seek(toSeconds: range.start.seconds)
+      }
+    }
+
+    /// 次の周回はキューで待機中に頭出しし，切り替え時のシークを避けます．
+    private func configureLoopPlaybackRange(for item: AVPlayerItem, preparesStart: Bool) {
+      guard let range = activeLoopPlaybackRange else {
+        if item.forwardPlaybackEndTime.isValid { item.forwardPlaybackEndTime = .invalid }
+        return
+      }
+      let rangeChanged = CMTimeCompare(item.forwardPlaybackEndTime, range.end) != 0
+      if rangeChanged { item.forwardPlaybackEndTime = range.end }
+      if preparesStart, rangeChanged, range.start.seconds > 0 {
+        let videoID = currentVideo.id
+        item.seek(to: range.start, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak item] finished in
+          guard !finished else { return }
+          Task { @MainActor [weak self, weak item] in
+            guard let self, let item, self.currentVideo.id == videoID,
+                  self.activeLoopPlaybackRange == range,
+                  let queue = self.player as? AVQueuePlayer,
+                  queue.items().contains(where: { $0 === item }) else { return }
+            // 頭出しに失敗した項目を使い回さず，通常の範囲で周回を準備し直します．
+            self.loopPlaybackRanges[videoID] = nil
+            self.clearLoopQueue()
+            self.loopAnalysisNotice = "黒画面の頭出しに失敗したため，省略せずループします．動画を開き直して再試行してください．"
+            self.updateLoopQueue()
+          }
+        }
+      }
     }
 
     private func cachedAsset(for video: VideoItem, url: URL) -> AVURLAsset {
