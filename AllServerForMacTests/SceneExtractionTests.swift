@@ -9,6 +9,178 @@ import Testing
 @Suite(.serialized)
 struct SceneExtractionTests {
   @Test
+  func loopBlackFrameAnalysisKeepsInternalBlackFrames() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopBlackFrameTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("black-edges.mp4")
+    let brightness: [UInt8] = Array(repeating: 0, count: 6)
+      + Array(repeating: 80, count: 12)
+      + Array(repeating: 0, count: 6)
+      + Array(repeating: 80, count: 12)
+      + Array(repeating: 0, count: 6)
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: brightness)
+
+    let range = try #require(try await LoopBlackFrameAnalyzer().analyze(
+      asset: AVURLAsset(url: sourceURL)
+    ))
+    let framePrecision = 0.001
+    #expect(abs(range.start.seconds - 0.2) < framePrecision)
+    #expect(abs(range.end.seconds - 1.2) < framePrecision)
+    #expect(CMTimeRangeContainsTime(range, time: CMTime(seconds: 0.7, preferredTimescale: 600)))
+  }
+
+  @Test
+  func loopBlackFrameAnalysisScansLongTrailingBlackAndKeepsDarkContent() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopLongBlackFrameTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("long-black-tail.mp4")
+    let brightness: [UInt8] = Array(repeating: 0, count: 6)
+      + Array(repeating: 16, count: 12)
+      + Array(repeating: 0, count: 90)
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: brightness)
+
+    let range = try #require(try await LoopBlackFrameAnalyzer().analyze(
+      asset: AVURLAsset(url: sourceURL)
+    ))
+    let framePrecision = 0.001
+    #expect(abs(range.start.seconds - 0.2) < framePrecision)
+    #expect(abs(range.end.seconds - 0.6) < framePrecision)
+  }
+
+  @Test
+  func loopBlackFrameAnalysisDoesNotTrimEntirelyBlackVideo() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopEntirelyBlackTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("black.mp4")
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: Array(repeating: 0, count: 12))
+
+    let range = try await LoopBlackFrameAnalyzer().analyze(asset: AVURLAsset(url: sourceURL))
+    #expect(range == nil)
+  }
+
+  @Test
+  func loopBlackFrameAnalysisKeepsVideoWithBlackBars() async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LoopBlackBarTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("letterboxed.mp4")
+    try await makeSyntheticVideo(
+      at: sourceURL, frameBrightness: Array(repeating: 64, count: 12), hasBlackBars: true
+    )
+
+    let range = try #require(try await LoopBlackFrameAnalyzer().analyze(
+      asset: AVURLAsset(url: sourceURL)
+    ))
+    #expect(range.start == .zero)
+    #expect(abs(range.end.seconds - 0.4) < 0.001)
+  }
+
+  @Test(arguments: [PlaybackRepeatMode.one, .all]) @MainActor
+  func localLoopSkipsBlackEdgesAndRestoresFullRangeWhenDisabled(mode: PlaybackRepeatMode) async throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LocalBlackEdgePlaybackTests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+    let sourceURL = temporaryDirectory.appendingPathComponent("black-edges.mp4")
+    let brightness: [UInt8] = Array(repeating: 0, count: 6)
+      + Array(repeating: 80, count: 30)
+      + Array(repeating: 0, count: 6)
+    try await makeSyntheticVideo(at: sourceURL, frameBrightness: brightness)
+
+    let defaults = UserDefaults.standard
+    let keys = ["playback.repeatMode", "playback.autoPlayNext", "playback.rate"]
+    let savedValues = keys.map { defaults.object(forKey: $0) }
+    defer {
+      for (key, value) in zip(keys, savedValues) {
+        if let value { defaults.set(value, forKey: key) }
+        else { defaults.removeObject(forKey: key) }
+      }
+    }
+    let settings = PlaybackSettings()
+    settings.repeatMode = .off
+    settings.autoPlayNext = false
+    settings.rate = 1
+    let video = VideoItem(
+      id: UUID(), originalFilename: sourceURL.lastPathComponent, internalFilename: "",
+      duration: 1.4, importDate: Date(), creationDate: nil, fileHash: "",
+      externalFilePath: sourceURL.path
+    )
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let model = VideoPlayerViewModel(
+      videos: [video], currentVideo: video, dataManager: library,
+      watchState: WatchStateStore(store: WebSyncStore(
+        rootURL: temporaryDirectory, persistenceEnabled: false
+      )), settings: settings
+    )
+    defer { model.cleanup() }
+    model.setupPlayer()
+    try await waitForLoopPlayback { model.player?.rate ?? 0 > 0 }
+    let queue = try #require(model.player as? AVQueuePlayer)
+    model.pause()
+    #expect(!model.isAnalyzingLoopEdges)
+    #expect(model.loopAnalysisNotice == nil)
+    #expect(queue.items().count == 1)
+    #expect(queue.currentItem?.forwardPlaybackEndTime.isValid == false)
+
+    settings.autoPlayNext = mode == .all
+    settings.repeatMode = mode
+    try await waitForLoopPlayback {
+      model.loopAnalysisNotice?.contains("スキップ") == true && !model.isAnalyzingLoopEdges
+    }
+    try await waitForLoopPlayback {
+      queue.items().count == 3 && queue.items().allSatisfy { $0.currentTime().seconds >= 0.199 }
+    }
+    #expect(queue.rate == 0)
+    for item in queue.items() {
+      #expect(abs(item.forwardPlaybackEndTime.seconds - 1.2) < 0.001)
+    }
+
+    model.play()
+    for _ in 0..<3 {
+      let previousItem = try #require(queue.currentItem)
+      try await waitForLoopPlayback { queue.currentItem != nil && queue.currentItem !== previousItem }
+      let seconds = try #require(queue.currentItem?.currentTime().seconds)
+      #expect(seconds >= 0.199 && seconds < 1.2)
+      #expect(queue.rate == 1)
+    }
+    model.pause()
+    settings.repeatMode = .off
+    try await waitForLoopPlayback {
+      queue.items().count == 1 && queue.currentItem?.forwardPlaybackEndTime.isValid == false
+    }
+    model.seek(toSeconds: 0)
+    try await waitForLoopPlayback { queue.currentTime().seconds < 0.001 }
+    #expect(model.loopAnalysisNotice == nil)
+
+    // 再度有効にしたときも，保存済みの解析結果で冒頭を飛ばします．
+    settings.repeatMode = mode
+    try await waitForLoopPlayback { queue.currentTime().seconds >= 0.199 }
+    #expect(!model.isAnalyzingLoopEdges)
+    #expect(queue.rate == 0)
+  }
+
+  @MainActor
+  private func waitForLoopPlayback(_ condition: () -> Bool) async throws {
+    let timeoutSeconds: TimeInterval = 5
+    let pollNanoseconds: UInt64 = 10_000_000
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while !condition(), Date() < deadline {
+      try await Task.sleep(nanoseconds: pollNanoseconds)
+    }
+    try #require(condition(), "ループの黒画面スキップが制限時間内に準備できませんでした")
+  }
+
+  @Test
   func tutorialCoversCompleteWorkflow() {
     let steps = SceneExtractionTutorialContent.steps
 
@@ -325,11 +497,13 @@ struct SceneExtractionTests {
     )
   }
 
-  private func makeSyntheticVideo(at url: URL) async throws {
+  private func makeSyntheticVideo(
+    at url: URL, frameBrightness: [UInt8]? = nil, hasBlackBars: Bool = false
+  ) async throws {
     let width = 160
     let height = 90
     let framesPerSecond: Int32 = 30
-    let frameCount = 60
+    let frameCount = frameBrightness?.count ?? 60
     let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
     let input = AVAssetWriterInput(
       mediaType: .video,
@@ -373,9 +547,15 @@ struct SceneExtractionTests {
       if let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) {
         memset(
           baseAddress,
-          Int32(frameIndex % 255),
+          Int32(frameBrightness?[frameIndex] ?? UInt8(frameIndex % 255)),
           CVPixelBufferGetDataSize(pixelBuffer)
         )
+        if hasBlackBars {
+          let barHeight = height / 3
+          let rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer)
+          memset(baseAddress, 0, barHeight * rowBytes)
+          memset(baseAddress.advanced(by: (height - barHeight) * rowBytes), 0, barHeight * rowBytes)
+        }
       }
       CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
       let presentationTime = CMTime(value: CMTimeValue(frameIndex), timescale: framesPerSecond)
