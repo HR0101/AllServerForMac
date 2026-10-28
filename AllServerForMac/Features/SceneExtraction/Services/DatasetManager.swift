@@ -130,3 +130,31 @@ nonisolated struct DatasetManager: Sendable {
     return result.isEmpty ? "dataset" : result
   }
 }
+
+// MARK: - シーンシャッフルで使う採用済み区間
+
+/// 特徴量や映像は保存せず，採用した区間だけをローカル設定に保持します．
+/// 読み込みエラー時は上書きせず，呼び出し元へエラーを返します．
+@MainActor
+enum AcceptedSceneStore {
+  static let defaultsKey = "playback.acceptedScenes.v1"
+
+  static func sourceKey(_ url: URL) -> String {
+    url.standardizedFileURL.resolvingSymlinksInPath().path
+  }
+
+  static func load(defaults: UserDefaults = .standard) throws -> [String: [CandidateSegment]] {
+    guard let data = defaults.data(forKey: defaultsKey) else { return [:] }
+    return try JSONDecoder().decode([String: [CandidateSegment]].self, from: data)
+  }
+
+  static func save(url: URL, candidates: [CandidateSegment], defaults: UserDefaults = .standard) throws {
+    var stored = try load(defaults: defaults)
+    stored[sourceKey(url)] = candidates.filter {
+      $0.userLabel == .accepted && $0.startTime.isFinite && $0.endTime.isFinite
+        && $0.startTime >= 0 && $0.endTime > $0.startTime
+    }
+    let data = try JSONEncoder().encode(stored)
+    defaults.set(data, forKey: defaultsKey)
+  }
+}

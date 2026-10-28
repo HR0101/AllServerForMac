@@ -8,6 +8,153 @@ import Testing
 
 @Suite(.serialized)
 struct SceneExtractionTests {
+  @Test @MainActor
+  func previewTourClampsShortVideosAndDeduplicates() throws {
+    let video = tourVideo(duration: 3)
+    let session = try PlaybackTourSession.preview(videos: [video, video], seconds: 15)
+    #expect(session.entries.count == 1)
+    #expect(session.entries[0].start == 0)
+    #expect(session.entries[0].end == 3)
+    let long = tourVideo(duration: 120)
+    let tour = try PlaybackTourSession.preview(videos: [long], seconds: 30)
+    #expect(tour.entries[0].start >= 0)
+    #expect(tour.entries[0].end <= 120)
+    #expect(abs(tour.entries[0].end - tour.entries[0].start - 30) < 0.001)
+    #expect(throws: PlaybackTourError.self) {
+      try PlaybackTourSession.preview(videos: [], seconds: 15)
+    }
+  }
+
+  @Test @MainActor
+  func acceptedScenesPersistClampAndProtectCorruptData() throws {
+    let suite = "SceneTourTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let url = URL(fileURLWithPath: "/tmp/scene-tour-test.mp4")
+    let video = tourVideo(duration: 10, url: url)
+    let accepted = CandidateSegment(startTime: 2, endTime: 20, peakTime: 3,
+      score: 1, audioScore: 0, visualScore: 0, transitionScore: 0,
+      reason: [], userLabel: .accepted)
+    var rejected = accepted
+    rejected.userLabel = .rejected
+    try AcceptedSceneStore.save(url: url, candidates: [accepted, rejected], defaults: defaults)
+    #expect(try AcceptedSceneStore.load(defaults: defaults)[AcceptedSceneStore.sourceKey(url)]?.count == 1)
+    let session = try PlaybackTourSession.scenes(videos: [video], urlForVideo: { _ in url }, defaults: defaults)
+    #expect(session.entries.count == 1)
+    #expect(session.entries[0].start == 2)
+    #expect(session.entries[0].end == 10)
+    try AcceptedSceneStore.save(url: url, candidates: [], defaults: defaults)
+    #expect(throws: PlaybackTourError.self) {
+      try PlaybackTourSession.scenes(videos: [video], urlForVideo: { _ in url }, defaults: defaults)
+    }
+    let corrupted = Data("invalid-json".utf8)
+    defaults.set(corrupted, forKey: AcceptedSceneStore.defaultsKey)
+    #expect(throws: (any Error).self) {
+      try AcceptedSceneStore.save(url: url, candidates: [accepted], defaults: defaults)
+    }
+    #expect(defaults.data(forKey: AcceptedSceneStore.defaultsKey) == corrupted)
+  }
+
+  @Test @MainActor
+  func tourAdvancesAtRangeEndAndStopsAfterOnePass() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TourPlayback-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let video = tourVideo(duration: 2, url: url)
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let session = PlaybackTourSession(kind: .scenes, entries: [
+      PlaybackTourEntry(id: UUID(), video: video, start: 0.2, end: 0.5),
+      PlaybackTourEntry(id: UUID(), video: video, start: 0.7, end: 1.0)
+    ])
+    let model = PlaybackTourViewModel(session: session, dataManager: library)
+    defer { model.cleanup() }
+    model.start()
+    try await waitForLoopPlayback { model.index == 1 && !model.isLoading }
+    #expect(model.currentTime >= 0.7)
+    try await waitForLoopPlayback { model.isFinished }
+    #expect(model.player.rate == 0)
+    #expect(model.errorMessage == nil)
+    #expect(model.index == 1)
+  }
+
+  @Test @MainActor
+  func tourPauseAndMissingFileRemainControllable() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TourPause-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let video = tourVideo(duration: 2, url: url)
+    let missing = tourVideo(duration: 2, url: directory.appendingPathComponent("missing.mp4"))
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    let session = PlaybackTourSession(kind: .preview, entries: [
+      PlaybackTourEntry(id: UUID(), video: missing, start: 0, end: 1),
+      PlaybackTourEntry(id: UUID(), video: video, start: 0.2, end: 1.5)
+    ])
+    let model = PlaybackTourViewModel(session: session, dataManager: library)
+    defer { model.cleanup() }
+    model.start()
+    try await waitForLoopPlayback { model.errorMessage != nil }
+    model.next()
+    try await waitForLoopPlayback { model.isPlaying && !model.isLoading }
+    model.togglePlayback()
+    try await waitForLoopPlayback { !model.isPlaying }
+    let time = model.player.currentTime().seconds
+    try await Task.sleep(for: .milliseconds(400))
+    #expect(abs(model.player.currentTime().seconds - time) < 0.05)
+    #expect(!model.isFinished)
+    model.togglePlayback()
+    try await waitForLoopPlayback { model.isFinished }
+  }
+
+  @Test @MainActor
+  func tourHandoffStartsAtPreviewPositionInsteadOfSavedResume() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TourHandoff-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("clip.mp4")
+    try await makeSyntheticVideo(at: url)
+    let video = tourVideo(duration: 60, url: url)
+    let library = LibraryViewModel(storageEnvironment: LibraryStorageEnvironment(
+      moviesDirectory: { nil }, downloadsDirectory: { nil }, createDirectory: { _ in }
+    ))
+    library.videos = [video]
+    let watchState = WatchStateStore(store: WebSyncStore(rootURL: directory, persistenceEnabled: false))
+    watchState.recordProgress(videoID: video.id, seconds: 20, duration: 60, force: true)
+    let keys = ["playback.repeatMode", "playback.autoPlayNext"]
+    let original = keys.map { UserDefaults.standard.object(forKey: $0) }
+    defer {
+      for (key, value) in zip(keys, original) {
+        if let value { UserDefaults.standard.set(value, forKey: key) }
+        else { UserDefaults.standard.removeObject(forKey: key) }
+      }
+    }
+    let settings = PlaybackSettings()
+    settings.repeatMode = .off
+    settings.autoPlayNext = false
+    let model = VideoPlayerViewModel(videos: [video], currentVideo: video, dataManager: library,
+      watchState: watchState, settings: settings, initialStartTime: 0.4)
+    defer { model.cleanup() }
+    model.setupPlayer()
+    try await waitForLoopPlayback { model.player?.rate ?? 0 > 0 }
+    let time = try #require(model.player?.currentTime().seconds)
+    #expect(time >= 0.39 && time < 1.5)
+  }
+
+  @MainActor
+  private func tourVideo(duration: Double, url: URL = URL(fileURLWithPath: "/tmp/tour.mp4")) -> VideoItem {
+    VideoItem(id: UUID(), originalFilename: url.lastPathComponent, internalFilename: "",
+      duration: duration, importDate: Date(), creationDate: nil, fileHash: "",
+      externalFilePath: url.path)
+  }
+
   @Test
   func loopBlackFrameAnalysisKeepsInternalBlackFrames() async throws {
     let temporaryDirectory = FileManager.default.temporaryDirectory

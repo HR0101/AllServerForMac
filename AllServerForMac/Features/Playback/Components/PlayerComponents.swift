@@ -70,7 +70,12 @@ struct PlayerCornerControls: View {
             .accessibilityLabel("プレイヤーを閉じる")
         }
         .padding()
+        .padding(.top, Self.titlebarClearance)
     }
+
+    /// プレイヤーはタイトルバーの下まで広げて描くが，透明なタイトルバーはその帯のクリックを横取りする。
+    /// ボタンを上端に置くと上半分が押せず「× を押しても閉じない」ので，その帯の下まで下げる。
+    static let titlebarClearance: CGFloat = 24
 
     /// スピーカーボタン（クリックでミュート切替）と音量スライダー。
     /// 全画面再生中はメニューバーもウィンドウのツールバーも出ないため、
@@ -91,19 +96,30 @@ struct PlayerCornerControls: View {
             .help(isMuted.wrappedValue ? "ミュート解除" : "ミュート")
             .accessibilityLabel(isMuted.wrappedValue ? "ミュート解除" : "ミュート")
 
-            Slider(value: volume, in: 0...1)
+            // ミュート中も動かせるようにし，動かしたらミュートを解除する（無効化して薄くすると壊れて見える）。
+            Slider(
+                value: Binding(
+                    get: { volume.wrappedValue },
+                    set: { newValue in
+                        volume.wrappedValue = newValue
+                        if isMuted.wrappedValue { isMuted.wrappedValue = false }
+                    }
+                ),
+                in: 0...1
+            )
                 .controlSize(.small)
                 .frame(width: 96)
                 .tint(.white.opacity(0.85))
-                .disabled(isMuted.wrappedValue)
-                .opacity(isMuted.wrappedValue ? 0.35 : 1)
+                .opacity(isMuted.wrappedValue ? 0.6 : 1)
                 .help("音量")
                 .accessibilityLabel("音量")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Capsule().fill(.black.opacity(0.35)))
+        .background(Capsule().fill(.black.opacity(0.5)))
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+        // 動画の上に重ねる黒いカプセルなので，スライダーのトラックも暗い背景向けの色で描かせる。
+        .environment(\.colorScheme, .dark)
     }
 
     private static func speakerSymbol(volume: Float, isMuted: Bool) -> String {

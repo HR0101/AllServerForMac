@@ -17,6 +17,7 @@ final class VideoPlayerViewModel: ObservableObject {
 
     /// 前後移動の対象となる動画リスト（動画のみ）
     let allVideos: [VideoItem]
+    private var pendingInitialStartTime: Double?
     private let dataManager: LibraryViewModel
     /// 視聴位置と再生履歴の保管庫（ブラウザ・iPhone と共有）。
     private let watchState: WatchStateStore
@@ -123,8 +124,10 @@ final class VideoPlayerViewModel: ObservableObject {
         currentVideo: VideoItem,
         dataManager: LibraryViewModel,
         watchState: WatchStateStore,
-        settings: PlaybackSettings
+        settings: PlaybackSettings,
+        initialStartTime: Double? = nil
     ) {
+        self.pendingInitialStartTime = initialStartTime
         self.allVideos = videos
         self.currentVideo = currentVideo
         self.dataManager = dataManager
@@ -771,7 +774,8 @@ final class VideoPlayerViewModel: ObservableObject {
         refreshFavoriteState()
         refreshNowPlaying()
 
-        let savedResume = watchState.resumeSeconds(for: video.id, duration: video.duration)
+        let savedResume = pendingInitialStartTime ?? watchState.resumeSeconds(for: video.id, duration: video.duration)
+        pendingInitialStartTime = nil
         let resume: Double?
         if let range = activeLoopPlaybackRange {
             let requested = savedResume ?? 0
@@ -1240,4 +1244,183 @@ final class VideoPlayerViewModel: ObservableObject {
     var otherVideos: [VideoItem] {
         allVideos.filter { $0.id != currentVideo.id }
     }
+}
+
+// MARK: - 巡回・シーン再生（通常の履歴や視聴位置は更新しません）
+
+@MainActor
+final class PlaybackTourViewModel: ObservableObject {
+  let session: PlaybackTourSession
+  let player = AVPlayer()
+  @Published var volume: Double {
+    didSet { player.volume = Float(volume) }
+  }
+  @Published var isMuted: Bool {
+    didSet { player.isMuted = isMuted }
+  }
+  @Published private(set) var index = 0
+  @Published private(set) var currentTime = 0.0
+  @Published private(set) var isPlaying = false
+  @Published private(set) var isLoading = false
+  @Published private(set) var isFinished = false
+  @Published private(set) var errorMessage: String?
+  private let dataManager: LibraryViewModel
+  private var loadTask: Task<Void, Never>?
+  private var observer: Any?
+  private var endObserver: AnyCancellable?
+  private var statusObserver: AnyCancellable?
+  private var playbackObserver: AnyCancellable?
+  private var generation = UUID()
+  private var rangeStart = 0.0
+  private var rangeEnd = 0.0
+  private let observerInterval = CMTime(seconds: 0.1, preferredTimescale: 600)
+
+  init(session: PlaybackTourSession, dataManager: LibraryViewModel) {
+    self.session = session
+    self.dataManager = dataManager
+    self.volume = min(1, max(0, UserDefaults.standard.object(forKey: VideoPlayerViewModel.volumeDefaultsKey) as? Double ?? 1))
+    self.isMuted = UserDefaults.standard.bool(forKey: VideoPlayerViewModel.mutedDefaultsKey)
+    player.volume = Float(volume)
+    player.isMuted = isMuted
+  }
+
+  var currentEntry: PlaybackTourEntry? {
+    session.entries.indices.contains(index) ? session.entries[index] : nil
+  }
+
+  var progress: Double {
+    guard rangeEnd > rangeStart else { return 0 }
+    return min(1, max(0, (currentTime - rangeStart) / (rangeEnd - rangeStart)))
+  }
+
+  var remaining: Double { max(0, rangeEnd - currentTime) }
+
+  func start() {
+    guard observer == nil else { return }
+    observer = player.addPeriodicTimeObserver(forInterval: observerInterval, queue: .main) { [weak self] time in
+      Task { @MainActor [weak self] in
+        guard let self, !self.isLoading, time.seconds.isFinite else { return }
+        self.currentTime = time.seconds
+      }
+    }
+    playbackObserver = player.publisher(for: \.timeControlStatus)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] status in self?.isPlaying = status != .paused }
+    loadCurrentEntry()
+  }
+
+  func togglePlayback() {
+    guard !isLoading, !isFinished, errorMessage == nil else { return }
+    if isPlaying { player.pause() } else { player.play() }
+  }
+
+  func next() {
+    guard index + 1 < session.entries.count else {
+      finish()
+      return
+    }
+    index += 1
+    loadCurrentEntry()
+  }
+
+  func previous() {
+    guard index > 0 else { return }
+    index -= 1
+    loadCurrentEntry()
+  }
+
+  func restart() {
+    index = 0
+    loadCurrentEntry()
+  }
+
+  func retry() { loadCurrentEntry() }
+
+  func cleanup() {
+    generation = UUID()
+    loadTask?.cancel()
+    loadTask = nil
+    player.pause()
+    if let observer { player.removeTimeObserver(observer) }
+    observer = nil
+    endObserver = nil
+    statusObserver = nil
+    playbackObserver = nil
+    player.replaceCurrentItem(with: nil)
+    isPlaying = false
+  }
+
+  private func finish() {
+    generation = UUID()
+    loadTask?.cancel()
+    player.pause()
+    isLoading = false
+    isFinished = true
+    errorMessage = nil
+  }
+
+  private func loadCurrentEntry() {
+    loadTask?.cancel()
+    player.pause()
+    endObserver = nil
+    statusObserver = nil
+    player.replaceCurrentItem(with: nil)
+    errorMessage = nil
+    isFinished = false
+    isLoading = true
+    let token = UUID()
+    generation = token
+    guard let entry = currentEntry else { finish(); return }
+    currentTime = entry.start
+    loadTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        guard let url = self.dataManager.fileURL(for: entry.video),
+              FileManager.default.fileExists(atPath: url.path) else { throw PlaybackTourError.missingFile }
+        let asset = AVURLAsset(url: url)
+        guard try await asset.load(.isPlayable) else { throw PlaybackTourError.unplayable }
+        let duration = try await asset.load(.duration).seconds
+        try Task.checkCancellation()
+        guard self.generation == token else { return }
+        guard duration.isFinite, duration > 0 else { throw PlaybackTourError.invalidRange }
+        let start = min(max(0, entry.start), duration)
+        let end = min(entry.end, duration)
+        guard end > start else { throw PlaybackTourError.invalidRange }
+        self.rangeStart = start
+        self.rangeEnd = end
+        let item = AVPlayerItem(asset: asset)
+        // メディア時刻で終端を指定するため，一時停止や読み込み時間で区間が短くなりません．
+        item.forwardPlaybackEndTime = CMTime(seconds: end, preferredTimescale: 600)
+        self.player.replaceCurrentItem(with: item)
+        self.endObserver = NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime, object: item)
+          .receive(on: DispatchQueue.main)
+          .sink { [weak self] _ in
+            guard let self, self.generation == token else { return }
+            self.next()
+          }
+        self.statusObserver = item.publisher(for: \.status)
+          .receive(on: DispatchQueue.main)
+          .sink { [weak self, weak item] status in
+            guard let self, self.generation == token, status == .failed else { return }
+            self.player.pause()
+            self.isLoading = false
+            self.errorMessage = item?.error?.localizedDescription ?? PlaybackTourError.unplayable.localizedDescription
+          }
+        let succeeded = await self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
+          toleranceBefore: .zero, toleranceAfter: .zero)
+        try Task.checkCancellation()
+        guard self.generation == token else { return }
+        guard succeeded else { throw PlaybackTourError.unplayable }
+        self.currentTime = start
+        self.isLoading = false
+        self.player.play()
+      } catch is CancellationError {
+        // 次の区間へ移った処理や，画面を閉じた処理からのキャンセルです．
+      } catch {
+        guard self.generation == token else { return }
+        self.isLoading = false
+        self.errorMessage = error.localizedDescription
+      }
+    }
+  }
 }

@@ -31,6 +31,7 @@ final class PlaybackCoordinator: ObservableObject {
 
     enum Mode: Equatable {
         case single(playlist: [VideoItem], current: VideoItem)
+        case tour(PlaybackTourSession)
         case multi([VideoItem])
         case variantSwitch([VideoItem], alignment: VariantPlaybackAlignmentMode)
         case slideshow([VideoItem])
@@ -45,6 +46,7 @@ final class PlaybackCoordinator: ObservableObject {
             refreshSleepBlocker()
         }
     }
+    private(set) var singleStartTime: Double?
     @Published private(set) var libraryReturnState: LibraryReturnState?
     /// 通常再生をIキーで右下に小さくたたみ、アルバム一覧を裏に表示している間 true。
     @Published var isMiniPlayerActive = false
@@ -74,7 +76,7 @@ final class PlaybackCoordinator: ObservableObject {
     private static func blocksSleep(_ mode: Mode?) -> Bool {
         switch mode {
         case .none, .photos: return false
-        case .single, .multi, .variantSwitch, .slideshow, .splitPlay: return true
+        case .single, .tour, .multi, .variantSwitch, .slideshow, .splitPlay: return true
         }
     }
 
@@ -116,7 +118,8 @@ final class PlaybackCoordinator: ObservableObject {
     }
 
     /// 通常再生（再生リスト＋開始位置を指定）
-    func playSingle(playlist: [VideoItem], current: VideoItem) {
+    func playSingle(playlist: [VideoItem], current: VideoItem, startAt: Double? = nil) {
+        singleStartTime = startAt
         let videos = playlist.filter { $0.mediaType == .video }
         let start = (videos.contains(current) ? current : videos.first) ?? current
         isMiniPlayerActive = false
@@ -128,10 +131,17 @@ final class PlaybackCoordinator: ObservableObject {
         // 差分一覧はライブラリ上のオーバーレイなので，背後に残ったRキーや
         // ツールバーの操作で通常プレイヤーを重ねない．
         guard variantFinderAlbumID == nil else { return }
+        singleStartTime = nil
         let shuffled = videos.filter { $0.mediaType == .video }.shuffled()
         guard let first = shuffled.first else { return }
         isMiniPlayerActive = false
         mode = .single(playlist: shuffled, current: first)
+    }
+
+    func startTour(_ session: PlaybackTourSession) {
+      guard !session.entries.isEmpty, variantFinderAlbumID == nil else { return }
+      isMiniPlayerActive = false
+      mode = .tour(session)
     }
 
     /// 同時同期再生（2〜9本、9本超は先頭9本）
@@ -208,4 +218,80 @@ final class PlaybackCoordinator: ObservableObject {
     func clearLibraryReturnState() {
         libraryReturnState = nil
     }
+}
+
+// MARK: - 区間を一巡する再生リスト
+
+struct PlaybackTourEntry: Identifiable, Equatable {
+  let id: UUID
+  let video: VideoItem
+  let start: Double
+  let end: Double
+}
+
+struct PlaybackTourSession: Identifiable, Equatable {
+  enum Kind: Equatable {
+    case preview
+    case scenes
+  }
+  let id = UUID()
+  let kind: Kind
+  let entries: [PlaybackTourEntry]
+
+  var title: String { kind == .preview ? "プレビュー巡回" : "シーンシャッフル" }
+
+  static func preview(videos: [VideoItem], seconds: Double) throws -> PlaybackTourSession {
+    guard seconds.isFinite, seconds > 0 else { throw PlaybackTourError.invalidRange }
+    let entries = eligibleVideos(videos).shuffled().map { video in
+      let length = min(seconds, video.duration)
+      let start = Double.random(in: 0...max(0, video.duration - length))
+      return PlaybackTourEntry(id: UUID(), video: video, start: start, end: start + length)
+    }
+    guard !entries.isEmpty else { throw PlaybackTourError.noVideos }
+    return PlaybackTourSession(kind: .preview, entries: entries)
+  }
+
+  static func scenes(videos: [VideoItem], urlForVideo: (VideoItem) -> URL?,
+    defaults: UserDefaults = .standard) throws -> PlaybackTourSession {
+    let saved = try AcceptedSceneStore.load(defaults: defaults)
+    let entries = eligibleVideos(videos).flatMap { video -> [PlaybackTourEntry] in
+      guard let url = urlForVideo(video) else { return [] }
+      return (saved[AcceptedSceneStore.sourceKey(url)] ?? []).compactMap { candidate in
+        guard candidate.userLabel == .accepted,
+              candidate.startTime.isFinite, candidate.endTime.isFinite else { return nil }
+        let start = max(0, candidate.startTime)
+        let end = min(video.duration, candidate.endTime)
+        guard end > start else { return nil }
+        return PlaybackTourEntry(id: UUID(), video: video, start: start, end: end)
+      }
+    }.shuffled()
+    guard !entries.isEmpty else { throw PlaybackTourError.noScenes }
+    return PlaybackTourSession(kind: .scenes, entries: entries)
+  }
+
+  private static func eligibleVideos(_ videos: [VideoItem]) -> [VideoItem] {
+    var seen = Set<UUID>()
+    return videos.filter {
+      $0.mediaType == .video && !$0.isInTrash && $0.duration.isFinite && $0.duration > 0
+        && seen.insert($0.id).inserted
+    }
+  }
+}
+
+enum PlaybackTourError: LocalizedError {
+  case noVideos
+  case noScenes
+  case invalidRange
+  case missingFile
+  case unplayable
+
+  var errorDescription: String? {
+    switch self {
+    case .noVideos: return "再生時間が分かる動画がありません．動画を含む一覧から開始してください．"
+    case .noScenes: return "採用済みのシーンがありません．動画の「シーン抽出」で区間を採用してから，もう一度開始してください．"
+    case .invalidRange: return "有効な再生区間がありません．シーンの開始・終了位置を確認してください．"
+    case .missingFile: return "元の動画が見つかりません．保存先を接続するか，次の項目へ進んでください．"
+    case .unplayable: return "この動画を再生できません．ファイル形式を確認するか，次の項目へ進んでください．"
+    }
+  }
 }

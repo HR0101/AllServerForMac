@@ -79,6 +79,7 @@ final class SceneExtractionViewModel: ObservableObject {
       videoDocument = document
       currentTime = 0
       candidates = []
+      candidates = try AcceptedSceneStore.load()[AcceptedSceneStore.sourceKey(url)] ?? []
       features = []
       analysisResult = nil
       analysisProgress = nil
@@ -113,7 +114,9 @@ final class SceneExtractionViewModel: ObservableObject {
         try Task.checkCancellation()
         self.analysisResult = result
         self.features = result.mergedFeatures
-        self.candidates = result.candidates
+        // 再解析しても，以前採用した区間を失わないように保持します．
+        let accepted = self.candidates.filter { $0.userLabel == .accepted }
+        self.candidates = accepted + result.candidates
         self.selectedCandidateID = result.candidates.first?.id
       } catch is CancellationError {
         self.analysisProgress = nil
@@ -188,6 +191,7 @@ final class SceneExtractionViewModel: ObservableObject {
   func setLabel(_ label: CandidateLabel, for candidateID: UUID) {
     guard let index = candidates.firstIndex(where: { $0.id == candidateID }) else { return }
     candidates[index].userLabel = label
+    saveAcceptedScenes()
   }
 
   /// ラベルを保存し，スコア順で次の未判定候補を自動プレビューします．
@@ -220,6 +224,7 @@ final class SceneExtractionViewModel: ObservableObject {
       max(0, startTime),
       candidates[index].endTime - 0.1
     )
+    saveAcceptedScenes()
   }
 
   func updateCandidateEnd(_ endTime: Double, candidateID: UUID) {
@@ -228,6 +233,7 @@ final class SceneExtractionViewModel: ObservableObject {
       candidates[index].startTime + 0.1,
       min(duration, endTime)
     )
+    saveAcceptedScenes()
   }
 
   func exportClip(_ candidate: CandidateSegment) {
@@ -327,6 +333,16 @@ final class SceneExtractionViewModel: ObservableObject {
     candidates.append(groundTruth)
     candidates.sort { $0.peakTime < $1.peakTime }
     selectedCandidateID = groundTruth.id
+    saveAcceptedScenes()
+  }
+
+  private func saveAcceptedScenes() {
+    guard let videoDocument else { return }
+    do {
+      try AcceptedSceneStore.save(url: videoDocument.url, candidates: candidates)
+    } catch {
+      errorMessage = "採用シーンを保存できませんでした．既存の保存内容は変更していません．\(error.localizedDescription)"
+    }
   }
 
   func clearError() {
