@@ -537,7 +537,8 @@ struct VideoPlayerView: View {
                 .transition(.opacity)
             }
 
-            if let notice = viewModel.resumeNotice {
+            if let notice = viewModel.resumeNotice
+                ?? (viewModel.isAnalyzingLoopEdges ? viewModel.loopAnalysisNotice : nil) {
                 resumeNoticeBadge(notice)
             }
 
@@ -899,7 +900,7 @@ struct VideoPlayerView: View {
                     .foregroundStyle(settings.repeatMode == .off ? Color.primary : Color.accentColor)
             }
             .buttonStyle(.plain)
-            .help(settings.repeatMode.title)
+            .help(viewModel.loopAnalysisNotice ?? settings.repeatMode.title)
             .accessibilityLabel(settings.repeatMode.title)
 
             Button {
