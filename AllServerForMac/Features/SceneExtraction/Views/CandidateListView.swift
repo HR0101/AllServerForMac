@@ -61,9 +61,9 @@ struct CandidateListView: View {
     HStack(spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text(positionText)
-          .font(.headline.monospacedDigit())
+          .font(.appHeadline.monospacedDigit())
         Text("判定済み \(reviewedCount)／\(candidates.count)")
-          .font(.caption)
+          .font(.appCaption)
           .foregroundStyle(.secondary)
       }
       .frame(minWidth: 105, alignment: .leading)
@@ -129,9 +129,9 @@ struct CandidateListView: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 10) {
           Text("ピーク \(timeText(candidate.peakTime))")
-            .font(.system(size: 14, weight: .semibold))
+            .font(.appBody.weight(.semibold))
           Text(String(format: "score %.3f", candidate.score))
-            .font(.system(.caption, design: .monospaced))
+            .font(.system(size: 12, design: .monospaced))
             .foregroundStyle(.secondary)
           labelBadge(candidate.userLabel)
         }
@@ -156,12 +156,12 @@ struct CandidateListView: View {
             format: .number.precision(.fractionLength(2))
           )
         }
-        .font(.system(.caption, design: .monospaced))
+        .font(.system(size: 12, design: .monospaced))
         .textFieldStyle(.roundedBorder)
         .frame(maxWidth: 245)
 
         Text(candidate.reason.joined(separator: "，"))
-          .font(.system(size: 12))
+          .font(.appCaption)
           .foregroundStyle(NeomorphicTheme.muted)
           .lineLimit(1)
       }
@@ -215,9 +215,9 @@ struct CandidateListView: View {
     } label: {
       VStack(spacing: 2) {
         Label(label.displayName, systemImage: labelIcon(label))
-          .font(.headline)
+          .font(.appHeadline)
         Text("キー \(shortcut)")
-          .font(.caption2.monospaced())
+          .font(.appMicro.monospaced())
           .opacity(0.85)
       }
       .frame(minWidth: 86)
@@ -257,7 +257,7 @@ struct CandidateListView: View {
 
   private func labelBadge(_ label: CandidateLabel?) -> some View {
     Text(label?.displayName ?? "未判定")
-      .font(.caption2.weight(.semibold))
+      .font(.appMicro.weight(.semibold))
       .foregroundStyle(label.map(labelColor) ?? NeomorphicTheme.muted)
       .padding(.horizontal, 7)
       .padding(.vertical, 2)

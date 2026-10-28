@@ -52,7 +52,7 @@ struct SceneExtractionSettingsView: View {
         SettingToggleRow(title: "特徴量CSVを出力", isOn: $settings.writesDatasetCSV)
 
         Text(String(format: "実出力時間 %.3f秒", settings.outputDuration))
-          .font(.system(size: 12))
+          .font(.appCaption)
           .foregroundStyle(NeomorphicTheme.muted)
       }
     }
@@ -64,7 +64,7 @@ struct SceneExtractionSettingsView: View {
   ) -> some View {
     GridRow {
       Text(title)
-        .font(.system(size: 12))
+        .font(.appCaption)
         .foregroundStyle(NeomorphicTheme.muted)
       content()
         .textFieldStyle(.roundedBorder)
