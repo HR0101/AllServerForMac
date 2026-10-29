@@ -112,7 +112,8 @@ final class WebSyncStore: @unchecked Sendable {
     private let backupURL: URL
     private let rootURL: URL
     private let persistenceEnabled: Bool
-    /// HTTP ワーカースレッドから呼ばれるため DispatchQueue.main は一切使わない。
+    /// HTTP ワーカースレッドと Mac 本体で共有するデータの読み書き専用。
+    /// このキューを保持したまま通知先（特にメインスレッド）を待ってはいけない。
     private let queue = DispatchQueue(label: "com.allserverformac.websync", qos: .utility)
     private var doc = SyncDoc()
 
@@ -135,7 +136,7 @@ final class WebSyncStore: @unchecked Sendable {
     /// PUT /sync 用。クライアントの全体像を受け取り、マージ結果を返す。
     /// read-modify-write をこのキューの中に閉じるのがこのクラスの存在理由。
     func merge(incoming: SyncDoc) -> Data {
-        return queue.sync {
+        let data = queue.sync {
             let now = Date().timeIntervalSince1970 * 1000
             var merged = doc
             mergeProgress(into: &merged, incoming: incoming, now: now)
@@ -148,11 +149,15 @@ final class WebSyncStore: @unchecked Sendable {
             doc = merged
             let data = encode(merged)
             save(data)
-            // Mac アプリ本体の一覧・プレイヤーへ「外から書き換わった」ことを伝える。
-            // 自分（Mac 側）の書き込みでは流さないので、通知でループしない。
-            NotificationCenter.default.post(name: Self.didChangeExternallyNotification, object: nil)
             return data
         }
+        // 通知先は snapshot() でこのキューを同期的に読むため、必ずキューを解放してから送る。
+        // .main のオブザーバーもあるので、HTTP ワーカーからメインの完了を待たない。
+        // 自分（Mac 側）の書き込みでは流さないので、通知でループしない。
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeExternallyNotification, object: nil)
+        }
+        return data
     }
 
     // MARK: - Mac アプリ本体からの読み書き

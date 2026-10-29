@@ -52,9 +52,10 @@ final class WatchStateStore: ObservableObject {
         externalChangeObserver = NotificationCenter.default.addObserver(
             forName: WebSyncStore.didChangeExternallyNotification,
             object: nil,
-            queue: .main
+            // 送信元スレッドでは Task の投入だけ行い、メインスレッドの完了を待たせない。
+            queue: nil
         ) { [weak self] _ in
-            Task { @MainActor in self?.reload() }
+            Task { @MainActor [weak self] in self?.reload() }
         }
     }
 
