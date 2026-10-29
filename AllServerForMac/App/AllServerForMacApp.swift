@@ -74,8 +74,13 @@ extension FocusedValues {
 
 struct AppMenuCommands: Commands {
     @FocusedValue(\.appMenuContext) private var context
+    @ObservedObject private var updater = AppUpdater.shared
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("アップデートを確認…") { updater.check(manual: true) }
+        }
+
         CommandGroup(after: .toolbar) {
             Button("全画面表示／解除") {
                 toggleFullScreen()
@@ -203,6 +208,11 @@ struct AppMenuCommands: Commands {
 /// そこへ AppKit のビューを割り込ませると矢印キーでの項目移動が壊れる。
 /// チェーンの終点であるアプリのデリゲートで受ければ、フォーカスに一切触らずに済む。
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard NSClassFromString("XCTestCase") == nil, AppUpdater.shared.automaticallyChecks else { return }
+        AppUpdater.shared.check(manual: false)
+    }
+
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
         true
     }

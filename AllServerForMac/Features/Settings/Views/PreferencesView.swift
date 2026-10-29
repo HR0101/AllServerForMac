@@ -20,6 +20,7 @@ struct PreferencesView: View {
         case server = "保護"
         case performance = "性能"
         case export = "書き出し"
+        case updates = "更新"
         case shortcuts = "ショートカット"
         var id: String { rawValue }
     }
@@ -199,6 +200,9 @@ struct PreferencesView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .id(SettingsSection.export)
+
+                        UpdateSettingsSection()
+                            .id(SettingsSection.updates)
 
                         MediaShortcutSettingsSection()
                             .id(SettingsSection.shortcuts)
