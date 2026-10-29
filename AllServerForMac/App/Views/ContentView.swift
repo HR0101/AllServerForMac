@@ -364,6 +364,9 @@ struct ContentView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    AppUpdateAvailabilityButton()
+                }
                 ToolbarItemGroup(placement: .navigation) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { isSidebarVisible.toggle() }
