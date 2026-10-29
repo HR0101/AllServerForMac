@@ -33,22 +33,22 @@ jobs:
           PY
       - name: Test
         run: >-
-          xcodebuild test -project AllServerForMac.xcodeproj -scheme AllServerForMac
-          -destination 'platform=macOS' -only-testing:AllServerForMacTests
-          -derivedDataPath "$RUNNER_TEMP/AllServerForMacDerivedData"
+          xcodebuild test -project ArkServer.xcodeproj -scheme ArkServer
+          -destination 'platform=macOS' -only-testing:ArkServerTests
+          -derivedDataPath "$RUNNER_TEMP/ArkServerDerivedData"
           CODE_SIGNING_ALLOWED=NO
       - name: Build universal release
         run: >-
-          xcodebuild build -project AllServerForMac.xcodeproj -scheme AllServerForMac
+          xcodebuild build -project ArkServer.xcodeproj -scheme ArkServer
           -configuration Release -destination 'generic/platform=macOS'
-          -derivedDataPath "$RUNNER_TEMP/AllServerForMacRelease"
+          -derivedDataPath "$RUNNER_TEMP/ArkServerRelease"
           ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO
           MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$APP_BUILD"
           CODE_SIGNING_ALLOWED=NO
       - name: Package app
         run: |
-          codesign --force --deep --sign - "$RUNNER_TEMP/AllServerForMacRelease/Build/Products/Release/AllServerForMac.app"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/AllServerForMacRelease/Build/Products/Release/AllServerForMac.app" AllServerForMac.app.zip
+          codesign --force --deep --sign - "$RUNNER_TEMP/ArkServerRelease/Build/Products/Release/ArkServer.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ArkServerRelease/Build/Products/Release/ArkServer.app" ArkServer.app.zip
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,5 +57,5 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --generate-notes --draft
           fi
-          gh release upload "$RELEASE_TAG" AllServerForMac.app.zip --clobber
+          gh release upload "$RELEASE_TAG" ArkServer.app.zip --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest

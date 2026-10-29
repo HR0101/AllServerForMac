@@ -36,23 +36,23 @@ jobs:
       - name: Resolve Swift package dependencies
         run: >-
           xcodebuild -resolvePackageDependencies
-          -project AllServerForMac.xcodeproj
-          -scheme AllServerForMac
+          -project ArkServer.xcodeproj
+          -scheme ArkServer
 
       - name: Build macOS app
         run: >-
           xcodebuild build
-          -project AllServerForMac.xcodeproj
-          -scheme AllServerForMac
+          -project ArkServer.xcodeproj
+          -scheme ArkServer
           -destination 'platform=macOS'
-          -derivedDataPath "$RUNNER_TEMP/AllServerForMacDerivedData"
+          -derivedDataPath "$RUNNER_TEMP/ArkServerDerivedData"
           CODE_SIGNING_ALLOWED=NO
 
       - name: Test macOS app
         run: >-
           xcodebuild test
-          -project AllServerForMac.xcodeproj
-          -scheme AllServerForMac
+          -project ArkServer.xcodeproj
+          -scheme ArkServer
           -destination 'platform=macOS'
-          -derivedDataPath "$RUNNER_TEMP/AllServerForMacDerivedData"
+          -derivedDataPath "$RUNNER_TEMP/ArkServerDerivedData"
           CODE_SIGNING_ALLOWED=NO

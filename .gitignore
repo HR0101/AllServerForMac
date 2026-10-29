@@ -10,14 +10,14 @@ DerivedData/
 *.plist
 *.entitlements
 
-!AllServerForMac/Assets.xcassets/
-AllServerForMac/Assets.xcassets/*
-!AllServerForMac/Assets.xcassets/Contents.json
-!AllServerForMac/Assets.xcassets/AppIcon.appiconset/
-!AllServerForMac/Assets.xcassets/AppIcon.appiconset/Contents.json
-!AllServerForMac/Assets.xcassets/AppIcon.appiconset/*.png
-!AllServerForMac/Assets.xcassets/AccentColor.colorset/
-!AllServerForMac/Assets.xcassets/AccentColor.colorset/Contents.json
+!ArkServer/Assets.xcassets/
+ArkServer/Assets.xcassets/*
+!ArkServer/Assets.xcassets/Contents.json
+!ArkServer/Assets.xcassets/AppIcon.appiconset/
+!ArkServer/Assets.xcassets/AppIcon.appiconset/Contents.json
+!ArkServer/Assets.xcassets/AppIcon.appiconset/*.png
+!ArkServer/Assets.xcassets/AccentColor.colorset/
+!ArkServer/Assets.xcassets/AccentColor.colorset/Contents.json
 
-!AllServerForMac/Info.plist
-!AllServerForMac/AllServerForMac.entitlements
+!ArkServer/Info.plist
+!ArkServer/ArkServer.entitlements
