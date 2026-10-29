@@ -47,7 +47,7 @@ struct AppUpdateView: View {
                 Button("キャンセル") { updater.cancelDownload() }
             case .downloaded(let url):
                 Text("ダウンロードしました: \(url.lastPathComponent)")
-                Text("サーバーを停止し、インポート・解析・書き出しの完了を確認してから通常の終了操作を行ってください。ZIPを展開し、現在のアプリを差し替えて起動すると更新が完了します。ライブラリの保存場所は変わりません。")
+                Text("サーバーを停止し、インポート・解析・書き出しの完了を確認してから通常の終了操作を行ってください。DMGを開き、現在のアプリを差し替えて起動すると更新が完了します。ライブラリの保存場所は変わりません。")
             case .failed(let message):
                 Text(message).foregroundStyle(.red)
                 HStack {

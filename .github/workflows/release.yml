@@ -48,7 +48,12 @@ jobs:
       - name: Package app
         run: |
           codesign --force --deep --sign - "$RUNNER_TEMP/ArkServerRelease/Build/Products/Release/ArkServer.app"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ArkServerRelease/Build/Products/Release/ArkServer.app" ArkServer.app.zip
+          DMG_STAGING="$RUNNER_TEMP/ArkServerDMG"
+          rm -rf "$DMG_STAGING"
+          mkdir -p "$DMG_STAGING"
+          ditto "$RUNNER_TEMP/ArkServerRelease/Build/Products/Release/ArkServer.app" "$DMG_STAGING/ArkServer.app"
+          ln -s /Applications "$DMG_STAGING/Applications"
+          hdiutil create -volname "Ark Server" -srcfolder "$DMG_STAGING" -ov -format UDZO ArkServer.dmg
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,5 +62,5 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --generate-notes --draft
           fi
-          gh release upload "$RELEASE_TAG" ArkServer.app.zip --clobber
+          gh release upload "$RELEASE_TAG" ArkServer.dmg --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest

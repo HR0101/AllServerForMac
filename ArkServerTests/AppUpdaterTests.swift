@@ -105,7 +105,7 @@ struct AppUpdaterTests {
         #expect(!AppRelease.trustedURL(URL(string: "http://github.com/HR0101/ArkServer/releases/tag/v2")!))
         #expect(!AppRelease.trustedURL(URL(string: "https://evil.example/HR0101/ArkServer/releases/tag/v2")!))
         #expect(!AppRelease.trustedURL(URL(string: "https://github.com/HR0101/Other/releases/tag/v2")!))
-        #expect(AppRelease.trustedURL(URL(string: "https://github.com/HR0101/ArkServer/releases/download/v2/ArkServer.app.zip")!, download: true))
+        #expect(AppRelease.trustedURL(URL(string: "https://github.com/HR0101/ArkServer/releases/download/v2/ArkServer.dmg")!, download: true))
     }
 
     private func fixture() throws -> (AppUpdater, UserDefaults, URLSession, String) {
@@ -129,7 +129,7 @@ struct AppUpdaterTests {
         Data("""
         {"tag_name":"\(tag)","html_url":"https://github.com/HR0101/ArkServer/releases/tag/\(tag)",
          "body":"Release notes","draft":false,"prerelease":false,
-         "assets":[{"name":"ArkServer.app.zip","browser_download_url":"https://github.com/HR0101/ArkServer/releases/download/\(tag)/ArkServer.app.zip"}]}
+         "assets":[{"name":"ArkServer.dmg","browser_download_url":"https://github.com/HR0101/ArkServer/releases/download/\(tag)/ArkServer.dmg"}]}
         """.utf8)
     }
 }

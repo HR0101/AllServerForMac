@@ -69,7 +69,7 @@ struct AppRelease: Decodable, Equatable {
     let assets: [Asset]
 
     var downloadURL: URL? {
-        assets.first { $0.name == "ArkServer.app.zip" && Self.trustedURL($0.browser_download_url, download: true) }?.browser_download_url
+        assets.first { $0.name == "ArkServer.dmg" && Self.trustedURL($0.browser_download_url, download: true) }?.browser_download_url
     }
     static func trustedURL(_ url: URL, download: Bool = false) -> Bool {
         url.scheme == "https" && url.host == "github.com" && url.user == nil && url.password == nil
@@ -218,7 +218,7 @@ final class AppUpdater: ObservableObject {
                 guard let http = response as? HTTPURLResponse else { throw AppUpdateError.response }
                 try Self.validateHTTP(http)
                 let directory = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                let destination = directory.appendingPathComponent("ArkServer-\(UUID().uuidString).app.zip")
+                let destination = directory.appendingPathComponent("ArkServer-\(UUID().uuidString).dmg")
                 try FileManager.default.moveItem(at: temporary, to: destination)
                 downloadID = nil
                 state = .downloaded(destination)
