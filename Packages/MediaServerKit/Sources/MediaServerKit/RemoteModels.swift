@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - サーバー ⇔ クライアント間の API 契約（wire format）
 //
-// これらの型は Mac サーバー（AllServerForMac）と iOS クライアント（VideoPlayer）の
+// これらの型は Mac サーバー（ArkServer）と iOS クライアント（VideoPlayer）の
 // 双方で共有される．以前は両アプリに別々に定義されており，フィールドのズレが
 // そのまま API 破壊につながっていた．1 か所に集約することで契約を構造的に保証する．
 //
