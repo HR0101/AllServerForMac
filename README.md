@@ -1,4 +1,4 @@
-# AllServerForMac（Mac 動画サーバー）
+# Ark Server（Mac メディアサーバー）
 
 自宅の Mac を「個人用メディアサーバー」にする SwiftUI 製 macOS アプリです。Mac 内の動画・写真を同一 Wi‑Fi 上の iPhone アプリ（[VideoPlayer](../VideoPlayer)）やブラウザから閲覧・再生できます。
 
@@ -37,8 +37,8 @@
 
 ## ビルドと起動
 
-1. `AllServerForMac.xcodeproj` を Xcode で開く
-2. ターゲット `AllServerForMac` を実行（▶）
+1. `ArkServer.xcodeproj` を Xcode で開く
+2. ターゲット `ArkServer` を実行（▶）
 3. アプリ画面で **ポート番号**（既定 8080）を確認し「開始」を押す
 4. 同じ Wi‑Fi 上の iPhone で VideoPlayer を開くと、サーバーが自動的に一覧に出ます
 
@@ -293,7 +293,7 @@ Macアプリ，Webクライアント，iOSクライアントでは削除方法�
 macOSアプリは，機能単位のMVVM構成です．画面を追加・変更するときは，まず対象の`Features`配下を確認してください．複数機能から共有する実装だけを`Common`へ配置します．
 
 ```text
-AllServerForMac/
+ArkServer/
 ├── App/
 │   ├── Models/          # アプリ全体の画面選択など
 │   ├── ViewModels/      # Feature間の依存を組み立てるAppViewModel
@@ -327,7 +327,7 @@ AllServerForMac/
 
 | 主な実装 | 役割 |
 |---|---|
-| `App/AllServerForMacApp.swift` | アプリのエントリーポイント |
+| `App/ArkServerApp.swift` | アプリのエントリーポイント |
 | `App/ViewModels/AppViewModel.swift` | アプリ全体の依存関係と画面選択の管理 |
 | `Features/Library/ViewModels/LibraryViewModel.swift` | ライブラリ状態の基点 |
 | `Features/Library/ViewModels/LibraryViewModel+*.swift` | 取り込み，リンクフォルダ，重複検出，保存などの責務別処理 |
